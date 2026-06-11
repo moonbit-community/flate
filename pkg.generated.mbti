@@ -25,7 +25,7 @@ pub fn Deflater::is_finished(Self) -> Bool
 pub fn Deflater::new(level? : Int) -> Self
 pub fn Deflater::reset(Self) -> Unit
 pub fn Deflater::set_dictionary(Self, BytesView) -> Unit
-pub fn Deflater::step(Self, BytesView, FixedArray[Byte], out_off~ : Int, out_len? : Int, end? : Bool, flush? : Bool) -> (Status, Int, Int)
+pub fn Deflater::step(Self, BytesView, MutArrayView[Byte], end? : Bool, flush? : Bool) -> (Status, Int, Int)
 
 pub struct Inflater {
   // private fields
@@ -34,7 +34,7 @@ pub fn Inflater::is_finished(Self) -> Bool
 pub fn Inflater::new() -> Self
 pub fn Inflater::reset(Self) -> Unit
 pub fn Inflater::set_dictionary(Self, BytesView) -> Unit
-pub fn Inflater::step(Self, BytesView, FixedArray[Byte], out_off~ : Int, out_len? : Int) -> (Status, Int, Int) raise
+pub fn Inflater::step(Self, BytesView, MutArrayView[Byte]) -> (Status, Int, Int) raise
 
 pub(all) enum Status {
   Done

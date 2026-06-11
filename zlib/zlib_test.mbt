@@ -63,7 +63,7 @@ test "streaming zlib Encoder round-trips through zlib_decompress" {
     let last = sent_end || pos + 500 >= n
     let endi = if pos + 500 < n { pos + 500 } else { n }
     let chunk = if sent_end { src[n:n] } else { src[pos:endi] }
-    let (_st, c, p) = enc.step(chunk, obuf, out_off=0, end=last)
+    let (_st, c, p) = enc.step(chunk, obuf.mut_view(), end=last)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -84,7 +84,7 @@ test "streaming zlib Encoder: empty input" {
   let obuf = FixedArray::make(64, b'\x00')
   let out = Buffer()
   for ;; {
-    let (_st, _c, p) = enc.step(b""[:], obuf, out_off=0, end=true)
+    let (_st, _c, p) = enc.step(b""[:], obuf.mut_view(), end=true)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -106,7 +106,7 @@ test "streaming zlib Decoder decodes a python zlib stream in tiny chunks" {
   let mut fed = 0
   for ;; {
     let next = if fed + 3 < n { fed + 3 } else { n }
-    let (_st, c, p) = dec.step(py_zlib[fed:next], obuf, out_off=0)
+    let (_st, c, p) = dec.step(py_zlib[fed:next], obuf.mut_view())
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -138,7 +138,7 @@ test "streaming zlib Decoder round-trips a large stream" {
   let mut fed = 0
   for ;; {
     let next = if fed + 64 < n { fed + 64 } else { n }
-    let (_st, c, p) = dec.step(z[fed:next], obuf, out_off=0)
+    let (_st, c, p) = dec.step(z[fed:next], obuf.mut_view())
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -160,7 +160,7 @@ test "streaming zlib Decoder: empty" {
   let mut fed = 0
   for ;; {
     let next = if fed + 1 < n { fed + 1 } else { n }
-    let (_st, c, p) = dec.step(z[fed:next], obuf, out_off=0)
+    let (_st, c, p) = dec.step(z[fed:next], obuf.mut_view())
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -184,7 +184,7 @@ test "zlib preset dictionary round-trip" {
   let mut sent = false
   for ;; {
     let chunk = if sent { b""[:] } else { msg[:] }
-    let (st, _c, p) = enc.step(chunk, obuf, out_off=0, end=true)
+    let (st, _c, p) = enc.step(chunk, obuf.mut_view(), end=true)
     sent = true
     for i in 0..<p {
       out.write_byte(obuf[i])
@@ -201,7 +201,7 @@ test "zlib preset dictionary round-trip" {
   let n = z.length()
   let mut fed = 0
   for ;; {
-    let (_st, c, p) = dec.step(z[fed:n], dbuf, out_off=0)
+    let (_st, c, p) = dec.step(z[fed:n], dbuf.mut_view())
     fed = fed + c
     for i in 0..<p {
       got.write_byte(dbuf[i])
@@ -214,7 +214,7 @@ test "zlib preset dictionary round-trip" {
   // Without a dictionary: rejected at the header.
   let dec2 = @zlib.Decoder::new()
   try {
-    let _ = dec2.step(z[:], dbuf, out_off=0)
+    let _ = dec2.step(z[:], dbuf.mut_view())
   } catch {
     @zlib.ZlibError(_) => ()
     _ => fail("expected a ZlibError")
@@ -224,7 +224,7 @@ test "zlib preset dictionary round-trip" {
   // With the wrong dictionary: DICTID mismatch.
   let dec3 = @zlib.Decoder::new(dictionary=b"a completely different dictionary")
   try {
-    let _ = dec3.step(z[:], dbuf, out_off=0)
+    let _ = dec3.step(z[:], dbuf.mut_view())
   } catch {
     @zlib.ZlibError(_) => ()
     _ => fail("expected a ZlibError")

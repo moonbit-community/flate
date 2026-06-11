@@ -115,7 +115,7 @@ fn Decoder::u32_le(self : Decoder, off : Int) -> UInt {
 
 ///|
 /// Run one decompression step. Buffers `input`, then decodes plaintext into
-/// `output` over `out_off..<out_off+out_len`. Returns `(status, consumed,
+/// the mutable view `output`. Returns `(status, consumed,
 /// produced)`; `consumed` is always the whole input view. Keep calling until
 /// `Done` (then `is_finished()` is true). Pass `end=true` once no more input is
 /// coming: gzip members are self-delimiting but the stream is not — after a
@@ -126,17 +126,14 @@ fn Decoder::u32_le(self : Decoder, off : Int) -> UInt {
 pub fn Decoder::step(
   self : Decoder,
   input : BytesView,
-  output : FixedArray[Byte],
-  out_off~ : Int,
-  out_len? : Int = output.length() - out_off,
+  output : MutArrayView[Byte],
   end? : Bool = false,
 ) -> (@flate.Status, Int, Int) raise {
   for i in 0..<input.length() {
     self.pending.push(input[i])
   }
   let consumed = input.length()
-  let out_end = out_off + out_len
-  let mut op = out_off
+  let mut op = 0
   for ;; {
     match self.mode {
       GzHeader => {
@@ -148,7 +145,7 @@ pub fn Decoder::step(
             self.mode = GzFinished
             continue
           } else {
-            return (NeedMoreInput, consumed, op - out_off)
+            return (NeedMoreInput, consumed, op)
           }
         }
         if self.pending[0].to_int() != 0x1F || self.pending[1].to_int() != 0x8B {
@@ -163,7 +160,7 @@ pub fn Decoder::step(
       }
       GzExtraLen => {
         if self.pending.length() < 2 {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
         let xlen = self.pending[0].to_int() | (self.pending[1].to_int() << 8)
         self.drop_prefix(2)
@@ -180,24 +177,24 @@ pub fn Decoder::step(
           self.mode = self.next_header_mode(1)
         } else {
           self.mode = GzExtra(remaining - k)
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
       }
       GzName =>
         if self.skip_nul_terminated() {
           self.mode = self.next_header_mode(2)
         } else {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
       GzComment =>
         if self.skip_nul_terminated() {
           self.mode = self.next_header_mode(3)
         } else {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
       GzHcrc => {
         if self.pending.length() < 2 {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
         self.drop_prefix(2)
         self.mode = GzBody
@@ -205,16 +202,11 @@ pub fn Decoder::step(
       GzBody => {
         let op_before = op
         let data = Bytes::from_array(self.pending)
-        let (st, used, produced) = self.inf.step(
-          data[:],
-          output,
-          out_off=op,
-          out_len=out_end - op,
-        )
+        let (st, used, produced) = self.inf.step(data[:], output.mut_view(start=op))
         if produced > 0 {
-          self.crc.update(
-            output.unsafe_reinterpret_as_bytes()[op_before:op_before + produced],
-          )
+          for i in 0..<produced {
+            self.crc.update_byte(output.at(op_before + i))
+          }
           self.osize = self.osize + produced.reinterpret_as_uint()
         }
         op = op + produced
@@ -222,14 +214,14 @@ pub fn Decoder::step(
         if st is Done {
           self.mode = GzTrailer
         } else if st is NeedMoreInput {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         } else {
-          return (NeedMoreOutput, consumed, op - out_off)
+          return (NeedMoreOutput, consumed, op)
         }
       }
       GzTrailer => {
         if self.pending.length() < 8 {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
         if self.crc.finish() != self.u32_le(0) {
           raise GzipError("gzip: CRC-32 mismatch")
@@ -255,10 +247,10 @@ pub fn Decoder::step(
           // No more buffered, but the caller has not signalled end: another
           // member may still arrive. Wait in GzHeader for it (or for `end`).
           self.mode = GzHeader
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
       }
-      GzFinished => return (Done, consumed, op - out_off)
+      GzFinished => return (Done, consumed, op)
     }
   }
 }

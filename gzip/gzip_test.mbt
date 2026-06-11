@@ -86,7 +86,7 @@ test "streaming gzip Decoder decodes a multi-member stream" {
   for ;; {
     let view = if fed { b""[:] } else { stream[:] }
     fed = true
-    let (_st, _c, p) = dec.step(view, obuf, out_off=0, end=true)
+    let (_st, _c, p) = dec.step(view, obuf.mut_view(), end=true)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -116,7 +116,7 @@ test "streaming gzip Decoder decodes a multi-member stream in tiny chunks" {
   let mut fed = 0
   for ;; {
     let next = if fed + 3 < n { fed + 3 } else { n }
-    let (_st, c, p) = dec.step(stream[fed:next], obuf, out_off=0, end=next == n)
+    let (_st, c, p) = dec.step(stream[fed:next], obuf.mut_view(), end=next == n)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -152,7 +152,7 @@ test "streaming gzip Encoder round-trips through gunzip" {
     let last = sent_end || pos + 500 >= n
     let endi = if pos + 500 < n { pos + 500 } else { n }
     let chunk = if sent_end { src[n:n] } else { src[pos:endi] }
-    let (_st, c, p) = enc.step(chunk, obuf, out_off=0, end=last)
+    let (_st, c, p) = enc.step(chunk, obuf.mut_view(), end=last)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -173,7 +173,7 @@ test "streaming gzip Encoder: empty input" {
   let obuf = FixedArray::make(64, b'\x00')
   let out = Buffer()
   for ;; {
-    let (_st, _c, p) = enc.step(b""[:], obuf, out_off=0, end=true)
+    let (_st, _c, p) = enc.step(b""[:], obuf.mut_view(), end=true)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -198,9 +198,7 @@ test "streaming gzip Decoder decodes a python gzip stream in tiny chunks" {
     let next = if fed + 3 < n { fed + 3 } else { n }
     let (_st, c, p) = dec.step(
       py_gzip[fed:next],
-      obuf,
-      out_off=0,
-      end=next == n,
+      obuf.mut_view(), end=next == n,
     )
     for i in 0..<p {
       out.write_byte(obuf[i])
@@ -234,7 +232,7 @@ test "streaming gzip Decoder round-trips a large stream" {
   let mut fed = 0
   for ;; {
     let next = if fed + 64 < n { fed + 64 } else { n }
-    let (_st, c, p) = dec.step(gz[fed:next], obuf, out_off=0, end=next == n)
+    let (_st, c, p) = dec.step(gz[fed:next], obuf.mut_view(), end=next == n)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -256,7 +254,7 @@ test "streaming gzip Decoder: empty" {
   let mut fed = 0
   for ;; {
     let next = if fed + 1 < n { fed + 1 } else { n }
-    let (_st, c, p) = dec.step(gz[fed:next], obuf, out_off=0, end=next == n)
+    let (_st, c, p) = dec.step(gz[fed:next], obuf.mut_view(), end=next == n)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -308,7 +306,7 @@ test "streaming gzip Decoder skips optional header fields" {
   let mut fed = 0
   for ;; {
     let next = if fed + 1 < n { fed + 1 } else { n }
-    let (_st, c, p) = dec.step(full[fed:next], obuf, out_off=0, end=next == n)
+    let (_st, c, p) = dec.step(full[fed:next], obuf.mut_view(), end=next == n)
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -339,7 +337,7 @@ test "streaming gzip Decoder rejects a corrupted trailer" {
     let n = bad.length()
     let mut fed = 0
     for ;; {
-      let (_st, c, _p) = dec.step(bad[fed:n], obuf, out_off=0, end=true)
+      let (_st, c, _p) = dec.step(bad[fed:n], obuf.mut_view(), end=true)
       fed = fed + c
       if dec.is_finished() {
         break

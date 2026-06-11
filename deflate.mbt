@@ -107,20 +107,19 @@ pub fn Deflater::is_finished(self : Deflater) -> Bool {
 
 ///|
 /// Run one compression step. Buffers `input`, emits as many blocks as the
-/// accrued input allows, and drains compressed bytes into `output` over
-/// `out_off..<out_off+out_len`. Returns `(status, consumed, produced)`;
-/// `consumed` is always the whole input view. Pass `end=true` (with any
-/// remaining input, or none) to finalize, and keep calling with `end=true`
-/// while it returns `NeedMoreOutput` to drain the rest. Pass `flush=true` to
-/// sync-flush (zlib `Z_SYNC_FLUSH`): everything buffered is compressed and the
-/// bit stream is padded to a byte boundary with an empty stored block, so all
-/// produced bytes are final and transmittable while the stream continues.
+/// accrued input allows, and drains compressed bytes into the mutable view
+/// `output`. Returns `(status, consumed, produced)`; `consumed` is always the
+/// whole input view. Pass `end=true` (with any remaining input, or none) to
+/// finalize, and keep calling with `end=true` while it returns `NeedMoreOutput`
+/// to drain the rest. Pass `flush=true` to sync-flush (zlib `Z_SYNC_FLUSH`):
+/// everything buffered is compressed and the bit stream is padded to a byte
+/// boundary with an empty stored block, so all produced bytes are final and
+/// transmittable while the stream continues. An empty `output` only accumulates
+/// `input` (no bytes are produced).
 pub fn Deflater::step(
   self : Deflater,
   input : BytesView,
-  output : FixedArray[Byte],
-  out_off~ : Int,
-  out_len? : Int = output.length() - out_off,
+  output : MutArrayView[Byte],
   end? : Bool = false,
   flush? : Bool = false,
 ) -> (Status, Int, Int) {
@@ -136,17 +135,17 @@ pub fn Deflater::step(
     self.flush_done = false
   }
   let consumed = input.length()
-  let out_end = out_off + out_len
-  let mut write_pos = out_off
+  let out_end = output.length()
+  let mut write_pos = 0
   for ;; {
     // Drain compressed bytes already produced into the caller's buffer.
     while self.out_pos < self.w.out.length() && write_pos < out_end {
-      output[write_pos] = self.w.out[self.out_pos]
+      output.set(write_pos, self.w.out[self.out_pos])
       write_pos = write_pos + 1
       self.out_pos = self.out_pos + 1
     }
     if self.out_pos < self.w.out.length() {
-      return (NeedMoreOutput, consumed, write_pos - out_off)
+      return (NeedMoreOutput, consumed, write_pos)
     }
     // The current block buffer is fully drained; reclaim it.
     if self.w.out.length() > 0 {
@@ -155,7 +154,7 @@ pub fn Deflater::step(
     }
     if self.emitted_final {
       self.done = true
-      return (Done, consumed, write_pos - out_off)
+      return (Done, consumed, write_pos)
     }
     // Produce the next block, or wait for more input.
     if end {
@@ -167,7 +166,7 @@ pub fn Deflater::step(
       deflate_block_size + min_lookahead {
       self.emit_one()
     } else {
-      return (NeedMoreInput, consumed, write_pos - out_off)
+      return (NeedMoreInput, consumed, write_pos)
     }
   }
 }

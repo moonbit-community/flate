@@ -23,14 +23,14 @@ pub struct Decoder {
 }
 pub fn Decoder::is_finished(Self) -> Bool
 pub fn Decoder::new() -> Self
-pub fn Decoder::step(Self, BytesView, FixedArray[Byte], out_off~ : Int, out_len? : Int, end? : Bool) -> (@flate.Status, Int, Int) raise
+pub fn Decoder::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> (@flate.Status, Int, Int) raise
 
 pub struct Encoder {
   // private fields
 }
 pub fn Encoder::is_finished(Self) -> Bool
 pub fn Encoder::new(level? : Int) -> Self
-pub fn Encoder::step(Self, BytesView, FixedArray[Byte], out_off~ : Int, out_len? : Int, end? : Bool, flush? : Bool) -> (@flate.Status, Int, Int)
+pub fn Encoder::step(Self, BytesView, MutArrayView[Byte], end? : Bool, flush? : Bool) -> (@flate.Status, Int, Int)
 
 // Type aliases
 

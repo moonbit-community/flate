@@ -83,64 +83,60 @@ fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
 
 ///|
 /// Run one compression step. Buffers `input` (folding it into the running
-/// Adler-32), then drains zlib output into `output` over
-/// `out_off..<out_off+out_len`. Returns `(status, consumed, produced)`;
-/// `consumed` is always the whole input view. Pass `end=true` to finalize and
-/// keep calling while it returns `NeedMoreOutput` to drain the rest.
+/// Adler-32), then drains zlib output into the mutable view `output`. Returns
+/// `(status, consumed, produced)`; `consumed` is always the whole input view.
+/// Pass `end=true` to finalize and keep calling while it returns
+/// `NeedMoreOutput` to drain the rest.
 pub fn Encoder::step(
   self : Encoder,
   input : BytesView,
-  output : FixedArray[Byte],
-  out_off~ : Int,
-  out_len? : Int = output.length() - out_off,
+  output : MutArrayView[Byte],
   end? : Bool = false,
   flush? : Bool = false,
 ) -> (@flate.Status, Int, Int) {
   if input.length() > 0 {
     self.adler.update(input)
-    let scratch : FixedArray[Byte] = FixedArray::make(0, b'\x00')
-    let _ = self.def.step(input, scratch, out_off=0, out_len=0)
+    let scratch = FixedArray::make(0, b'\x00').mut_view()
+    let _ = self.def.step(input, scratch)
   }
   if end {
     self.ending = true
   }
-  let out_end = out_off + out_len
-  let mut op = out_off
+  let out_end = output.length()
+  let mut op = 0
   let consumed = input.length()
   for ;; {
     match self.mode {
       Header | Trailer => {
         while self.stage_pos < self.stage.length() && op < out_end {
-          output[op] = self.stage[self.stage_pos]
+          output.set(op, self.stage[self.stage_pos])
           op = op + 1
           self.stage_pos = self.stage_pos + 1
         }
         if self.stage_pos < self.stage.length() {
-          return (NeedMoreOutput, consumed, op - out_off)
+          return (NeedMoreOutput, consumed, op)
         }
         self.mode = if self.mode is Header { Body } else { Finished }
       }
       Body => {
         let (st, _c, p) = self.def.step(
           b""[:],
-          output,
-          out_off=op,
-          out_len=out_end - op,
+          output.mut_view(start=op),
           end=self.ending,
           flush~,
         )
         op = op + p
         if st is NeedMoreInput {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
         if st is NeedMoreOutput {
-          return (NeedMoreOutput, consumed, op - out_off)
+          return (NeedMoreOutput, consumed, op)
         }
         self.stage = self.build_trailer()
         self.stage_pos = 0
         self.mode = Trailer
       }
-      Finished => return (Done, consumed, op - out_off)
+      Finished => return (Done, consumed, op)
     }
   }
 }

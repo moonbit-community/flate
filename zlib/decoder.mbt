@@ -60,27 +60,23 @@ fn Decoder::u32_be(self : Decoder, off : Int) -> UInt {
 
 ///|
 /// Run one decompression step. Buffers `input`, then decodes plaintext into
-/// `output` over `out_off..<out_off+out_len`. Returns `(status, consumed,
-/// produced)`; `consumed` is always the whole input view. Keep calling until
-/// `Done`.
+/// the mutable view `output`. Returns `(status, consumed, produced)`;
+/// `consumed` is always the whole input view. Keep calling until `Done`.
 pub fn Decoder::step(
   self : Decoder,
   input : BytesView,
-  output : FixedArray[Byte],
-  out_off~ : Int,
-  out_len? : Int = output.length() - out_off,
+  output : MutArrayView[Byte],
 ) -> (@flate.Status, Int, Int) raise {
   for i in 0..<input.length() {
     self.pending.push(input[i])
   }
   let consumed = input.length()
-  let out_end = out_off + out_len
-  let mut op = out_off
+  let mut op = 0
   for ;; {
     match self.mode {
       ZHeader => {
         if self.pending.length() < 2 {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
         let cmf = self.pending[0].to_int()
         let flg = self.pending[1].to_int()
@@ -94,7 +90,7 @@ pub fn Decoder::step(
           // FDICT: a 4-byte DICTID follows; verify it against the supplied
           // dictionary and preload the inflater's window.
           if self.pending.length() < 6 {
-            return (NeedMoreInput, consumed, op - out_off)
+            return (NeedMoreInput, consumed, op)
           }
           let dictid = self.u32_be(2)
           match self.dict {
@@ -115,30 +111,25 @@ pub fn Decoder::step(
       ZBody => {
         let op_before = op
         let data = Bytes::from_array(self.pending)
-        let (st, used, produced) = self.inf.step(
-          data[:],
-          output,
-          out_off=op,
-          out_len=out_end - op,
-        )
+        let (st, used, produced) = self.inf.step(data[:], output.mut_view(start=op))
         if produced > 0 {
-          self.adler.update(
-            output.unsafe_reinterpret_as_bytes()[op_before:op_before + produced],
-          )
+          for i in 0..<produced {
+            self.adler.update_byte(output.at(op_before + i))
+          }
         }
         op = op + produced
         self.drop_prefix(used)
         if st is Done {
           self.mode = ZTrailer
         } else if st is NeedMoreInput {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         } else {
-          return (NeedMoreOutput, consumed, op - out_off)
+          return (NeedMoreOutput, consumed, op)
         }
       }
       ZTrailer => {
         if self.pending.length() < 4 {
-          return (NeedMoreInput, consumed, op - out_off)
+          return (NeedMoreInput, consumed, op)
         }
         if self.adler.finish() != self.u32_be(0) {
           raise ZlibError("zlib: Adler-32 mismatch")
@@ -146,7 +137,7 @@ pub fn Decoder::step(
         self.drop_prefix(4)
         self.mode = ZFinished
       }
-      ZFinished => return (Done, consumed, op - out_off)
+      ZFinished => return (Done, consumed, op)
     }
   }
 }

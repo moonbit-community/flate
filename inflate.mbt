@@ -34,7 +34,7 @@ priv enum Mode {
 /// machine. All cross-call state lives here, so it pauses on
 /// `NeedMoreInput`/`NeedMoreOutput` and resumes on the next `step`.  Supports stored, fixed- and dynamic-Huffman
 /// blocks. `step` makes progress with as little as one byte of output room
-/// (`out_off..<out_off+out_len`): a match too large for the buffer is copied in
+/// (the `output` view): a match too large for the buffer is copied in
 /// pieces across calls.
 pub struct Inflater {
   priv mut mode : Mode
@@ -62,7 +62,7 @@ pub struct Inflater {
   priv mut view : BytesView
   priv mut in_pos : Int
   priv mut out_pos : Int
-  priv mut out : FixedArray[Byte]
+  priv mut out : MutArrayView[Byte]
   priv mut out_end : Int // one past the last writable index in `out`
 }
 
@@ -90,7 +90,7 @@ pub fn Inflater::new() -> Inflater {
     view: b""[:],
     in_pos: 0,
     out_pos: 0,
-    out: FixedArray::make(0, b'\x00'),
+    out: FixedArray::make(0, b'\x00').mut_view(),
     out_end: 0,
   }
 }
@@ -199,7 +199,7 @@ fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int raise {
 /// Emit one decoded byte to the output buffer and the history window. The
 /// caller guarantees output room before starting a unit / each stored byte.
 fn Inflater::emit(self : Inflater, b : Byte) -> Unit {
-  self.out[self.out_pos] = b
+  self.out.set(self.out_pos, b)
   self.out_pos = self.out_pos + 1
   self.window[self.wpos & (window_size - 1)] = b
   self.wpos = self.wpos + 1
@@ -397,23 +397,34 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
 }
 
 ///|
-/// Run one decompression step. Reads from `input`, writes into `output` from
-/// `out_off`. Returns `(status, consumed, produced)`.
+/// Run one decompression step. Reads from `input`, writes into the mutable
+/// view `output`. Returns `(status, consumed, produced)`, where `produced` is
+/// the number of bytes written into `output`. An empty `output` makes no
+/// progress (it returns `NeedMoreOutput` with 0 produced), so supply at least
+/// one byte; one byte always suffices to advance.
+///
+/// Input contract: a decoding unit (a block header, or a literal/match) is read
+/// atomically — a unit needs every one of its bytes visible in the same call,
+/// and a stored-block header alone spans ~5 bytes. When a unit's bytes are not
+/// all present yet, `step` consumes nothing (`consumed == 0`) and returns
+/// `NeedMoreInput`. So on `NeedMoreInput` the next call must re-present every
+/// still-unconsumed byte *plus* more — i.e. feed a non-shrinking, growing input
+/// view (drop only the reported `consumed` prefix). Feeding a fixed-size sliding
+/// window smaller than one unit deadlocks: the unit never fits and `consumed`
+/// stays 0 forever.
 pub fn Inflater::step(
   self : Inflater,
   input : BytesView,
-  output : FixedArray[Byte],
-  out_off~ : Int,
-  out_len? : Int = output.length() - out_off,
+  output : MutArrayView[Byte],
 ) -> (Status, Int, Int) raise {
   self.view = input
   self.in_pos = 0
-  self.out_pos = out_off
+  self.out_pos = 0
   self.out = output
-  self.out_end = out_off + out_len
+  self.out_end = output.length()
   for ;; {
     match self.mode {
-      Done => return (Done, self.in_pos, self.out_pos - out_off)
+      Done => return (Done, self.in_pos, self.out_pos)
       AtBlock => {
         let cb = self.bitbuf
         let cn = self.bit_count
@@ -423,7 +434,7 @@ pub fn Inflater::step(
             self.bitbuf = cb
             self.bit_count = cn
             self.in_pos = in_pos_mark
-            return (NeedMoreInput, in_pos_mark, self.out_pos - out_off)
+            return (NeedMoreInput, in_pos_mark, self.out_pos)
           }
           err => raise err
         }
@@ -431,14 +442,14 @@ pub fn Inflater::step(
       InStored => {
         while self.stored_remaining > 0 {
           if self.out_pos >= self.out_end {
-            return (NeedMoreOutput, self.in_pos, self.out_pos - out_off)
+            return (NeedMoreOutput, self.in_pos, self.out_pos)
           }
           match self.next_stored_byte() {
             Some(b) => {
               self.emit(b)
               self.stored_remaining = self.stored_remaining - 1
             }
-            None => return (NeedMoreInput, self.in_pos, self.out_pos - out_off)
+            None => return (NeedMoreInput, self.in_pos, self.out_pos)
           }
         }
         self.mode = if self.final_block { Done } else { AtBlock }
@@ -448,13 +459,13 @@ pub fn Inflater::step(
         if self.copy_remaining > 0 {
           self.drain_match()
           if self.copy_remaining > 0 {
-            return (NeedMoreOutput, self.in_pos, self.out_pos - out_off)
+            return (NeedMoreOutput, self.in_pos, self.out_pos)
           }
         }
         // A unit needs room for at least its first byte; the rest of a match
         // suspends via `copy_remaining` rather than requiring 258 bytes upfront.
         if self.out_pos >= self.out_end {
-          return (NeedMoreOutput, self.in_pos, self.out_pos - out_off)
+          return (NeedMoreOutput, self.in_pos, self.out_pos)
         }
         let cb = self.bitbuf
         let cn = self.bit_count
@@ -464,7 +475,7 @@ pub fn Inflater::step(
             self.bitbuf = cb
             self.bit_count = cn
             self.in_pos = in_pos_mark
-            return (NeedMoreInput, in_pos_mark, self.out_pos - out_off)
+            return (NeedMoreInput, in_pos_mark, self.out_pos)
           }
           err => raise err
         }

@@ -58,7 +58,7 @@ test "Deflater::step streams compression then round-trips" {
     let last = sent_end || pos + 10 >= n
     let endi = if pos + 10 < n { pos + 10 } else { n }
     let chunk = if sent_end { data[n:n] } else { data[pos:endi] }
-    let (st, c, p) = def.step(chunk, obuf, out_off=0, end=last)
+    let (st, c, p) = def.step(chunk, obuf.mut_view(), end=last)
     for i in 0..<p {
       comp.write_byte(obuf[i])
     }
@@ -99,7 +99,7 @@ test "Deflater emits multiple blocks for a large input and round-trips" {
     let last = sent_end || pos + 700 >= n
     let endi = if pos + 700 < n { pos + 700 } else { n }
     let chunk = if sent_end { data[n:n] } else { data[pos:endi] }
-    let (st, c, p) = def.step(chunk, obuf, out_off=0, end=last)
+    let (st, c, p) = def.step(chunk, obuf.mut_view(), end=last)
     for i in 0..<p {
       comp.write_byte(obuf[i])
     }

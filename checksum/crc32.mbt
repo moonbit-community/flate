@@ -42,6 +42,15 @@ pub fn Crc32::update(self : Crc32, data : BytesView) -> Unit {
 }
 
 ///|
+/// Fold a single byte into the running checksum. Lets a caller checksum bytes
+/// it can only reach one at a time (e.g. read back from a `MutArrayView`
+/// output) without materializing a `Bytes`.
+pub fn Crc32::update_byte(self : Crc32, b : Byte) -> Unit {
+  self.state = crc32_table[((self.state ^ b.to_uint()) & 0xFF).reinterpret_as_int()] ^
+    (self.state >> 8)
+}
+
+///|
 /// The CRC-32 of everything fed so far. Non-destructive: more `update`s may
 /// follow.
 pub fn Crc32::finish(self : Crc32) -> UInt {

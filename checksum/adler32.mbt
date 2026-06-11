@@ -30,6 +30,15 @@ pub fn Adler32::update(self : Adler32, data : BytesView) -> Unit {
 }
 
 ///|
+/// Fold a single byte into the running checksum. Lets a caller checksum bytes
+/// it can only reach one at a time (e.g. read back from a `MutArrayView`
+/// output) without materializing a `Bytes`.
+pub fn Adler32::update_byte(self : Adler32, byte : Byte) -> Unit {
+  self.a = (self.a + byte.to_int()) % adler_modulus
+  self.b = (self.b + self.a) % adler_modulus
+}
+
+///|
 /// The Adler-32 of everything fed so far. Non-destructive.
 pub fn Adler32::finish(self : Adler32) -> UInt {
   (self.b.reinterpret_as_uint() << 16) | self.a.reinterpret_as_uint()

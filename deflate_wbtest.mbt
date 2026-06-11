@@ -14,7 +14,7 @@ test "Deflater pending stays bounded after a large feed" {
   for ;; {
     let view = if fed { b""[:] } else { src[:] }
     fed = true
-    let (st, _c, _p) = d.step(view, buf, out_off=0)
+    let (st, _c, _p) = d.step(view, buf.mut_view())
     if st is NeedMoreInput {
       break
     }

@@ -67,7 +67,7 @@ fn inflate_member(input : Bytes, q : Int) -> (Bytes, Int) raise {
   let buf = FixedArray::make(65536, b'\x00')
   let mut used = 0
   for ;; {
-    let (st, c, produced) = inf.step(input[q + used:], buf, out_off=0)
+    let (st, c, produced) = inf.step(input[q + used:], buf.mut_view())
     used = used + c
     for i in 0..<produced {
       out.write_byte(buf[i])
