@@ -1,0 +1,48 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbit-community/flate"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn deflate_all(Bytes, level? : Int) -> Bytes
+
+pub fn deflate_all_optimal(Bytes, iterations? : Int) -> Bytes
+
+pub fn inflate_all(Bytes) -> Bytes raise InflateError
+
+// Errors
+pub suberror InflateError {
+  InflateError(String)
+}
+
+// Types and methods
+pub struct Deflater {
+  // private fields
+}
+pub fn Deflater::is_finished(Self) -> Bool
+pub fn Deflater::new(level? : Int) -> Self
+pub fn Deflater::reset(Self) -> Unit
+pub fn Deflater::set_dictionary(Self, BytesView) -> Unit
+pub fn Deflater::step(Self, BytesView, FixedArray[Byte], out_off~ : Int, out_len? : Int, end? : Bool, flush? : Bool) -> (Status, Int, Int)
+
+pub struct Inflater {
+  // private fields
+}
+pub fn Inflater::is_finished(Self) -> Bool
+pub fn Inflater::new() -> Self
+pub fn Inflater::reset(Self) -> Unit
+pub fn Inflater::set_dictionary(Self, BytesView) -> Unit
+pub fn Inflater::step(Self, BytesView, FixedArray[Byte], out_off~ : Int, out_len? : Int) -> (Status, Int, Int) raise
+
+pub(all) enum Status {
+  Done
+  NeedMoreInput
+  NeedMoreOutput
+} derive(Eq, @debug.Debug)
+
+// Type aliases
+
+// Traits
+

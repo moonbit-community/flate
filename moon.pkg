@@ -1,0 +1,6 @@
+// Root package "@flate": the runtime-agnostic DEFLATE engine (RFC 1951).
+// Pure, io-free, suspendable. gzip/zlib live in sibling packages that wrap it.
+
+import {
+  "moonbitlang/core/bench",
+} for "test"

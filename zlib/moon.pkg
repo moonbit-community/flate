@@ -1,0 +1,4 @@
+import {
+  "moonbit-community/flate",
+  "moonbit-community/flate/checksum",
+}

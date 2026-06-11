@@ -1,0 +1,29 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbit-community/flate/checksum"
+
+// Values
+pub fn adler32(Bytes) -> UInt
+
+pub fn crc32(Bytes) -> UInt
+
+// Errors
+
+// Types and methods
+pub struct Adler32 {
+  // private fields
+}
+pub fn Adler32::finish(Self) -> UInt
+pub fn Adler32::new() -> Self
+pub fn Adler32::update(Self, BytesView) -> Unit
+
+pub struct Crc32 {
+  // private fields
+}
+pub fn Crc32::finish(Self) -> UInt
+pub fn Crc32::new() -> Self
+pub fn Crc32::update(Self, BytesView) -> Unit
+
+// Type aliases
+
+// Traits
+
