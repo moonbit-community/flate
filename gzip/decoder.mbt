@@ -146,6 +146,7 @@ pub fn Decoder::step(
           // remnant that is not another member — ignored, as `gunzip` does.
           if end {
             self.mode = GzFinished
+            continue
           } else {
             return (NeedMoreInput, consumed, op - out_off)
           }

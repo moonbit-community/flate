@@ -47,6 +47,7 @@ pub struct Inflater {
   priv mut hd_fixed : Bool
   priv window : FixedArray[Byte] // 32 KB circular history
   priv mut wpos : Int // total bytes ever written; window index = wpos & 32767
+  priv mut filled : Bool // window has held >= 32 KB, so any distance <= 32768 is valid
   priv dyn_litlen : HuffmanDecoder // dynamic literal/length (and code-length) table
   priv dyn_dist : HuffmanDecoder // dynamic distance table
   priv clbits : Array[Int]
@@ -79,6 +80,7 @@ pub fn Inflater::new() -> Inflater {
     hd_fixed: false,
     window: FixedArray::make(window_size, b'\x00'),
     wpos: 0,
+    filled: false,
     dyn_litlen: HuffmanDecoder::new(),
     dyn_dist: HuffmanDecoder::new(),
     clbits: Array::make(max_num_lit + max_num_dist, 0),
@@ -117,6 +119,9 @@ pub fn Inflater::set_dictionary(self : Inflater, dict : BytesView) -> Unit {
     self.window[self.wpos & (window_size - 1)] = dict[i]
     self.wpos = self.wpos + 1
   }
+  if self.wpos >= window_size {
+    self.filled = true
+  }
 }
 
 ///|
@@ -135,6 +140,7 @@ pub fn Inflater::reset(self : Inflater) -> Unit {
   self.hd = None
   self.hd_fixed = false
   self.wpos = 0
+  self.filled = false
   self.copy_remaining = 0
   self.copy_dist = 0
 }
@@ -197,6 +203,9 @@ fn Inflater::emit(self : Inflater, b : Byte) -> Unit {
   self.out_pos = self.out_pos + 1
   self.window[self.wpos & (window_size - 1)] = b
   self.wpos = self.wpos + 1
+  if !self.filled && self.wpos >= window_size {
+    self.filled = true
+  }
 }
 
 // ---- block handling ----
@@ -375,7 +384,7 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
     self.huff_sym(self.hd.unwrap())
   }
   let dist = self.distance(dsym)
-  if dist > self.wpos {
+  if !self.filled && dist > self.wpos {
     raise InflateError("corrupt: distance too far back")
   }
   // All input reads are done; set up the (possibly suspendable) copy. Because

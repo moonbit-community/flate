@@ -36,6 +36,7 @@ pub struct Deflater {
   priv mut out_pos : Int // next `w.out` index to hand to the caller
   priv mut emitted_final : Bool // the final block has been written into `w`
   priv mut done : Bool // the final block has been fully drained
+  priv mut flush_done : Bool // the current buffered content has been sync-flushed
   priv level : Int // compression level 0-9 (0 = stored only)
   priv cfg : LevelConfig // match-search tuning for `level`
 }
@@ -52,6 +53,7 @@ pub fn Deflater::new(level? : Int = 6) -> Deflater {
     out_pos: 0,
     emitted_final: false,
     done: false,
+    flush_done: false,
     level: lv,
     cfg: level_configs[lv],
   }
@@ -94,6 +96,7 @@ pub fn Deflater::reset(self : Deflater) -> Unit {
   self.out_pos = 0
   self.emitted_final = false
   self.done = false
+  self.flush_done = false
 }
 
 ///|
@@ -124,10 +127,17 @@ pub fn Deflater::step(
   for i in 0..<input.length() {
     self.pending.push(input[i])
   }
+  // New input invalidates a prior sync-flush: a later `flush` must emit again.
+  // Without this latch a caller that re-passes `flush=true` across the multiple
+  // `step` calls needed to drain a small output buffer would re-emit the empty
+  // stored-block marker every call and never reach `NeedMoreInput` (unbounded
+  // output). The marker is emitted at most once per buffered batch.
+  if input.length() > 0 {
+    self.flush_done = false
+  }
   let consumed = input.length()
   let out_end = out_off + out_len
   let mut write_pos = out_off
-  let mut flushed = false
   for ;; {
     // Drain compressed bytes already produced into the caller's buffer.
     while self.out_pos < self.w.out.length() && write_pos < out_end {
@@ -150,9 +160,9 @@ pub fn Deflater::step(
     // Produce the next block, or wait for more input.
     if end {
       self.emit_final()
-    } else if flush && !flushed {
+    } else if flush && !self.flush_done {
       self.emit_flush()
-      flushed = true
+      self.flush_done = true
     } else if self.pending.length() - self.window_carry >=
       deflate_block_size + min_lookahead {
       self.emit_one()
