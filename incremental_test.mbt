@@ -89,7 +89,14 @@ test "byte-at-a-time deflate+inflate round-trips (1B in, 1B out)" {
   // suspension and the length-258/259 and dist=1 boundaries without the
   // expensive level-9 chain search.
   let cases = [
-    (1, 0), (1, 1), (1, 2), (2, 7), (2, 258), (2, 259), (4, 600), (256, 500),
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (2, 7),
+    (2, 258),
+    (2, 259),
+    (4, 600),
+    (256, 500),
   ]
   let mut seed = 0x9E3779B9U
   for ci in 0..<cases.length() {

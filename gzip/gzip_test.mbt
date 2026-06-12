@@ -198,7 +198,8 @@ test "streaming gzip Decoder decodes a python gzip stream in tiny chunks" {
     let next = if fed + 3 < n { fed + 3 } else { n }
     let (_st, c, p) = dec.step(
       py_gzip[fed:next],
-      obuf.mut_view(), end=next == n,
+      obuf.mut_view(),
+      end=next == n,
     )
     for i in 0..<p {
       out.write_byte(obuf[i])

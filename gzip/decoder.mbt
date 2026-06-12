@@ -202,7 +202,10 @@ pub fn Decoder::step(
       GzBody => {
         let op_before = op
         let data = Bytes::from_array(self.pending)
-        let (st, used, produced) = self.inf.step(data[:], output.mut_view(start=op))
+        let (st, used, produced) = self.inf.step(
+          data[:],
+          output.mut_view(start=op),
+        )
         if produced > 0 {
           for i in 0..<produced {
             self.crc.update_byte(output.at(op_before + i))
