@@ -35,6 +35,19 @@ let len_extra : FixedArray[Int] = [
 ]
 
 ///|
+fn build_length_code_info_table() -> FixedArray[Int] {
+  let info = FixedArray::make(29, 0)
+  for index in 0..<29 {
+    info[index] = (len_base[index] << 3) | len_extra[index]
+  }
+  info
+}
+
+///|
+/// Packed `(base << 3) | extra_bits` data shared directly by both decoders.
+let length_code_info_table : FixedArray[Int] = build_length_code_info_table()
+
+///|
 fn build_len_to_idx() -> FixedArray[Int] {
   let m = FixedArray::make(259, 0)
   for idx in 0..<29 {
@@ -63,6 +76,19 @@ let dist_extra : FixedArray[Int] = [
 ]
 
 ///|
+fn build_distance_code_info_table() -> FixedArray[Int] {
+  let info = FixedArray::make(max_num_dist, 0)
+  for symbol in 0..<max_num_dist {
+    info[symbol] = (dist_base[symbol] << 4) | dist_extra[symbol]
+  }
+  info
+}
+
+///|
+/// Packed `(base << 4) | extra_bits` data shared directly by both decoders.
+let distance_code_info_table : FixedArray[Int] = build_distance_code_info_table()
+
+///|
 fn dist_index(d : Int) -> Int {
   let mut idx = 0
   while idx + 1 < 30 && dist_base[idx + 1] <= d {
@@ -71,53 +97,30 @@ fn dist_index(d : Int) -> Int {
   idx
 }
 
-///|
-/// Length base value and extra-bit count for a literal/length symbol 257..285.
-fn length_base_extra(v : Int) -> (Int, Int) {
-  if v < 265 {
-    (v - 254, 0)
-  } else if v < 269 {
-    (v * 2 - 519, 1)
-  } else if v < 273 {
-    (v * 4 - 1057, 2)
-  } else if v < 277 {
-    (v * 8 - 2149, 3)
-  } else if v < 281 {
-    (v * 16 - 4365, 4)
-  } else if v < 285 {
-    (v * 32 - 8861, 5)
-  } else {
-    (258, 0)
-  }
-}
-
 // ---- fixed Huffman literal/length codes (MSB-first) ----
 
 ///|
-fn build_fixed_litlen() -> (FixedArray[Int], FixedArray[Int]) {
-  let code = FixedArray::make(288, 0)
-  let len = FixedArray::make(288, 0)
+fn build_fixed_litlen_info() -> FixedArray[Int] {
+  let info = FixedArray::make(288, 0)
   for s in 0..<144 {
-    code[s] = 0x30 + s
-    len[s] = 8
+    info[s] = ((0x30 + s) << 4) | 8
   }
   for s in 144..<256 {
-    code[s] = 0x190 + (s - 144)
-    len[s] = 9
+    info[s] = ((0x190 + (s - 144)) << 4) | 9
   }
   for s in 256..<280 {
-    code[s] = s - 256
-    len[s] = 7
+    info[s] = ((s - 256) << 4) | 7
   }
   for s in 280..<288 {
-    code[s] = 0xC0 + (s - 280)
-    len[s] = 8
+    info[s] = ((0xC0 + (s - 280)) << 4) | 8
   }
-  (code, len)
+  info
 }
 
 ///|
-let fixed_litlen : (FixedArray[Int], FixedArray[Int]) = build_fixed_litlen()
+/// Pack each fixed literal/length code as `(code << 4) | bit_length` so the
+/// module initializer and fixed-block hot path need only one table.
+let fixed_litlen_info : FixedArray[Int] = build_fixed_litlen_info()
 
 // ---- bit reversal ----
 

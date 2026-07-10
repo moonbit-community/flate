@@ -26,7 +26,9 @@ test "inflate suspends/resumes across a tiny output buffer" {
   let view = hello_stored[:]
   let mut consumed = 0
   for ;; {
-    let (status, used, produced) = inf.step(view[consumed:], small.mut_view())
+    let status = inf.step(view[consumed:], small.mut_view())
+    let used = inf.last_consumed()
+    let produced = inf.last_produced()
     for i in 0..<produced {
       collected.write_byte(small[i])
     }
@@ -110,7 +112,9 @@ test "Inflater::step streams a dynamic block in small chunks" {
   let mut consumed = 0
   let mut avail = 0
   for ;; {
-    let (st, c, p) = inf.step(comp[consumed:avail], obuf.mut_view())
+    let st = inf.step(comp[consumed:avail], obuf.mut_view())
+    let c = inf.last_consumed()
+    let p = inf.last_produced()
     for i in 0..<p {
       result.write_byte(obuf[i])
     }
@@ -143,7 +147,9 @@ test "Inflater::step streams a fixed block one input byte at a time" {
   let mut consumed = 0
   let mut avail = 0
   for ;; {
-    let (st, c, p) = inf.step(comp[consumed:avail], obuf.mut_view())
+    let st = inf.step(comp[consumed:avail], obuf.mut_view())
+    let c = inf.last_consumed()
+    let p = inf.last_produced()
     for i in 0..<p {
       result.write_byte(obuf[i])
     }
@@ -173,7 +179,9 @@ test "Inflater::step makes progress with a 1-byte output buffer" {
   let view = v_fixed_aaa[:]
   let mut consumed = 0
   for ;; {
-    let (st, c, p) = inf.step(view[consumed:], obuf.mut_view(end=1))
+    let st = inf.step(view[consumed:], obuf.mut_view(end=1))
+    let c = inf.last_consumed()
+    let p = inf.last_produced()
     for i in 0..<p {
       result.write_byte(obuf[i])
     }
@@ -198,7 +206,9 @@ test "Inflater::step honors a small out_len within a larger buffer" {
   let mut consumed = 0
   for ;; {
     // Write into obuf[8:8+7] only, proving out_off/out_len bound the writes.
-    let (st, c, p) = inf.step(view[consumed:], obuf.mut_view(start=8, end=15))
+    let st = inf.step(view[consumed:], obuf.mut_view(start=8, end=15))
+    let c = inf.last_consumed()
+    let p = inf.last_produced()
     for i in 8..<(8 + p) {
       result.write_byte(obuf[i])
     }
@@ -239,7 +249,7 @@ test "deflate_all stores incompressible data" {
 }
 
 ///|
-/// Sync flush: after `flush=true`, the flushed prefix alone must decode to
+/// Sync flush: after `action=SyncFlush`, the flushed prefix alone must decode to
 /// everything fed so far (byte-aligned via the empty stored block, ending in
 /// the zlib `00 00 FF FF` marker), and the stream then continues across the
 /// flush point.
@@ -248,7 +258,9 @@ test "Deflater sync flush makes the prefix decodable" {
   let part2 = b"second message follows after the flush point."
   let enc = @flate.Deflater::new()
   let obuf = FixedArray::make(4096, b'\x00')
-  let (st1, c1, p1) = enc.step(part1[:], obuf.mut_view(), flush=true)
+  let st1 = enc.step(part1[:], obuf.mut_view(), action=SyncFlush)
+  let c1 = enc.last_consumed()
+  let p1 = enc.last_produced()
   assert_true(st1 is NeedMoreInput)
   assert_eq(c1, part1.length())
   // zlib sync-flush signature: the flushed bytes end with 00 00 FF FF.
@@ -258,11 +270,9 @@ test "Deflater sync flush makes the prefix decodable" {
   assert_eq(obuf[p1 - 2], b'\xFF')
   assert_eq(obuf[p1 - 1], b'\xFF')
   // Repeating the same request without new input is idempotent.
-  let (repeat_status, repeat_consumed, repeat_produced) = enc.step(
-    b""[:],
-    obuf.mut_view(),
-    flush=true,
-  )
+  let repeat_status = enc.step(b""[:], obuf.mut_view(), action=SyncFlush)
+  let repeat_consumed = enc.last_consumed()
+  let repeat_produced = enc.last_produced()
   assert_true(repeat_status is NeedMoreInput)
   assert_eq(repeat_consumed, 0)
   assert_eq(repeat_produced, 0)
@@ -273,7 +283,9 @@ test "Deflater sync flush makes the prefix decodable" {
   }
   let inf = @flate.Inflater::new()
   let dbuf = FixedArray::make(4096, b'\x00')
-  let (dst, _dc, dp) = inf.step(Bytes::from_array(prefix)[:], dbuf.mut_view())
+  let dst = inf.step(Bytes::from_array(prefix)[:], dbuf.mut_view())
+  let _dc = inf.last_consumed()
+  let dp = inf.last_produced()
   assert_true(dst is NeedMoreInput)
   let got : Array[Byte] = []
   for i in 0..<dp {
@@ -288,7 +300,9 @@ test "Deflater sync flush makes the prefix decodable" {
   let mut sent_end = false
   for ;; {
     let chunk = if sent_end { b""[:] } else { part2[:] }
-    let (st, _c, p) = enc.step(chunk, obuf.mut_view(), end=true)
+    let st = enc.step(chunk, obuf.mut_view(), action=Finish)
+    let _c = enc.last_consumed()
+    let p = enc.last_produced()
     sent_end = true
     for i in 0..<p {
       out.write_byte(obuf[i])
@@ -310,32 +324,31 @@ test "Deflater sync flush makes the prefix decodable" {
 ///|
 /// A one-shot flush request can arrive while an earlier block is still waiting
 /// for output space. It must remain pending even when later drain calls no
-/// longer pass `flush=true`.
+/// longer pass `action=SyncFlush`.
 test "Deflater latches sync flush across output backpressure" {
   // Exactly one internal high-water window: the whole view is accepted, then
   // its stored block is backpressured before the empty flush request arrives.
   let src = Bytes::from_array(Array::make(16642, b'\x5A'))
   let enc = @flate.Deflater::new(level=0)
   let no_output = FixedArray::make(0, b'\x00')
-  let (initial_status, initial_consumed, initial_produced) = enc.step(
-    src[:],
-    no_output.mut_view(),
-  )
+  let initial_status = enc.step(src[:], no_output.mut_view())
+  let initial_consumed = enc.last_consumed()
+  let initial_produced = enc.last_produced()
   assert_true(initial_status is NeedMoreOutput)
   assert_eq(initial_consumed, src.length())
   assert_eq(initial_produced, 0)
-  let (flush_status, flush_consumed, flush_produced) = enc.step(
-    b""[:],
-    no_output.mut_view(),
-    flush=true,
-  )
+  let flush_status = enc.step(b""[:], no_output.mut_view(), action=SyncFlush)
+  let flush_consumed = enc.last_consumed()
+  let flush_produced = enc.last_produced()
   assert_true(flush_status is NeedMoreOutput)
   assert_eq(flush_consumed, 0)
   assert_eq(flush_produced, 0)
   let obuf = FixedArray::make(257, b'\x00')
   let prefix = Buffer()
   for ;; {
-    let (status, consumed, produced) = enc.step(b""[:], obuf.mut_view())
+    let status = enc.step(b""[:], obuf.mut_view())
+    let consumed = enc.last_consumed()
+    let produced = enc.last_produced()
     assert_eq(consumed, 0)
     for i in 0..<produced {
       prefix.write_byte(obuf[i])
@@ -353,10 +366,9 @@ test "Deflater latches sync flush across output backpressure" {
   assert_eq(flushed[flushed.length() - 1], b'\xFF')
   let inf = @flate.Inflater::new()
   let decoded = FixedArray::make(18000, b'\x00')
-  let (decode_status, decode_consumed, decode_produced) = inf.step(
-    flushed[:],
-    decoded.mut_view(),
-  )
+  let decode_status = inf.step(flushed[:], decoded.mut_view())
+  let decode_consumed = inf.last_consumed()
+  let decode_produced = inf.last_produced()
   assert_true(decode_status is NeedMoreInput)
   assert_eq(decode_consumed, flushed.length())
   assert_eq(decode_produced, src.length())
@@ -398,11 +410,16 @@ test "reset reuses engines across streams" {
   let s1 = b"first stream payload, first stream payload"
   let s2 = b"second stream: completely different bytes!!"
   let d = @flate.Deflater::new()
+  assert_eq(d.last_consumed(), 0)
+  assert_eq(d.last_produced(), 0)
   let obuf = FixedArray::make(4096, b'\x00')
-  let (st1, _, _) = d.step(s1[:], obuf.mut_view(), end=true)
+  let st1 = d.step(s1[:], obuf.mut_view(), action=Finish)
   assert_true(st1 is Done)
   d.reset()
-  let (st2, _, p2) = d.step(s2[:], obuf.mut_view(), end=true)
+  assert_eq(d.last_consumed(), 0)
+  assert_eq(d.last_produced(), 0)
+  let st2 = d.step(s2[:], obuf.mut_view(), action=Finish)
+  let p2 = d.last_produced()
   assert_true(st2 is Done)
   let reused : Array[Byte] = []
   for i in 0..<p2 {
@@ -410,16 +427,30 @@ test "reset reuses engines across streams" {
   }
   assert_eq(Bytes::from_array(reused), @flate.deflate_all(s2))
   let inf = @flate.Inflater::new()
+  assert_eq(inf.last_consumed(), 0)
+  assert_eq(inf.last_produced(), 0)
   let dbuf = FixedArray::make(4096, b'\x00')
-  let (ist1, _, ip1) = inf.step(@flate.deflate_all(s1)[:], dbuf.mut_view())
+  let ist1 = inf.step(@flate.deflate_all(s1)[:], dbuf.mut_view())
+  let ip1 = inf.last_produced()
   assert_true(ist1 is Done)
   let got1 : Array[Byte] = []
   for i in 0..<ip1 {
     got1.push(dbuf[i])
   }
   assert_eq(Bytes::from_array(got1), s1)
+  let sentinel = FixedArray::make(4, b'\xA5')
+  let done_status = inf.step(@flate.deflate_all(s2)[:], sentinel.mut_view())
+  assert_true(done_status is Done)
+  assert_eq(inf.last_consumed(), 0)
+  assert_eq(inf.last_produced(), 0)
+  for byte in sentinel {
+    assert_eq(byte, b'\xA5')
+  }
   inf.reset()
-  let (ist2, _, ip2) = inf.step(@flate.deflate_all(s2)[:], dbuf.mut_view())
+  assert_eq(inf.last_consumed(), 0)
+  assert_eq(inf.last_produced(), 0)
+  let ist2 = inf.step(@flate.deflate_all(s2)[:], dbuf.mut_view())
+  let ip2 = inf.last_produced()
   assert_true(ist2 is Done)
   let got2 : Array[Byte] = []
   for i in 0..<ip2 {
@@ -435,10 +466,10 @@ test "reset reuses engines across streams" {
 test "preset dictionary: raw deflate round-trip" {
   let dict = b"the quick brown fox jumps over the lazy dog"
   let msg = b"the quick brown fox jumps over the lazy dog, again and again!"
-  let d = @flate.Deflater::new()
-  d.set_dictionary(dict[:])
+  let d = @flate.Deflater::new(dictionary=dict[:])
   let obuf = FixedArray::make(4096, b'\x00')
-  let (st, _, p) = d.step(msg[:], obuf.mut_view(), end=true)
+  let st = d.step(msg[:], obuf.mut_view(), action=Finish)
+  let p = d.last_produced()
   assert_true(st is Done)
   let comp : Array[Byte] = []
   for i in 0..<p {
@@ -448,10 +479,10 @@ test "preset dictionary: raw deflate round-trip" {
   // The dictionary must actually pay: smaller than dictionary-less output.
   assert_true(compressed.length() < @flate.deflate_all(msg).length())
   // With the dictionary: decodes to the message.
-  let inf = @flate.Inflater::new()
-  inf.set_dictionary(dict[:])
+  let inf = @flate.Inflater::new(dictionary=dict[:])
   let dbuf = FixedArray::make(4096, b'\x00')
-  let (ist, _, ip) = inf.step(compressed[:], dbuf.mut_view())
+  let ist = inf.step(compressed[:], dbuf.mut_view())
+  let ip = inf.last_produced()
   assert_true(ist is Done)
   let got : Array[Byte] = []
   for i in 0..<ip {
@@ -463,7 +494,7 @@ test "preset dictionary: raw deflate round-trip" {
   try {
     let _ = inf2.step(compressed[:], dbuf.mut_view())
   } catch {
-    InflateError(_) => ()
+    InflateError(_, _) => ()
   } noraise {
     _ => fail("expected the dictionary-less decode to fail")
   }

@@ -36,7 +36,6 @@ fn bit_counts(nodes : Array[Node], n : Int, max_bits_in : Int) -> Array[Int] {
   if max_bits > n - 1 {
     max_bits = n - 1
   }
-  let fr = fn(i : Int) -> Int { if i < n { nodes[i].freq } else { maxi } }
   let levels : Array[LevelInfo] = []
   for _i in 0..<17 {
     levels.push(LevelInfo::new())
@@ -47,9 +46,9 @@ fn bit_counts(nodes : Array[Node], n : Int, max_bits_in : Int) -> Array[Int] {
   }
   for level in 1..<=max_bits {
     levels[level].level = level
-    levels[level].last_freq = fr(1)
-    levels[level].next_char_freq = fr(2)
-    levels[level].next_pair_freq = fr(0) + fr(1)
+    levels[level].last_freq = nodes[1].freq
+    levels[level].next_char_freq = nodes[2].freq
+    levels[level].next_pair_freq = nodes[0].freq + nodes[1].freq
     levels[level].needed = 0
     leaf_counts[level][level] = 2
     if level == 1 {
@@ -71,7 +70,7 @@ fn bit_counts(nodes : Array[Node], n : Int, max_bits_in : Int) -> Array[Int] {
       let nn = leaf_counts[level][level] + 1
       lv.last_freq = lv.next_char_freq
       leaf_counts[level][level] = nn
-      lv.next_char_freq = fr(nn)
+      lv.next_char_freq = if nn < n { nodes[nn].freq } else { maxi }
     } else {
       lv.last_freq = lv.next_pair_freq
       for i in 0..<level {
@@ -107,7 +106,7 @@ fn assign_codes(
   bit_count : Array[Int],
   nodes : Array[Node],
   code_len : Array[Int],
-  code_val : Array[UInt],
+  code_val : Array[UInt]?,
 ) -> Unit {
   let mut code = 0
   let mut rem = nodes.length()
@@ -123,10 +122,14 @@ fn assign_codes(
     }
     chunk.sort_by((a, b) => a.lit - b.lit)
     for node in chunk {
-      code_val[node.lit] = reverse_bits(
-        code.reinterpret_as_uint() & 0xFFFF,
-        nlen,
-      )
+      match code_val {
+        Some(values) =>
+          values[node.lit] = reverse_bits(
+            code.reinterpret_as_uint() & 0xFFFF,
+            nlen,
+          )
+        None => ()
+      }
       code_len[node.lit] = nlen
       code = code + 1
     }
@@ -136,14 +139,15 @@ fn assign_codes(
 
 ///|
 /// Build length-limited canonical Huffman codes for `size` symbols from their
-/// frequencies. Returns (code lengths, bit-reversed codes).
+/// frequencies into caller-owned arrays. Omit `code_val` when only lengths are
+/// needed; this avoids both the unused code array and a tuple return allocation.
 fn gen_huffman(
   freq : Array[Int],
   size : Int,
   max_bits : Int,
-) -> (Array[Int], Array[UInt]) {
-  let code_len = Array::make(size, 0)
-  let code_val = Array::make(size, 0U)
+  code_len : Array[Int],
+  code_val? : Array[UInt],
+) -> Unit {
   let nodes : Array[Node] = []
   for i in 0..<size {
     if freq[i] != 0 {
@@ -152,14 +156,18 @@ fn gen_huffman(
   }
   let count = nodes.length()
   if count == 0 {
-    return (code_len, code_val)
+    return
   }
   if count <= 2 {
     for k in 0..<count {
       code_len[nodes[k].lit] = 1
-      code_val[nodes[k].lit] = reverse_bits(k.reinterpret_as_uint(), 1)
+      match code_val {
+        Some(values) =>
+          values[nodes[k].lit] = reverse_bits(k.reinterpret_as_uint(), 1)
+        None => ()
+      }
     }
-    return (code_len, code_val)
+    return
   }
   nodes.sort_by((a, b) => {
     if a.freq != b.freq {
@@ -170,5 +178,4 @@ fn gen_huffman(
   })
   let bit_count = bit_counts(nodes, count, max_bits)
   assign_codes(bit_count, nodes, code_len, code_val)
-  (code_len, code_val)
 }

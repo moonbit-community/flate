@@ -12,3 +12,19 @@ pub(all) enum Status {
   /// The output buffer filled up; drain it and call again.
   NeedMoreOutput
 } derive(Eq, Debug)
+
+///|
+/// Requested action for one streaming compression step.
+///
+/// The action applies after the complete input view has been consumed. If a
+/// step reports partial consumption, re-present the remaining suffix with the
+/// same action.
+pub(all) enum DeflateAction {
+  /// Accept input without emitting a control block.
+  Continue
+  /// Make all input accepted so far available to the decoder while keeping the
+  /// DEFLATE stream open.
+  SyncFlush
+  /// Finish the DEFLATE stream after all input in this view has been accepted.
+  Finish
+} derive(Eq, Debug)

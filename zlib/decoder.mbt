@@ -25,7 +25,10 @@ pub struct Decoder {
   priv mut ending : Bool // `end=true` is sticky across output suspension
   priv mut mode : DecMode
   priv dict : Bytes? // preset dictionary, if the caller has one
-  priv mut failure : (ZlibErrorKind, String)? // stable first terminal error
+  priv mut failure_kind : ZlibErrorKind? // stable first terminal error
+  priv mut failure_message : String
+  priv mut step_consumed : Int
+  priv mut step_produced : Int
 }
 
 ///|
@@ -44,7 +47,10 @@ pub fn Decoder::new(dictionary? : Bytes) -> Decoder {
     ending: false,
     mode: ZHeader,
     dict: dictionary,
-    failure: None,
+    failure_kind: None,
+    failure_message: "",
+    step_consumed: 0,
+    step_produced: 0,
   }
 }
 
@@ -52,6 +58,20 @@ pub fn Decoder::new(dictionary? : Bytes) -> Decoder {
 /// Whether the whole zlib stream has been decoded and its trailer verified.
 pub fn Decoder::is_finished(self : Decoder) -> Bool {
   self.mode is ZFinished
+}
+
+///|
+/// Number of input bytes accepted by the most recent successful `step` call.
+/// It is reset to zero when a call raises `ZlibError`.
+pub fn Decoder::last_consumed(self : Decoder) -> Int {
+  self.step_consumed
+}
+
+///|
+/// Number of output bytes written by the most recent successful `step` call.
+/// It is reset to zero when a call raises `ZlibError`.
+pub fn Decoder::last_produced(self : Decoder) -> Int {
+  self.step_produced
 }
 
 ///|
@@ -157,29 +177,46 @@ fn Decoder::u32_be(self : Decoder, off : Int) -> UInt {
 
 ///|
 /// Run one decompression step. Buffers a bounded prefix of `input`, then decodes
-/// plaintext into `output`. Drop only `input[:consumed]`; output backpressure
-/// may leave a suffix unaccepted. `end=true` becomes sticky after its complete
-/// view is consumed and turns incomplete headers, DEFLATE bodies, and trailers
-/// into `ZlibError` instead of another `NeedMoreInput`. If the final accepted
-/// view also contains bytes after the zlib trailer, retrieve that read-ahead
-/// with `unused_input()`. On failure, the decoder locks the first `ZlibError`
-/// kind/message and rethrows it on every later call.
+/// plaintext into `output`. Read the accepted and produced counts with
+/// `last_consumed()` and `last_produced()`; drop only
+/// `input[:last_consumed()]`. Output backpressure may leave a suffix unaccepted.
+/// `end=true` becomes sticky after its complete view is consumed and turns
+/// incomplete headers, DEFLATE bodies, and trailers into `ZlibError` instead of
+/// another `NeedMoreInput`. If the final accepted view also contains bytes after
+/// the zlib trailer, retrieve that read-ahead with `unused_input()`. On failure,
+/// the decoder locks the first `ZlibError` kind/message and rethrows it on every
+/// later call; both progress counters remain zero.
 pub fn Decoder::step(
   self : Decoder,
   input : BytesView,
   output : MutArrayView[Byte],
   end? : Bool = false,
-) -> (@flate.Status, Int, Int) raise ZlibError {
-  match self.failure {
-    Some((kind, message)) => raise ZlibError(kind, message)
+) -> @flate.Status raise ZlibError {
+  self.step_consumed = 0
+  self.step_produced = 0
+  match self.failure_kind {
+    Some(kind) => raise ZlibError(kind, self.failure_message)
     None =>
       self.step_active(input, output, end~) catch {
         ZlibError(kind, message) => {
-          self.failure = Some((kind, message))
+          self.failure_kind = Some(kind)
+          self.failure_message = message
           raise ZlibError(kind, message)
         }
       }
   }
+}
+
+///|
+fn Decoder::finish_step(
+  self : Decoder,
+  status : @flate.Status,
+  consumed : Int,
+  produced : Int,
+) -> @flate.Status {
+  self.step_consumed = consumed
+  self.step_produced = produced
+  status
 }
 
 ///|
@@ -188,10 +225,10 @@ fn Decoder::step_active(
   input : BytesView,
   output : MutArrayView[Byte],
   end~ : Bool,
-) -> (@flate.Status, Int, Int) raise ZlibError {
+) -> @flate.Status raise ZlibError {
   // A terminal decoder must not claim input that it can no longer decode.
   if self.mode is ZFinished {
-    return (Done, 0, 0)
+    return self.finish_step(Done, 0, 0)
   }
   if !self.ending && self.pending.length() >= decoder_input_limit {
     self.compact_for_input()
@@ -218,7 +255,7 @@ fn Decoder::step_active(
           if self.ending {
             raise ZlibError(Truncated, "zlib: truncated header")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
         let cmf = self.pending[self.pending_pos].to_int()
         let flg = self.pending[self.pending_pos + 1].to_int()
@@ -238,7 +275,7 @@ fn Decoder::step_active(
             if self.ending {
               raise ZlibError(Truncated, "zlib: truncated dictionary id")
             }
-            return (NeedMoreInput, consumed, op)
+            return self.finish_step(NeedMoreInput, consumed, op)
           }
           let dictid = self.u32_be(2)
           match self.dict {
@@ -254,7 +291,10 @@ fn Decoder::step_active(
                   "zlib: dictionary id mismatch",
                 )
               }
-              self.inf.set_dictionary(dict[:])
+              // Configure the raw inflater only after FDICT and DICTID have
+              // been validated. Preloading it in `new` would incorrectly let
+              // a stream without FDICT refer to caller-supplied history.
+              self.inf.reset(dictionary=dict[:])
             }
           }
           self.consume_pending(6)
@@ -273,16 +313,18 @@ fn Decoder::step_active(
           }
         }
         let op_before = op
-        let (st, used, produced) = self.inf.step(
+        let st = self.inf.step(
           self.body_input[self.body_pos:],
           output.mut_view(start=op),
         ) catch {
-          InflateError(message) =>
+          InflateError(_, message) =>
             raise ZlibError(
               InvalidDeflate,
               "zlib: invalid DEFLATE stream: \{message}",
             )
         }
+        let used = self.inf.last_consumed()
+        let produced = self.inf.last_produced()
         if produced > 0 {
           for i in 0..<produced {
             self.adler.update_byte(output.at(op_before + i))
@@ -309,10 +351,10 @@ fn Decoder::step_active(
             if self.ending {
               raise ZlibError(Truncated, "zlib: truncated DEFLATE stream")
             }
-            return (NeedMoreInput, consumed, op)
+            return self.finish_step(NeedMoreInput, consumed, op)
           }
         } else {
-          return (NeedMoreOutput, consumed, op)
+          return self.finish_step(NeedMoreOutput, consumed, op)
         }
       }
       ZTrailer => {
@@ -320,7 +362,7 @@ fn Decoder::step_active(
           if self.ending {
             raise ZlibError(Truncated, "zlib: truncated trailer")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
         if self.adler.finish() != self.u32_be(0) {
           raise ZlibError(ChecksumMismatch, "zlib: Adler-32 mismatch")
@@ -328,7 +370,7 @@ fn Decoder::step_active(
         self.consume_pending(4)
         self.finish_stream()
       }
-      ZFinished => return (Done, consumed, op)
+      ZFinished => return self.finish_step(Done, consumed, op)
     }
   }
 }

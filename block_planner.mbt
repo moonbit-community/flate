@@ -41,11 +41,17 @@ fn Deflater::emit_capped(self : Deflater) -> Unit {
   let data = Bytes::from_array(self.pending)
   let cap = self.window_carry + deflate_block_size
   let tok_end = if cap < data.length() { cap } else { data.length() }
-  let (tokens, ll_freq, d_freq, processed) = tokenize(
+  let tokens : Array[Int] = []
+  let ll_freq = Array::make(286, 0)
+  let d_freq = Array::make(30, 0)
+  let processed = tokenize(
     data,
     self.window_carry,
     tok_end,
     self.cfg,
+    tokens,
+    ll_freq,
+    d_freq,
   )
   emit_block(
     self.w,
@@ -92,11 +98,17 @@ fn Deflater::emit_final(self : Deflater) -> Unit {
       self.emit_capped()
     }
     let data = Bytes::from_array(self.pending)
-    let (tokens, ll_freq, d_freq, processed) = tokenize(
+    let tokens : Array[Int] = []
+    let ll_freq = Array::make(286, 0)
+    let d_freq = Array::make(30, 0)
+    let processed = tokenize(
       data,
       self.window_carry,
       data.length(),
       self.cfg,
+      tokens,
+      ll_freq,
+      d_freq,
     )
     emit_block(
       self.w,
@@ -132,11 +144,17 @@ fn Deflater::emit_flush(self : Deflater) -> Unit {
     // a trailing block if un-tokenized input actually remains.
     if self.pending.length() > self.window_carry {
       let data = Bytes::from_array(self.pending)
-      let (tokens, ll_freq, d_freq, processed) = tokenize(
+      let tokens : Array[Int] = []
+      let ll_freq = Array::make(286, 0)
+      let d_freq = Array::make(30, 0)
+      let processed = tokenize(
         data,
         self.window_carry,
         data.length(),
         self.cfg,
+        tokens,
+        ll_freq,
+        d_freq,
       )
       emit_block(
         self.w,

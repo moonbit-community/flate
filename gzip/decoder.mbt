@@ -46,7 +46,10 @@ pub struct Decoder {
   priv mut ending : Bool // `end=true` is sticky across output suspension
   priv multistream : Bool // decode RFC 1952 concatenated members when true
   priv mut mode : DecMode
-  priv mut failure : (GzipErrorKind, String)? // stable first terminal error
+  priv mut failure_kind : GzipErrorKind? // stable first terminal error
+  priv mut failure_message : String
+  priv mut step_consumed : Int
+  priv mut step_produced : Int
 }
 
 ///|
@@ -69,7 +72,10 @@ pub fn Decoder::new(multistream? : Bool = true) -> Decoder {
     ending: false,
     multistream,
     mode: GzHeader,
-    failure: None,
+    failure_kind: None,
+    failure_message: "",
+    step_consumed: 0,
+    step_produced: 0,
   }
 }
 
@@ -77,6 +83,20 @@ pub fn Decoder::new(multistream? : Bool = true) -> Decoder {
 /// Whether the whole gzip stream has been decoded and its trailer verified.
 pub fn Decoder::is_finished(self : Decoder) -> Bool {
   self.mode is GzFinished
+}
+
+///|
+/// Number of input bytes accepted by the most recent successful `step` call.
+/// It is reset to zero when a call raises `GzipError`.
+pub fn Decoder::last_consumed(self : Decoder) -> Int {
+  self.step_consumed
+}
+
+///|
+/// Number of output bytes written by the most recent successful `step` call.
+/// It is reset to zero when a call raises `GzipError`.
+pub fn Decoder::last_produced(self : Decoder) -> Int {
+  self.step_produced
 }
 
 ///|
@@ -258,33 +278,52 @@ fn Decoder::u32_le(self : Decoder, off : Int) -> UInt {
 
 ///|
 /// Run one decompression step. Buffers a bounded prefix of `input`, then decodes
-/// plaintext into `output`. Returns `(status, consumed, produced)`; drop only
-/// `input[:consumed]` and re-present a suffix that was held back by output
-/// backpressure. Once `end=true` has been accepted with its complete view (or
-/// after `Done`), later input is not accepted and `consumed` is zero. Keep
-/// calling until `Done` (then `is_finished()` is true). `end=true` is sticky
-/// across `NeedMoreOutput`: gzip members are self-delimiting but the stream is
-/// not, so the signal resolves whether another member can follow. Concatenated
-/// multi-member streams (RFC 1952 §2.2) decode in full; their payloads are
-/// joined. If the final accepted view also contains non-gzip bytes, retrieve
-/// that read-ahead after `Done` with `unused_input()`. On failure, the decoder
-/// locks the first `GzipError` kind/message and rethrows it on every later call.
+/// plaintext into `output`. Read the accepted and produced counts with
+/// `last_consumed()` and `last_produced()`; drop only
+/// `input[:last_consumed()]` and re-present a suffix that was held back by
+/// output backpressure. Once `end=true` has been accepted with its complete
+/// view (or after `Done`), later input is not accepted and `last_consumed()` is
+/// zero. Keep calling until `Done` (then `is_finished()` is true). `end=true`
+/// is sticky across `NeedMoreOutput`: gzip members are self-delimiting but the
+/// stream is not, so the signal resolves whether another member can follow.
+/// Concatenated multi-member streams (RFC 1952 §2.2) decode in full; their
+/// payloads are joined. If the final accepted view also contains non-gzip
+/// bytes, retrieve that read-ahead after `Done` with `unused_input()`. On
+/// failure, the decoder locks the first `GzipError` kind/message and rethrows
+/// it on every later call; both progress counters remain zero.
 pub fn Decoder::step(
   self : Decoder,
   input : BytesView,
   output : MutArrayView[Byte],
   end? : Bool = false,
-) -> (@flate.Status, Int, Int) raise GzipError {
-  match self.failure {
-    Some((kind, message)) => raise GzipError(kind, message)
-    None =>
-      self.step_active(input, output, end~) catch {
+) -> @flate.Status raise GzipError {
+  self.step_consumed = 0
+  self.step_produced = 0
+  match self.failure_kind {
+    Some(kind) => raise GzipError(kind, self.failure_message)
+    None => {
+      let status = self.step_active(input, output, end~) catch {
         GzipError(kind, message) => {
-          self.failure = Some((kind, message))
+          self.failure_kind = Some(kind)
+          self.failure_message = message
           raise GzipError(kind, message)
         }
       }
+      status
+    }
   }
+}
+
+///|
+fn Decoder::finish_step(
+  self : Decoder,
+  status : @flate.Status,
+  consumed : Int,
+  produced : Int,
+) -> @flate.Status {
+  self.step_consumed = consumed
+  self.step_produced = produced
+  status
 }
 
 ///|
@@ -293,9 +332,9 @@ fn Decoder::step_active(
   input : BytesView,
   output : MutArrayView[Byte],
   end~ : Bool,
-) -> (@flate.Status, Int, Int) raise GzipError {
+) -> @flate.Status raise GzipError {
   if self.mode is GzFinished {
-    return (Done, 0, 0)
+    return self.finish_step(Done, 0, 0)
   }
   if !self.ending && self.pending.length() >= decoder_input_limit {
     self.compact_for_input()
@@ -325,7 +364,7 @@ fn Decoder::step_active(
               self.finish_stream()
               continue
             }
-            return (NeedMoreInput, consumed, op)
+            return self.finish_step(NeedMoreInput, consumed, op)
           }
           if self.pending_at(0).to_int() != 0x1F {
             // A non-member byte ends the concatenated gzip stream. Preserve
@@ -337,7 +376,7 @@ fn Decoder::step_active(
             if self.ending {
               raise GzipError(Truncated, "gzip: truncated")
             }
-            return (NeedMoreInput, consumed, op)
+            return self.finish_step(NeedMoreInput, consumed, op)
           }
           if self.pending_at(1).to_int() != 0x8B {
             self.finish_stream()
@@ -348,7 +387,7 @@ fn Decoder::step_active(
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
         if self.pending_at(0).to_int() != 0x1F ||
           self.pending_at(1).to_int() != 0x8B {
@@ -369,7 +408,7 @@ fn Decoder::step_active(
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
         let xlen = self.pending_at(0).to_int() |
           (self.pending_at(1).to_int() << 8)
@@ -390,7 +429,7 @@ fn Decoder::step_active(
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
       }
       GzName =>
@@ -400,7 +439,7 @@ fn Decoder::step_active(
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
       GzComment =>
         if self.skip_nul_terminated() {
@@ -409,14 +448,14 @@ fn Decoder::step_active(
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
       GzHcrc => {
         if self.available() < 2 {
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
         // RFC 1952 permits a decoder to skip FHCRC when it does not verify it.
         self.advance(2)
@@ -424,12 +463,11 @@ fn Decoder::step_active(
       }
       GzBody => {
         let op_before = op
-        let (st, used, produced) = self.inf.step(
-          self.pending_view(),
-          output.mut_view(start=op),
-        ) catch {
+        let st = self.inf.step(self.pending_view(), output.mut_view(start=op)) catch {
           err => raise wrap_inflate_error(err)
         }
+        let used = self.inf.last_consumed()
+        let produced = self.inf.last_produced()
         if produced > 0 {
           for i in 0..<produced {
             self.crc.update_byte(output.at(op_before + i))
@@ -452,9 +490,9 @@ fn Decoder::step_active(
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         } else {
-          return (NeedMoreOutput, consumed, op)
+          return self.finish_step(NeedMoreOutput, consumed, op)
         }
       }
       GzTrailer => {
@@ -462,7 +500,7 @@ fn Decoder::step_active(
           if self.ending {
             raise GzipError(Truncated, "gzip: truncated")
           }
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
         if self.crc.finish() != self.u32_le(0) {
           raise GzipError(ChecksumMismatch, "gzip: CRC-32 mismatch")
@@ -494,10 +532,10 @@ fn Decoder::step_active(
           // No more buffered, but the caller has not signalled end: another
           // member may still arrive. Wait in GzHeader for it (or for `end`).
           self.mode = GzHeader
-          return (NeedMoreInput, consumed, op)
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
       }
-      GzFinished => return (Done, consumed, op)
+      GzFinished => return self.finish_step(Done, consumed, op)
     }
   }
 }

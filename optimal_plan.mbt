@@ -32,8 +32,10 @@ fn block_cost_bits(
     ll_freq[s] = ll_freq_in[s]
   }
   ll_freq[256] += 1
-  let (dll_len, _) = gen_huffman(ll_freq, 286, 15)
-  let (dd_len, _) = gen_huffman(d_freq, 30, 15)
+  let dll_len = Array::make(286, 0)
+  gen_huffman(ll_freq, 286, 15, dll_len)
+  let dd_len = Array::make(30, 0)
+  gen_huffman(d_freq, 30, 15, dd_len)
   let mut have_dist = false
   for d in 0..<30 {
     if dd_len[d] > 0 {
@@ -57,7 +59,8 @@ fn block_cost_bits(
   for it in codelen_syms {
     codelen_freq[it.sym] += 1
   }
-  let (codelen_code_len, _) = gen_huffman(codelen_freq, 19, 7)
+  let codelen_code_len = Array::make(19, 0)
+  gen_huffman(codelen_freq, 19, 7, codelen_code_len)
   let mut hclen = 19
   while hclen > 4 && codelen_code_len[code_order[hclen - 1]] == 0 {
     hclen = hclen - 1
@@ -67,7 +70,7 @@ fn block_cost_bits(
   for s in 0..<286 {
     if ll_freq[s] != 0 {
       dyn_sym = dyn_sym + ll_freq[s] * dll_len[s]
-      fixed_sym = fixed_sym + ll_freq[s] * fixed_litlen.1[s]
+      fixed_sym = fixed_sym + ll_freq[s] * (fixed_litlen_info[s] & 0xF)
     }
   }
   for d in 0..<30 {
@@ -103,52 +106,75 @@ fn block_cost_bits(
 ///|
 /// Symbol frequencies of `tokens[lo:hi)`.
 fn range_freqs(
-  tokens : Array[Token],
+  tokens : Array[Int],
   lo : Int,
   hi : Int,
-) -> (Array[Int], Array[Int]) {
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Unit {
+  for s in 0..<286 {
+    ll_freq[s] = 0
+  }
+  for d in 0..<30 {
+    d_freq[d] = 0
+  }
   for k in lo..<hi {
-    match tokens[k] {
-      Lit(b) => ll_freq[b] += 1
-      Match(l, d) => {
-        ll_freq[257 + len_to_idx[l]] += 1
-        d_freq[dist_index(d)] += 1
-      }
+    let tok = tokens[k]
+    if tok < 256 {
+      ll_freq[tok] += 1
+    } else {
+      let length = tok >> 16
+      let distance = tok & 0xFFFF
+      ll_freq[257 + len_to_idx[length]] += 1
+      d_freq[dist_index(distance)] += 1
     }
   }
-  (ll_freq, d_freq)
 }
 
 ///|
 /// Exact block cost of `tokens[lo:hi)` covering `byte_len` input bytes.
 fn split_range_cost(
-  tokens : Array[Token],
+  tokens : Array[Int],
   lo : Int,
   hi : Int,
   byte_len : Int,
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
 ) -> Int {
-  let (ll_freq, d_freq) = range_freqs(tokens, lo, hi)
+  range_freqs(tokens, lo, hi, ll_freq, d_freq)
   block_cost_bits(byte_len, ll_freq, d_freq)
+}
+
+///|
+fn split_candidate_cost(
+  tokens : Array[Int],
+  tok_pos : Array[Int],
+  lo : Int,
+  hi : Int,
+  k : Int,
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Int {
+  split_range_cost(tokens, lo, k, tok_pos[k] - tok_pos[lo], ll_freq, d_freq) +
+  split_range_cost(tokens, k, hi, tok_pos[hi] - tok_pos[k], ll_freq, d_freq)
 }
 
 ///|
 /// zopfli's FindMinimum: locate the split point inside (lo, hi) minimizing
 /// the two halves' summed exact cost, by sampling 9 evenly spaced candidates
 /// and recursively narrowing to the winner's neighborhood; small intervals
-/// are scanned exhaustively. Returns (split index, cost), index -1 if the
-/// interval admits no interior point.
+/// are scanned exhaustively. Writes split index and cost to `result[0:2]`;
+/// index -1 means the interval admits no interior point. The caller reuses the
+/// pair so each candidate search does not allocate a return tuple.
 fn find_best_split(
-  tokens : Array[Token],
+  tokens : Array[Int],
   tok_pos : Array[Int],
   lo : Int,
   hi : Int,
-) -> (Int, Int) {
-  let eval = fn(k : Int) -> Int {
-    split_range_cost(tokens, lo, k, tok_pos[k] - tok_pos[lo]) +
-    split_range_cost(tokens, k, hi, tok_pos[hi] - tok_pos[k])
-  }
+  result : FixedArray[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Unit {
   let sample = 9
   let mut plo = lo + 1
   let mut phi = hi - 1
@@ -161,7 +187,7 @@ fn find_best_split(
     let mut win_c = 0x3FFFFFFF
     for i in 0..<sample {
       let k = plo + (i + 1) * step
-      let c = eval(k)
+      let c = split_candidate_cost(tokens, tok_pos, lo, hi, k, ll_freq, d_freq)
       if c < win_c {
         win_c = c
         win_k = k
@@ -178,21 +204,25 @@ fn find_best_split(
     phi = nhi
   }
   for k in plo..<=phi {
-    let c = eval(k)
+    let c = split_candidate_cost(tokens, tok_pos, lo, hi, k, ll_freq, d_freq)
     if c < best_cost {
       best_cost = c
       best_k = k
     }
   }
-  (best_k, best_cost)
+  result[0] = best_k
+  result[1] = best_cost
 }
 
 ///|
 /// Greedily insert split points (token indices) while a split still lowers
 /// the exact total cost, up to `optimal_max_blocks` blocks. `tok_pos[k]` is
 /// the byte offset where token k starts (with `tok_pos[m]` = chunk end).
-fn plan_split_points(tokens : Array[Token], tok_pos : Array[Int]) -> Array[Int] {
+fn plan_split_points(tokens : Array[Int], tok_pos : Array[Int]) -> Array[Int] {
   let bounds : Array[Int] = [0, tokens.length()]
+  let split_result = FixedArray::make(2, 0)
+  let ll_freq = Array::make(286, 0)
+  let d_freq = Array::make(30, 0)
   while bounds.length() - 1 < optimal_max_blocks {
     let mut best_gain = 0
     let mut best_seg = -1
@@ -203,8 +233,17 @@ fn plan_split_points(tokens : Array[Token], tok_pos : Array[Int]) -> Array[Int] 
       if hi - lo < 16 {
         continue
       }
-      let whole = split_range_cost(tokens, lo, hi, tok_pos[hi] - tok_pos[lo])
-      let (k, cost) = find_best_split(tokens, tok_pos, lo, hi)
+      let whole = split_range_cost(
+        tokens,
+        lo,
+        hi,
+        tok_pos[hi] - tok_pos[lo],
+        ll_freq,
+        d_freq,
+      )
+      find_best_split(tokens, tok_pos, lo, hi, split_result, ll_freq, d_freq)
+      let k = split_result[0]
+      let cost = split_result[1]
       if k >= 0 && whole - cost > best_gain {
         best_gain = whole - cost
         best_seg = s
@@ -222,15 +261,25 @@ fn plan_split_points(tokens : Array[Token], tok_pos : Array[Int]) -> Array[Int] 
 ///|
 /// Total exact cost of a grouping (consecutive bounds over `tokens`).
 fn grouping_cost(
-  tokens : Array[Token],
+  tokens : Array[Int],
   tok_pos : Array[Int],
   bounds : Array[Int],
 ) -> Int {
   let mut total = 0
+  let ll_freq = Array::make(286, 0)
+  let d_freq = Array::make(30, 0)
   for s in 0..<(bounds.length() - 1) {
     let lo = bounds[s]
     let hi = bounds[s + 1]
-    total = total + split_range_cost(tokens, lo, hi, tok_pos[hi] - tok_pos[lo])
+    total = total +
+      split_range_cost(
+        tokens,
+        lo,
+        hi,
+        tok_pos[hi] - tok_pos[lo],
+        ll_freq,
+        d_freq,
+      )
   }
   total
 }
@@ -248,7 +297,7 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
   if n == 0 {
     let ll_freq = Array::make(286, 0)
     let d_freq = Array::make(30, 0)
-    let none : Array[Token] = []
+    let none : Array[Int] = []
     emit_block(w, input, 0, 0, none[:], ll_freq, d_freq, is_final=true)
     w.flush()
     return Bytes::from_array(w.out)
@@ -262,31 +311,34 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
     }
     // Phase 1: cheap greedy reference parse (level-9 tuning), split it, and
     // optimal-parse each segment, concatenating the optimal tokens.
-    let (gtoks, _, _, processed) = tokenize(
+    let gtoks : Array[Int] = []
+    let greedy_ll_freq = Array::make(286, 0)
+    let greedy_d_freq = Array::make(30, 0)
+    let processed = tokenize(
       input,
       pos,
       target,
       level_configs[9],
+      gtoks,
+      greedy_ll_freq,
+      greedy_d_freq,
     )
     let chunk_end = processed // a boundary match may overhang `target`
     let gtok_pos = Array::make(gtoks.length() + 1, 0)
     let mut p = pos
     for k in 0..<gtoks.length() {
       gtok_pos[k] = p
-      p = p +
-        (match gtoks[k] {
-          Lit(_) => 1
-          Match(l, _) => l
-        })
+      let tok = gtoks[k]
+      p = p + (if tok < 256 { 1 } else { tok >> 16 })
     }
     gtok_pos[gtoks.length()] = chunk_end
     let bounds1 = plan_split_points(gtoks, gtok_pos)
-    let all : Array[Token] = []
+    let all : Array[Int] = []
     let joins : Array[Int] = [0] // phase-1 boundaries, as optimal-token indices
     for s in 0..<(bounds1.length() - 1) {
       let a = gtok_pos[bounds1[s]]
       let b = gtok_pos[bounds1[s + 1]]
-      let (toks, _llf, _df) = tokenize_optimal(input, a, b, iters)
+      let toks = tokenize_optimal(input, a, b, iters)
       for t in toks {
         all.push(t)
       }
@@ -296,11 +348,8 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
     let mut q = pos
     for k in 0..<all.length() {
       all_pos[k] = q
-      q = q +
-        (match all[k] {
-          Lit(_) => 1
-          Match(l, _) => l
-        })
+      let tok = all[k]
+      q = q + (if tok < 256 { 1 } else { tok >> 16 })
     }
     all_pos[all.length()] = chunk_end
     // Phase 2 (blocksplittinglast): re-split over the optimal tokens, then
@@ -315,7 +364,9 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
     for s in 0..<(bounds.length() - 1) {
       let lo = bounds[s]
       let hi = bounds[s + 1]
-      let (ll_freq, d_freq) = range_freqs(all, lo, hi)
+      let ll_freq = Array::make(286, 0)
+      let d_freq = Array::make(30, 0)
+      range_freqs(all, lo, hi, ll_freq, d_freq)
       emit_block(
         w,
         input,

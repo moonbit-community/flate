@@ -26,8 +26,12 @@ pub struct Encoder {
   priv mut mode : EncMode
   priv mut stage : FixedArray[Byte] // header or trailer bytes being drained
   priv mut stage_pos : Int
-  priv mut ending : Bool
-  priv mut flushing : Bool // sticky until the inner sync-flush is drained
+  // The accepted control action remains sticky until the inner state machine
+  // has drained it. A single enum makes finish and sync-flush mutually
+  // exclusive by construction.
+  priv mut pending_action : @flate.DeflateAction
+  priv mut step_consumed : Int
+  priv mut step_produced : Int
 }
 
 ///|
@@ -40,8 +44,9 @@ pub fn Encoder::new(level? : Int = 6) -> Encoder {
     mode: Header,
     stage: gzip_header_bytes,
     stage_pos: 0,
-    ending: false,
-    flushing: false,
+    pending_action: Continue,
+    step_consumed: 0,
+    step_produced: 0,
   }
 }
 
@@ -49,6 +54,20 @@ pub fn Encoder::new(level? : Int = 6) -> Encoder {
 /// Whether the complete gzip stream has been emitted.
 pub fn Encoder::is_finished(self : Encoder) -> Bool {
   self.mode is Finished
+}
+
+///|
+/// Number of input bytes accepted by the most recent successful `step` call.
+/// It is zero before the first call and after a call that reports no progress.
+pub fn Encoder::last_consumed(self : Encoder) -> Int {
+  self.step_consumed
+}
+
+///|
+/// Number of output bytes written by the most recent successful `step` call.
+/// It is zero before the first call and after a call that reports no progress.
+pub fn Encoder::last_produced(self : Encoder) -> Int {
+  self.step_produced
 }
 
 ///|
@@ -69,41 +88,59 @@ fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
 }
 
 ///|
+fn Encoder::finish_step(
+  self : Encoder,
+  status : @flate.Status,
+  consumed : Int,
+  produced : Int,
+) -> @flate.Status {
+  self.step_consumed = consumed
+  self.step_produced = produced
+  status
+}
+
+///|
 /// Run one compression step. Accepts a bounded prefix of `input` (folding only
 /// that prefix into CRC-32 and ISIZE), then drains gzip output into `output`.
-/// Drop only `input[:consumed]`: output backpressure may make a large input
-/// partially consumed. Re-present its suffix with the same `end=true` or
-/// `flush=true` request; once the complete view is accepted, that request is
-/// sticky across header and body backpressure. After finalization, later input
-/// is not accepted and `consumed` is zero.
+/// Read the accepted and produced counts with `last_consumed()` and
+/// `last_produced()`, then drop only `input[:last_consumed()]`: output
+/// backpressure may make a large input partially consumed. Re-present its
+/// suffix with the same `action`; once the complete view is accepted,
+/// `SyncFlush` or `Finish` remains sticky across header and body backpressure.
+/// After finalization, later input is not accepted and `last_consumed()` is
+/// zero.
 pub fn Encoder::step(
   self : Encoder,
   input : BytesView,
   output : MutArrayView[Byte],
-  end? : Bool = false,
-  flush? : Bool = false,
-) -> (@flate.Status, Int, Int) {
+  action? : @flate.DeflateAction = Continue,
+) -> @flate.Status {
+  self.step_consumed = 0
+  self.step_produced = 0
   if self.mode is Finished {
-    return (Done, 0, 0)
+    return self.finish_step(Done, 0, 0)
   }
   let mut consumed = 0
-  if !self.ending {
-    // Feed through the bounded inner state machine even while the wrapper
-    // header is backpressured. Its zero-sized sink caps accepted input at one
-    // block window and reports the exact prefix whose checksum we may commit.
-    let scratch = FixedArray::make(0, b'\x00').mut_view()
-    let (_, accepted, _) = self.def.step(input, scratch, end~, flush~)
-    consumed = accepted
-    if accepted > 0 {
-      self.crc.update(input[:accepted])
-      self.isize = self.isize + accepted.reinterpret_as_uint()
-    }
-    if accepted == input.length() {
-      if end {
-        self.ending = true
+  match self.pending_action {
+    Finish => ()
+    Continue | SyncFlush => {
+      // Feed through the bounded inner state machine even while the wrapper
+      // header is backpressured. Its zero-sized sink caps accepted input at one
+      // block window and reports the exact prefix whose checksum we may commit.
+      let scratch = FixedArray::make(0, b'\x00').mut_view()
+      let _status = self.def.step(input, scratch, action~)
+      let accepted = self.def.last_consumed()
+      consumed = accepted
+      if accepted > 0 {
+        self.crc.update(input[:accepted])
+        self.isize = self.isize + accepted.reinterpret_as_uint()
       }
-      if flush {
-        self.flushing = true
+      if accepted == input.length() {
+        match action {
+          Continue => ()
+          SyncFlush => self.pending_action = SyncFlush
+          Finish => self.pending_action = Finish
+        }
       }
     }
   }
@@ -118,34 +155,35 @@ pub fn Encoder::step(
           self.stage_pos = self.stage_pos + 1
         }
         if self.stage_pos < self.stage.length() {
-          return (NeedMoreOutput, consumed, op)
+          return self.finish_step(NeedMoreOutput, consumed, op)
         }
         self.mode = if self.mode is Header { Body } else { Finished }
       }
       Body => {
-        let (st, _c, p) = self.def.step(
+        let st = self.def.step(
           b""[:],
           output.mut_view(start=op),
-          end=self.ending,
-          flush=self.flushing,
+          action=self.pending_action,
         )
+        let p = self.def.last_produced()
         op = op + p
         if st is NeedMoreInput {
           // The inner deflater returns NeedMoreInput only after the sync-flush
           // marker (if requested) and all preceding compressed bytes drained.
-          self.flushing = false
-          return (NeedMoreInput, consumed, op)
+          if self.pending_action is SyncFlush {
+            self.pending_action = Continue
+          }
+          return self.finish_step(NeedMoreInput, consumed, op)
         }
         if st is NeedMoreOutput {
-          return (NeedMoreOutput, consumed, op)
+          return self.finish_step(NeedMoreOutput, consumed, op)
         }
         // The DEFLATE stream is complete; stage the trailer.
-        self.flushing = false
         self.stage = self.build_trailer()
         self.stage_pos = 0
         self.mode = Trailer
       }
-      Finished => return (Done, consumed, op)
+      Finished => return self.finish_step(Done, consumed, op)
     }
   }
 }

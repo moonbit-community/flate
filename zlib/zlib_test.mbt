@@ -63,7 +63,10 @@ test "streaming zlib Encoder round-trips through zlib_decompress" {
     let last = sent_end || pos + 500 >= n
     let endi = if pos + 500 < n { pos + 500 } else { n }
     let chunk = if sent_end { src[n:n] } else { src[pos:endi] }
-    let (_st, c, p) = enc.step(chunk, obuf.mut_view(), end=last)
+    let action : @flate.DeflateAction = if last { Finish } else { Continue }
+    let _status = enc.step(chunk, obuf.mut_view(), action~)
+    let c = enc.last_consumed()
+    let p = enc.last_produced()
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -84,7 +87,8 @@ test "streaming zlib Encoder: empty input" {
   let obuf = FixedArray::make(64, b'\x00')
   let out = Buffer()
   for ;; {
-    let (_st, _c, p) = enc.step(b""[:], obuf.mut_view(), end=true)
+    let _status = enc.step(b""[:], obuf.mut_view(), action=Finish)
+    let p = enc.last_produced()
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -106,7 +110,9 @@ test "streaming zlib Decoder decodes a python zlib stream in tiny chunks" {
   let mut fed = 0
   for ;; {
     let next = if fed + 3 < n { fed + 3 } else { n }
-    let (_st, c, p) = dec.step(py_zlib[fed:next], obuf.mut_view())
+    let _status = dec.step(py_zlib[fed:next], obuf.mut_view())
+    let c = dec.last_consumed()
+    let p = dec.last_produced()
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -138,7 +144,9 @@ test "streaming zlib Decoder round-trips a large stream" {
   let mut fed = 0
   for ;; {
     let next = if fed + 64 < n { fed + 64 } else { n }
-    let (_st, c, p) = dec.step(z[fed:next], obuf.mut_view())
+    let _status = dec.step(z[fed:next], obuf.mut_view())
+    let c = dec.last_consumed()
+    let p = dec.last_produced()
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -160,7 +168,9 @@ test "streaming zlib Decoder: empty" {
   let mut fed = 0
   for ;; {
     let next = if fed + 1 < n { fed + 1 } else { n }
-    let (_st, c, p) = dec.step(z[fed:next], obuf.mut_view())
+    let _status = dec.step(z[fed:next], obuf.mut_view())
+    let c = dec.last_consumed()
+    let p = dec.last_produced()
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
@@ -184,7 +194,8 @@ test "zlib preset dictionary round-trip" {
   let mut sent = false
   for ;; {
     let chunk = if sent { b""[:] } else { msg[:] }
-    let (st, _c, p) = enc.step(chunk, obuf.mut_view(), end=true)
+    let st = enc.step(chunk, obuf.mut_view(), action=Finish)
+    let p = enc.last_produced()
     sent = true
     for i in 0..<p {
       out.write_byte(obuf[i])
@@ -201,7 +212,9 @@ test "zlib preset dictionary round-trip" {
   let n = z.length()
   let mut fed = 0
   for ;; {
-    let (_st, c, p) = dec.step(z[fed:n], dbuf.mut_view())
+    let _status = dec.step(z[fed:n], dbuf.mut_view())
+    let c = dec.last_consumed()
+    let p = dec.last_produced()
     fed = fed + c
     for i in 0..<p {
       got.write_byte(dbuf[i])
@@ -308,6 +321,8 @@ test "streaming zlib Decoder latches its first error" {
   } noraise {
     _ => fail("expected malformed zlib input to fail")
   }
+  assert_eq(decoder.last_consumed(), 0)
+  assert_eq(decoder.last_produced(), 0)
   let mut repeated_kind : @zlib.ZlibErrorKind = InvalidHeader
   let mut repeated_error = ""
   try ignore(decoder.step(b"late input"[:], output.mut_view())) catch {
@@ -321,6 +336,8 @@ test "streaming zlib Decoder latches its first error" {
   assert_true(first_kind == InvalidDeflate)
   assert_true(repeated_kind == first_kind)
   assert_eq(repeated_error, first_error)
+  assert_eq(decoder.last_consumed(), 0)
+  assert_eq(decoder.last_produced(), 0)
   for byte in output {
     assert_eq(byte, b'\xA5')
   }
@@ -388,11 +405,9 @@ test "streaming zlib Decoder latches end across output backpressure" {
   let encoded = @zlib.zlib_compress(source)
   let decoder = @zlib.Decoder::new()
   let no_output = FixedArray::make(0, b'\x00')
-  let (initial_status, initial_consumed, initial_produced) = decoder.step(
-    encoded[:],
-    no_output.mut_view(),
-    end=true,
-  )
+  let initial_status = decoder.step(encoded[:], no_output.mut_view(), end=true)
+  let initial_consumed = decoder.last_consumed()
+  let initial_produced = decoder.last_produced()
   assert_true(initial_status is NeedMoreOutput)
   assert_eq(initial_consumed, encoded.length())
   assert_eq(initial_produced, 0)
@@ -401,7 +416,9 @@ test "streaming zlib Decoder latches end across output backpressure" {
   let mut first_resume = true
   for _ in 0..<4096 {
     let input = if first_resume { b"late input"[:] } else { b""[:] }
-    let (status, consumed, produced) = decoder.step(input, output.mut_view())
+    let status = decoder.step(input, output.mut_view())
+    let consumed = decoder.last_consumed()
+    let produced = decoder.last_produced()
     assert_eq(consumed, 0)
     if produced == 1 {
       decoded.write_byte(output[0])
@@ -423,18 +440,18 @@ test "streaming zlib Encoder latches flush across header backpressure" {
   let enc = @zlib.Encoder::new()
   let output = FixedArray::make(1, b'\x00')
   let compressed = Buffer()
-  let (initial_status, initial_consumed, initial_produced) = enc.step(
-    first[:],
-    output.mut_view(),
-    flush=true,
-  )
+  let initial_status = enc.step(first[:], output.mut_view(), action=SyncFlush)
+  let initial_consumed = enc.last_consumed()
+  let initial_produced = enc.last_produced()
   assert_true(initial_status is NeedMoreOutput)
   assert_eq(initial_consumed, first.length())
   assert_eq(initial_produced, 1)
   compressed.write_byte(output[0])
   let mut flushed = false
   for _ in 0..<4096 {
-    let (status, consumed, produced) = enc.step(b""[:], output.mut_view())
+    let status = enc.step(b""[:], output.mut_view())
+    let consumed = enc.last_consumed()
+    let produced = enc.last_produced()
     assert_eq(consumed, 0)
     assert_true(produced >= 0 && produced <= 1)
     if produced == 1 {
@@ -451,11 +468,9 @@ test "streaming zlib Encoder latches flush across header backpressure" {
   let mut sent_second = false
   for _ in 0..<4096 {
     let chunk = if sent_second { b""[:] } else { second[:] }
-    let (status, consumed, produced) = enc.step(
-      chunk,
-      output.mut_view(),
-      end=true,
-    )
+    let status = enc.step(chunk, output.mut_view(), action=Finish)
+    let consumed = enc.last_consumed()
+    let produced = enc.last_produced()
     assert_eq(consumed, chunk.length())
     assert_true(produced >= 0 && produced <= 1)
     if produced == 1 {
@@ -475,10 +490,12 @@ test "streaming zlib Encoder latches flush across header backpressure" {
     expected.write_byte(byte)
   }
   assert_eq(@zlib.zlib_decompress(compressed.to_bytes()), expected.to_bytes())
-  let (terminal_status, terminal_consumed, terminal_produced) = enc.step(
+  let terminal_status = enc.step(
     b"not part of the stream"[:],
     output.mut_view(),
   )
+  let terminal_consumed = enc.last_consumed()
+  let terminal_produced = enc.last_produced()
   assert_true(terminal_status is Done)
   assert_eq(terminal_consumed, 0)
   assert_eq(terminal_produced, 0)
@@ -489,26 +506,25 @@ test "streaming zlib Encoder leaves input unconsumed after end is latched" {
   let source = b"the final accepted input"
   let enc = @zlib.Encoder::new()
   let no_output = FixedArray::make(0, b'\x00')
-  let (initial_status, initial_consumed, initial_produced) = enc.step(
-    source[:],
-    no_output.mut_view(),
-    end=true,
-  )
+  let initial_status = enc.step(source[:], no_output.mut_view(), action=Finish)
+  let initial_consumed = enc.last_consumed()
+  let initial_produced = enc.last_produced()
   assert_true(initial_status is NeedMoreOutput)
   assert_eq(initial_consumed, source.length())
   assert_eq(initial_produced, 0)
   let output = FixedArray::make(1, b'\x00')
   let compressed = Buffer()
-  let (late_status, late_consumed, late_produced) = enc.step(
-    b"late input"[:],
-    output.mut_view(),
-  )
+  let late_status = enc.step(b"late input"[:], output.mut_view())
+  let late_consumed = enc.last_consumed()
+  let late_produced = enc.last_produced()
   assert_true(late_status is NeedMoreOutput)
   assert_eq(late_consumed, 0)
   assert_eq(late_produced, 1)
   compressed.write_byte(output[0])
   for _ in 0..<4096 {
-    let (status, consumed, produced) = enc.step(b""[:], output.mut_view())
+    let status = enc.step(b""[:], output.mut_view())
+    let consumed = enc.last_consumed()
+    let produced = enc.last_produced()
     assert_eq(consumed, 0)
     if produced == 1 {
       compressed.write_byte(output[0])
@@ -531,7 +547,9 @@ test "streaming zlib Decoder drains large pending input one byte at a time" {
   let mut first_call = true
   for _ in 0..<(source.length() + 64) {
     let chunk = if first_call { compressed[:] } else { b""[:] }
-    let (status, consumed, produced) = dec.step(chunk, output.mut_view())
+    let status = dec.step(chunk, output.mut_view())
+    let consumed = dec.last_consumed()
+    let produced = dec.last_produced()
     assert_eq(consumed, chunk.length())
     assert_true(produced >= 0 && produced <= 1)
     if produced == 1 {
@@ -544,10 +562,12 @@ test "streaming zlib Decoder drains large pending input one byte at a time" {
   }
   assert_true(dec.is_finished())
   assert_eq(decoded.to_bytes(), source)
-  let (terminal_status, terminal_consumed, terminal_produced) = dec.step(
+  let terminal_status = dec.step(
     b"not part of the stream"[:],
     output.mut_view(),
   )
+  let terminal_consumed = dec.last_consumed()
+  let terminal_produced = dec.last_produced()
   assert_true(terminal_status is Done)
   assert_eq(terminal_consumed, 0)
   assert_eq(terminal_produced, 0)
@@ -564,7 +584,9 @@ test "streaming zlib Decoder resumes with one-byte input and output" {
   for _ in 0..<(source.length() + compressed.length() + 64) {
     let next = if fed < compressed.length() { fed + 1 } else { fed }
     let chunk = compressed[fed:next]
-    let (status, consumed, produced) = dec.step(chunk, output.mut_view())
+    let status = dec.step(chunk, output.mut_view())
+    let consumed = dec.last_consumed()
+    let produced = dec.last_produced()
     assert_eq(consumed, chunk.length())
     assert_true(produced >= 0 && produced <= 1)
     fed = fed + consumed
@@ -603,7 +625,9 @@ test "streaming zlib Decoder preserves input after the trailer" {
   let mut first = true
   for _ in 0..<4096 {
     let chunk = if first { combined.to_bytes()[:] } else { b""[:] }
-    let (status, consumed, produced) = decoder.step(chunk, output.mut_view())
+    let status = decoder.step(chunk, output.mut_view())
+    let consumed = decoder.last_consumed()
+    let produced = decoder.last_produced()
     assert_eq(consumed, if first { combined.length() } else { 0 })
     if produced == 1 {
       decoded.write_byte(output[0])
@@ -616,7 +640,9 @@ test "streaming zlib Decoder preserves input after the trailer" {
   assert_true(decoder.is_finished())
   assert_eq(decoded.to_bytes(), source)
   assert_eq(decoder.unused_input(), next_frame)
-  let (status, consumed, produced) = decoder.step(b"late"[:], output.mut_view())
+  let status = decoder.step(b"late"[:], output.mut_view())
+  let consumed = decoder.last_consumed()
+  let produced = decoder.last_produced()
   assert_true(status is Done)
   assert_eq(consumed, 0)
   assert_eq(produced, 0)

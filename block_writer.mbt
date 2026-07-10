@@ -92,7 +92,7 @@ fn emit_block(
   data : Bytes,
   start : Int,
   end : Int,
-  tokens : ArrayView[Token],
+  tokens : ArrayView[Int],
   ll_freq : Array[Int],
   d_freq : Array[Int],
   is_final~ : Bool,
@@ -100,8 +100,12 @@ fn emit_block(
   ll_freq[256] += 1 // end-of-block
 
   // Build dynamic codes.
-  let (dll_len, dll_val) = gen_huffman(ll_freq, 286, 15)
-  let (dd_len, dd_val) = gen_huffman(d_freq, 30, 15)
+  let dll_len = Array::make(286, 0)
+  let dll_val = Array::make(286, 0U)
+  gen_huffman(ll_freq, 286, 15, dll_len, code_val=dll_val)
+  let dd_len = Array::make(30, 0)
+  let dd_val = Array::make(30, 0U)
+  gen_huffman(d_freq, 30, 15, dd_len, code_val=dd_val)
   let mut have_dist = false
   for d in 0..<30 {
     if dd_len[d] > 0 {
@@ -125,7 +129,9 @@ fn emit_block(
   for it in codelen_syms {
     codelen_freq[it.sym] += 1
   }
-  let (codelen_code_len, codelen_code_val) = gen_huffman(codelen_freq, 19, 7)
+  let codelen_code_len = Array::make(19, 0)
+  let codelen_code_val = Array::make(19, 0U)
+  gen_huffman(codelen_freq, 19, 7, codelen_code_len, code_val=codelen_code_val)
   let mut hclen = 19
   while hclen > 4 && codelen_code_len[code_order[hclen - 1]] == 0 {
     hclen = hclen - 1
@@ -138,7 +144,8 @@ fn emit_block(
   for s in 0..<286 {
     if ll_freq[s] != 0 {
       dyn_sym_bits = dyn_sym_bits + ll_freq[s] * dll_len[s]
-      fixed_sym_bits = fixed_sym_bits + ll_freq[s] * fixed_litlen.1[s]
+      fixed_sym_bits = fixed_sym_bits +
+        ll_freq[s] * (fixed_litlen_info[s] & 0xF)
     }
   }
   for d in 0..<30 {
@@ -185,20 +192,21 @@ fn emit_block(
       }
     }
     for tok in tokens {
-      match tok {
-        Lit(b) => w.write_rcode(dll_val[b], dll_len[b])
-        Match(length, dist) => {
-          let lidx = len_to_idx[length]
-          let lsym = 257 + lidx
-          w.write_rcode(dll_val[lsym], dll_len[lsym])
-          if len_extra[lidx] > 0 {
-            w.write_bits(length - len_base[lidx], len_extra[lidx])
-          }
-          let didx = dist_index(dist)
-          w.write_rcode(dd_val[didx], dd_len[didx])
-          if dist_extra[didx] > 0 {
-            w.write_bits(dist - dist_base[didx], dist_extra[didx])
-          }
+      if tok < 256 {
+        w.write_rcode(dll_val[tok], dll_len[tok])
+      } else {
+        let length = tok >> 16
+        let dist = tok & 0xFFFF
+        let lidx = len_to_idx[length]
+        let lsym = 257 + lidx
+        w.write_rcode(dll_val[lsym], dll_len[lsym])
+        if len_extra[lidx] > 0 {
+          w.write_bits(length - len_base[lidx], len_extra[lidx])
+        }
+        let didx = dist_index(dist)
+        w.write_rcode(dd_val[didx], dd_len[didx])
+        if dist_extra[didx] > 0 {
+          w.write_bits(dist - dist_base[didx], dist_extra[didx])
         }
       }
     }
@@ -206,24 +214,28 @@ fn emit_block(
   } else {
     w.write_bits(1, 2) // BTYPE = 01 (fixed)
     for tok in tokens {
-      match tok {
-        Lit(b) => w.write_code(fixed_litlen.0[b], fixed_litlen.1[b])
-        Match(length, dist) => {
-          let lidx = len_to_idx[length]
-          let lsym = 257 + lidx
-          w.write_code(fixed_litlen.0[lsym], fixed_litlen.1[lsym])
-          if len_extra[lidx] > 0 {
-            w.write_bits(length - len_base[lidx], len_extra[lidx])
-          }
-          let didx = dist_index(dist)
-          w.write_code(didx, 5)
-          if dist_extra[didx] > 0 {
-            w.write_bits(dist - dist_base[didx], dist_extra[didx])
-          }
+      if tok < 256 {
+        let info = fixed_litlen_info[tok]
+        w.write_code(info >> 4, info & 0xF)
+      } else {
+        let length = tok >> 16
+        let dist = tok & 0xFFFF
+        let lidx = len_to_idx[length]
+        let lsym = 257 + lidx
+        let info = fixed_litlen_info[lsym]
+        w.write_code(info >> 4, info & 0xF)
+        if len_extra[lidx] > 0 {
+          w.write_bits(length - len_base[lidx], len_extra[lidx])
+        }
+        let didx = dist_index(dist)
+        w.write_code(didx, 5)
+        if dist_extra[didx] > 0 {
+          w.write_bits(dist - dist_base[didx], dist_extra[didx])
         }
       }
     }
-    w.write_code(fixed_litlen.0[256], fixed_litlen.1[256]) // EOB
+    let eob = fixed_litlen_info[256]
+    w.write_code(eob >> 4, eob & 0xF)
   }
 }
 

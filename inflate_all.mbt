@@ -42,7 +42,7 @@ fn MemDecoder::pull_byte(self : MemDecoder) -> Bool {
 fn MemDecoder::need(self : MemDecoder, n : Int) -> Unit raise InflateError {
   while self.bit_count < n {
     if !self.pull_byte() {
-      raise InflateError("unexpected end of input")
+      raise InflateError(Truncated, "unexpected end of input")
     }
   }
 }
@@ -65,7 +65,7 @@ fn MemDecoder::huff_sym(
   for ;; {
     while self.bit_count < n {
       if !self.pull_byte() {
-        raise InflateError("unexpected end of input")
+        raise InflateError(Truncated, "unexpected end of input")
       }
     }
     let mut chunk = h.chunks[(self.bitbuf & 0x1FF).reinterpret_as_int()]
@@ -79,28 +79,12 @@ fn MemDecoder::huff_sym(
     }
     if n <= self.bit_count {
       if n == 0 {
-        raise InflateError("corrupt: bad Huffman code")
+        raise InflateError(Corrupt, "corrupt: bad Huffman code")
       }
       self.bitbuf = self.bitbuf >> n
       self.bit_count = self.bit_count - n
       return (chunk >> huffman_value_shift).reinterpret_as_int()
     }
-  }
-}
-
-///|
-fn MemDecoder::distance(
-  self : MemDecoder,
-  dsym : Int,
-) -> Int raise InflateError {
-  if dsym < 4 {
-    dsym + 1
-  } else if dsym < max_num_dist {
-    let extra_bits = (dsym - 2) >> 1
-    let extra = ((dsym & 1) << extra_bits) | self.read_bits(extra_bits)
-    (1 << (extra_bits + 1)) + 1 + extra
-  } else {
-    raise InflateError("corrupt: invalid distance code")
   }
 }
 
@@ -117,7 +101,9 @@ fn MemDecoder::decode_block(
     } else if v == 256 {
       return
     } else if v < 286 {
-      let (base, nextra) = length_base_extra(v)
+      let length_info = length_code_info_table[v - 257]
+      let base = length_info >> 3
+      let nextra = length_info & 0x7
       let length = if nextra > 0 { base + self.read_bits(nextra) } else { base }
       let dsym = match hd {
         Some(h) => self.huff_sym(h)
@@ -129,16 +115,28 @@ fn MemDecoder::decode_block(
           reverse8(((low5 << 3) & 0xFF).reinterpret_as_int().to_byte()).to_int()
         }
       }
-      let dist = self.distance(dsym)
-      if dist > self.out.length() {
-        raise InflateError("corrupt: distance too far back")
+      if dsym.reinterpret_as_uint() >= max_num_dist.reinterpret_as_uint() {
+        raise InflateError(Corrupt, "corrupt: invalid distance code")
       }
-      let start = self.out.length() - dist
+      let distance_info = distance_code_info_table[dsym]
+      let distance_base = distance_info >> 4
+      let distance_extra_bits = distance_info & 0xF
+      let dist = if distance_extra_bits == 0 {
+        distance_base
+      } else {
+        distance_base + self.read_bits(distance_extra_bits)
+      }
+      let available_history = self.out.length()
+      if available_history < window_size &&
+        !back_reference_distance_is_valid(dist, available_history) {
+        raise InflateError(Corrupt, "corrupt: distance too far back")
+      }
+      let start = available_history - dist
       for k in 0..<length {
         self.out.push(self.out[start + k])
       }
     } else {
-      raise InflateError("corrupt: invalid literal/length code")
+      raise InflateError(Corrupt, "corrupt: invalid literal/length code")
     }
   }
 }
@@ -149,18 +147,16 @@ fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
   self.bitbuf = 0
   self.bit_count = 0
   if self.pos + 4 > self.input.length() {
-    raise InflateError("unexpected end of input")
+    raise InflateError(Truncated, "unexpected end of input")
   }
   let len = self.input[self.pos].to_int() |
     (self.input[self.pos + 1].to_int() << 8)
   let nlen = self.input[self.pos + 2].to_int() |
     (self.input[self.pos + 3].to_int() << 8)
   self.pos = self.pos + 4
-  if len != (nlen ^ 0xFFFF) {
-    raise InflateError("stored block length mismatch")
-  }
+  validate_stored_length(len, nlen)
   if self.pos + len > self.input.length() {
-    raise InflateError("unexpected end of input")
+    raise InflateError(Truncated, "unexpected end of input")
   }
   for k in 0..<len {
     self.out.push(self.input[self.pos + k])
@@ -170,14 +166,8 @@ fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
 
 ///|
 fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
-  let nlit = self.read_bits(5) + 257
-  if nlit > max_num_lit {
-    raise InflateError("corrupt: too many literal codes")
-  }
-  let ndist = self.read_bits(5) + 1
-  if ndist > max_num_dist {
-    raise InflateError("corrupt: too many distance codes")
-  }
+  let nlit = dynamic_literal_count(self.read_bits(5))
+  let ndist = dynamic_distance_count(self.read_bits(5))
   let nclen = self.read_bits(4) + 4
   for i in 0..<nclen {
     self.codebits[code_order[i]] = self.read_bits(3)
@@ -186,7 +176,7 @@ fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
     self.codebits[code_order[i]] = 0
   }
   if !self.dyn_litlen.initialize(self.codebits[:]) {
-    raise InflateError("corrupt: bad code-length tree")
+    raise InflateError(Corrupt, "corrupt: bad code-length tree")
   }
   let n = nlit + ndist
   let mut i = 0
@@ -200,7 +190,7 @@ fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
       let repeat = interpret_code_length_repeat(x, previous)
       let rep = repeat.base + self.read_bits(repeat.extra_bits)
       if i + rep > n {
-        raise InflateError("corrupt: code-length repeat overflow")
+        raise InflateError(Corrupt, "corrupt: code-length repeat overflow")
       }
       for _j in 0..<rep {
         self.clbits[i] = repeat.value
@@ -209,10 +199,10 @@ fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
     }
   }
   if !self.dyn_litlen.initialize(self.clbits[0:nlit]) {
-    raise InflateError("corrupt: bad literal/length tree")
+    raise InflateError(Corrupt, "corrupt: bad literal/length tree")
   }
   if !self.dyn_dist.initialize(self.clbits[nlit:nlit + ndist]) {
-    raise InflateError("corrupt: bad distance tree")
+    raise InflateError(Corrupt, "corrupt: bad distance tree")
   }
 }
 
@@ -232,7 +222,7 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
       self.read_dynamic()
       self.decode_block(self.dyn_litlen, Some(self.dyn_dist))
     } else {
-      raise InflateError("corrupt: reserved block type")
+      raise InflateError(Corrupt, "corrupt: reserved block type")
     }
     if bfinal {
       break
@@ -242,12 +232,77 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
 
 ///|
 /// Decompress a raw DEFLATE stream held entirely in memory. Bytes after the
-/// final block are ignored; use streaming `Inflater::step` and its `consumed`
-/// count when an exact framing boundary is required. The output grows without
-/// bound; for untrusted input use `Inflater` with caller-sized output buffers
-/// and an application-level decoded-size limit.
+/// final block are ignored; use `inflate_exact` when an exact framing boundary
+/// is required. The output grows without bound; for untrusted input use
+/// `inflate_all_limited` or drive `Inflater` with caller-sized output buffers.
 pub fn inflate_all(input : Bytes) -> Bytes raise InflateError {
   let d = MemDecoder::new(input)
   d.run()
   Bytes::from_array(d.out)
+}
+
+///|
+/// Drive the streaming inflater over an in-memory input. If `exact` is true,
+/// reject bytes after the final DEFLATE block. If `max_output` is present, one
+/// fixed scratch buffer may be filled past that boundary internally, but no
+/// oversized result is returned.
+fn inflate_streaming_all(
+  input : Bytes,
+  max_output : Int?,
+  exact : Bool,
+) -> Bytes raise InflateError {
+  let inflater = Inflater::new()
+  let scratch = FixedArray::make(8192, b'\x00')
+  let decoded : Array[Byte] = []
+  let mut input_pos = 0
+  for ;; {
+    let status = inflater.step(input[input_pos:], scratch.mut_view())
+    let consumed = inflater.last_consumed()
+    let produced = inflater.last_produced()
+    input_pos = input_pos + consumed
+    match max_output {
+      Some(limit) =>
+        if produced > limit - decoded.length() {
+          raise InflateError(
+            OutputLimitExceeded,
+            "decoded output exceeds max_output",
+          )
+        }
+      None => ()
+    }
+    for i in 0..<produced {
+      decoded.push(scratch[i])
+    }
+    match status {
+      Done => {
+        if exact && input_pos != input.length() {
+          raise InflateError(TrailingData, "trailing data after DEFLATE stream")
+        }
+        return Bytes::from_array(decoded)
+      }
+      NeedMoreOutput => ()
+      NeedMoreInput => raise InflateError(Truncated, "unexpected end of input")
+    }
+  }
+}
+
+///|
+/// Decompress exactly one raw DEFLATE stream. Unlike `inflate_all`, this rejects
+/// any bytes after the final block.
+pub fn inflate_exact(input : Bytes) -> Bytes raise InflateError {
+  inflate_streaming_all(input, None, true)
+}
+
+///|
+/// Decompress one raw DEFLATE stream without allowing the returned output to
+/// exceed `max_output`. Bytes after the final block retain `inflate_all`'s
+/// prefix semantics and are ignored.
+pub fn inflate_all_limited(
+  input : Bytes,
+  max_output~ : Int,
+) -> Bytes raise InflateError {
+  if max_output < 0 {
+    raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
+  }
+  inflate_streaming_all(input, Some(max_output), false)
 }

@@ -4,25 +4,20 @@ test "zlib wrappers bound accepted input under output backpressure" {
   let no_output = FixedArray::make(0, b'\x00')
 
   let encoder = Encoder::new(level=0)
-  let (enc_status, enc_consumed, enc_produced) = encoder.step(
-    source[:],
-    no_output.mut_view(),
-    end=true,
-  )
+  let enc_status = encoder.step(source[:], no_output.mut_view(), action=Finish)
+  let enc_consumed = encoder.last_consumed()
+  let enc_produced = encoder.last_produced()
   assert_true(enc_status is NeedMoreOutput)
   assert_true(enc_consumed > 0)
   assert_true(enc_consumed < source.length())
   assert_eq(enc_produced, 0)
-  assert_false(encoder.ending)
 
   let compressed = zlib_compress(source, level=0)
   let decoder = Decoder::new()
   assert_eq(decoder.unused_input(), b"")
-  let (dec_status, dec_consumed, dec_produced) = decoder.step(
-    compressed[:],
-    no_output.mut_view(),
-    end=true,
-  )
+  let dec_status = decoder.step(compressed[:], no_output.mut_view(), end=true)
+  let dec_consumed = decoder.last_consumed()
+  let dec_produced = decoder.last_produced()
   assert_true(dec_status is NeedMoreOutput)
   assert_eq(dec_consumed, decoder_input_limit)
   assert_true(dec_consumed < compressed.length())
@@ -40,11 +35,13 @@ test "zlib wrappers bound accepted input under output backpressure" {
         saw_fresh_window = true
       }
     }
-    let (status, consumed, produced) = decoder.step(
+    let status = decoder.step(
       compressed[input_pos:],
       no_output.mut_view(),
       end=true,
     )
+    let consumed = decoder.last_consumed()
+    let produced = decoder.last_produced()
     assert_true(status is NeedMoreOutput)
     assert_eq(produced, 0)
     input_pos = input_pos + consumed

@@ -28,7 +28,10 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
     } else {
       n
     }
-    let (tokens, ll_freq, d_freq, processed) = tokenize(input, pos, target, cfg)
+    let tokens : Array[Int] = []
+    let ll_freq = Array::make(286, 0)
+    let d_freq = Array::make(30, 0)
+    let processed = tokenize(input, pos, target, cfg, tokens, ll_freq, d_freq)
     emit_block(
       w,
       input,

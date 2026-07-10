@@ -89,22 +89,27 @@ test "lazy match pending at a block boundary is committed" {
   // history match beginning at index 3 is deferred by lazy parsing; reaching
   // `end=4` commits that pending match in tokenize's boundary epilogue.
   let data = b"abcabcabc"
-  let (tokens, ll_freq, d_freq, processed) = tokenize(
+  let tokens : Array[Int] = []
+  let ll_freq = Array::make(286, 0)
+  let d_freq = Array::make(30, 0)
+  let processed = tokenize(
     data,
     3,
     4,
     level_configs[6],
+    tokens,
+    ll_freq,
+    d_freq,
   )
   assert_eq(tokens.length(), 1)
-  match tokens[0] {
-    Match(length, distance) => {
-      assert_true(length >= 3)
-      assert_eq(distance, 3)
-      assert_true(ll_freq[257 + len_to_idx[length]] > 0)
-      assert_true(d_freq[dist_index(distance)] > 0)
-    }
-    Lit(_) => fail("expected the deferred boundary match")
-  }
+  let token = tokens[0]
+  assert_true(token >= 256)
+  let length = token >> 16
+  let distance = token & 0xFFFF
+  assert_true(length >= 3)
+  assert_eq(distance, 3)
+  assert_true(ll_freq[257 + len_to_idx[length]] > 0)
+  assert_true(d_freq[dist_index(distance)] > 0)
   assert_true(processed > 4)
   assert_eq(collect_matches(b"", 0, 0).length(), 0)
 }
@@ -134,28 +139,31 @@ test "optimal planner crosses its master-block boundary" {
 
 ///|
 fn second_split_is_cheaper_for_coverage(input : Bytes) -> Bool {
-  let (greedy, _, _, chunk_end) = tokenize(
+  let greedy : Array[Int] = []
+  let greedy_ll_freq = Array::make(286, 0)
+  let greedy_d_freq = Array::make(30, 0)
+  let chunk_end = tokenize(
     input,
     0,
     input.length(),
     level_configs[9],
+    greedy,
+    greedy_ll_freq,
+    greedy_d_freq,
   )
   let greedy_pos = Array::make(greedy.length() + 1, 0)
   let mut byte_pos = 0
   for i in 0..<greedy.length() {
     greedy_pos[i] = byte_pos
-    byte_pos = byte_pos +
-      (match greedy[i] {
-        Lit(_) => 1
-        Match(length, _) => length
-      })
+    let token = greedy[i]
+    byte_pos = byte_pos + (if token < 256 { 1 } else { token >> 16 })
   }
   greedy_pos[greedy.length()] = chunk_end
   let first_bounds = plan_split_points(greedy, greedy_pos)
-  let optimal : Array[Token] = []
+  let optimal : Array[Int] = []
   let first_joins : Array[Int] = [0]
   for i in 0..<(first_bounds.length() - 1) {
-    let (tokens, _, _) = tokenize_optimal(
+    let tokens = tokenize_optimal(
       input,
       greedy_pos[first_bounds[i]],
       greedy_pos[first_bounds[i + 1]],
@@ -170,11 +178,8 @@ fn second_split_is_cheaper_for_coverage(input : Bytes) -> Bool {
   byte_pos = 0
   for i in 0..<optimal.length() {
     optimal_pos[i] = byte_pos
-    byte_pos = byte_pos +
-      (match optimal[i] {
-        Lit(_) => 1
-        Match(length, _) => length
-      })
+    let token = optimal[i]
+    byte_pos = byte_pos + (if token < 256 { 1 } else { token >> 16 })
   }
   optimal_pos[optimal.length()] = chunk_end
   let second_bounds = plan_split_points(optimal, optimal_pos)

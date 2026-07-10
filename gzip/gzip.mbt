@@ -30,7 +30,7 @@ pub suberror GzipError {
 /// implementation gains another error kind in the future.
 fn wrap_inflate_error(err : Error) -> GzipError {
   match err {
-    @flate.InflateError(message) =>
+    @flate.InflateError(_, message) =>
       GzipError(InvalidDeflate, "gzip: invalid DEFLATE stream: \{message}")
     _ => GzipError(InvalidDeflate, "gzip: invalid DEFLATE stream")
   }
@@ -86,20 +86,26 @@ pub fn gzip_compress_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
 }
 
 ///|
-/// Inflate the raw DEFLATE member starting at `input[q:]`, returning the
-/// decompressed bytes and the number of compressed bytes consumed (where the
-/// 8-byte trailer begins). Driven over the streaming `@flate.Inflater`, whose
-/// reported consumption lands exactly on the byte-aligned end of the member's
-/// final block, so the caller can locate the trailer and any next member.
-fn inflate_member(input : Bytes, q : Int) -> (Bytes, Int) raise GzipError {
+/// Inflate the raw DEFLATE member starting at `input[q:]`; write the compressed
+/// byte count (where the 8-byte trailer begins) to `consumed[0]`. The caller
+/// reuses that scalar cell across members instead of allocating a return tuple.
+/// The streaming inflater's reported consumption lands exactly on the
+/// byte-aligned end of the member's final block.
+fn inflate_member(
+  input : Bytes,
+  q : Int,
+  consumed : FixedArray[Int],
+) -> Bytes raise GzipError {
   let inf = @flate.Inflater::new()
   let out = Buffer()
   let buf = FixedArray::make(65536, b'\x00')
   let mut used = 0
   for ;; {
-    let (st, c, produced) = inf.step(input[q + used:], buf.mut_view()) catch {
+    let st = inf.step(input[q + used:], buf.mut_view()) catch {
       err => raise wrap_inflate_error(err)
     }
+    let c = inf.last_consumed()
+    let produced = inf.last_produced()
     used = used + c
     for i in 0..<produced {
       out.write_byte(buf[i])
@@ -113,7 +119,8 @@ fn inflate_member(input : Bytes, q : Int) -> (Bytes, Int) raise GzipError {
     }
     // NeedMoreOutput: drain `buf` and continue over the unconsumed tail.
   }
-  (out.to_bytes(), used)
+  consumed[0] = used
+  out.to_bytes()
 }
 
 ///|
@@ -131,6 +138,7 @@ pub fn gunzip(input : Bytes) -> Bytes raise GzipError {
     raise GzipError(Truncated, "gzip: input too short")
   }
   let out = Buffer()
+  let member_consumed = FixedArray::make(1, 0)
   let mut p = 0
   for ;; {
     // Stop once no further member begins: clean end or trailing garbage. A
@@ -187,7 +195,8 @@ pub fn gunzip(input : Bytes) -> Bytes raise GzipError {
     if q > n - 8 {
       raise GzipError(Truncated, "gzip: truncated")
     }
-    let (payload, deflate_len) = inflate_member(input, q)
+    let payload = inflate_member(input, q, member_consumed)
+    let deflate_len = member_consumed[0]
     let trailer = q + deflate_len
     if trailer > n - 8 {
       raise GzipError(Truncated, "gzip: truncated")

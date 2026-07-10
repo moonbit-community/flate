@@ -24,15 +24,6 @@ priv struct MatchRange {
 let optimal_max_chain = 8192
 
 ///|
-fn capped_match_len(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
-  let mut k = 0
-  while k < limit && data[src + k] == data[pos + k] {
-    k = k + 1
-  }
-  k
-}
-
-///|
 /// The match frontier at every position of `data[start:end)`, computed once
 /// and reused by every squeeze iteration. Matches never extend past `end`
 /// (the planner chose exact bounds). The window-eligible suffix of
@@ -49,15 +40,8 @@ fn collect_matches(
   // window + segment, not by the absolute offset into the input.
   let prev = Array::make(if end > seed_from { end - seed_from } else { 1 }, -1)
   let n = data.length()
-  let insert = fn(i : Int) {
-    if i + 3 <= n {
-      let h = hash3(data, i)
-      prev[i - seed_from] = head[h]
-      head[h] = i
-    }
-  }
   for j in seed_from..<start {
-    insert(j)
+    insert_pos(data, head, prev, j, n, seed_from)
   }
   let out : Array[Array[MatchRange]] = []
   for i in start..<end {
@@ -69,7 +53,11 @@ fn collect_matches(
       let mut best = 2
       let mut steps = 0
       while cand >= 0 && steps < optimal_max_chain && i - cand <= 32768 {
-        let l = capped_match_len(data, cand, i, limit)
+        let l = if match_candidate_can_beat(data, cand, i, best, limit) {
+          match_len_up_to(data, cand, i, limit)
+        } else {
+          best
+        }
         if l > best {
           frontier.push({ len: l, dist: i - cand })
           best = l
@@ -81,7 +69,7 @@ fn collect_matches(
         steps = steps + 1
       }
     }
-    insert(i)
+    insert_pos(data, head, prev, i, n, seed_from)
     out.push(frontier)
   }
   out
@@ -98,7 +86,10 @@ fn squeeze_parse(
   matches : Array[Array[MatchRange]],
   ll_cost : Array[Int],
   d_cost : Array[Int],
-) -> (Array[Token], Array[Int], Array[Int]) {
+  tokens : Array[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Unit {
   let m = end - start
   let inf = 0x3FFFFFFF
   let costs = Array::make(m + 1, inf)
@@ -139,25 +130,21 @@ fn squeeze_parse(
     steps.push(o)
     o = o - len_choice[o]
   }
-  let tokens : Array[Token] = []
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
   let mut pos = start
   for k = steps.length() - 1; k >= 0; k = k - 1 {
     let at = steps[k]
     let l = len_choice[at]
     if l == 1 && dist_choice[at] == 0 {
       let b = data[pos].to_int()
-      tokens.push(Lit(b))
+      tokens.push(b)
       ll_freq[b] += 1
     } else {
-      tokens.push(Match(l, dist_choice[at]))
+      tokens.push(pack_match_token(l, dist_choice[at]))
       ll_freq[257 + len_to_idx[l]] += 1
       d_freq[dist_index(dist_choice[at])] += 1
     }
     pos = pos + l
   }
-  (tokens, ll_freq, d_freq)
 }
 
 ///|
@@ -168,23 +155,24 @@ fn squeeze_parse(
 fn stats_to_costs(
   ll_freq : Array[Int],
   d_freq : Array[Int],
-) -> (Array[Int], Array[Int]) {
+  ll_cost : Array[Int],
+  d_cost : Array[Int],
+) -> Unit {
   let ll_freq_eob = Array::make(286, 0)
   for s in 0..<286 {
     ll_freq_eob[s] = ll_freq[s]
   }
   ll_freq_eob[256] += 1
-  let (ll_len, _) = gen_huffman(ll_freq_eob, 286, 15)
-  let (dd_len, _) = gen_huffman(d_freq, 30, 15)
-  let ll_cost = Array::make(286, 0)
+  let ll_len = Array::make(286, 0)
+  gen_huffman(ll_freq_eob, 286, 15, ll_len)
+  let dd_len = Array::make(30, 0)
+  gen_huffman(d_freq, 30, 15, dd_len)
   for s in 0..<286 {
     ll_cost[s] = if ll_len[s] == 0 { 15 } else { ll_len[s] }
   }
-  let d_cost = Array::make(30, 0)
   for d in 0..<30 {
     d_cost[d] = if dd_len[d] == 0 { 15 } else { dd_len[d] }
   }
-  (ll_cost, d_cost)
 }
 
 ///|
@@ -196,27 +184,32 @@ fn tokenize_optimal(
   start : Int,
   end : Int,
   iterations : Int,
-) -> (Array[Token], Array[Int], Array[Int]) {
+) -> Array[Int] {
   let matches = collect_matches(data, start, end)
   let mut ll_cost = Array::make(286, 0)
   for s in 0..<286 {
-    ll_cost[s] = fixed_litlen.1[s]
+    ll_cost[s] = fixed_litlen_info[s] & 0xF
   }
   let mut d_cost = Array::make(30, 5)
   let mut best_bits = 0x3FFFFFFF
-  let mut best : (Array[Token], Array[Int], Array[Int])? = None
+  let mut best_tokens : Array[Int]? = None
   for _it in 0..<iterations {
-    let (toks, ll_freq, d_freq) = squeeze_parse(
-      data, start, end, matches, ll_cost, d_cost,
+    let toks : Array[Int] = []
+    let ll_freq = Array::make(286, 0)
+    let d_freq = Array::make(30, 0)
+    squeeze_parse(
+      data, start, end, matches, ll_cost, d_cost, toks, ll_freq, d_freq,
     )
     let bits = block_cost_bits(end - start, ll_freq, d_freq)
     if bits < best_bits {
       best_bits = bits
-      best = Some((toks, ll_freq, d_freq))
+      best_tokens = Some(toks)
     }
-    let (nl, nd) = stats_to_costs(ll_freq, d_freq)
+    let nl = Array::make(286, 0)
+    let nd = Array::make(30, 0)
+    stats_to_costs(ll_freq, d_freq, nl, nd)
     ll_cost = nl
     d_cost = nd
   }
-  best.unwrap()
+  best_tokens.unwrap()
 }

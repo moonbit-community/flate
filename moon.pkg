@@ -2,5 +2,14 @@
 // Pure, io-free, suspendable. gzip/zlib live in sibling packages that wrap it.
 
 import {
+  "moonbitlang/core/v128",
+}
+
+import {
   "moonbitlang/core/bench",
 } for "test"
+
+// v128 is currently marked experimental in moonbitlang/core. This package
+// intentionally accepts that alert for its internal SIMD hot paths.
+
+warnings = "-alert_experimental"

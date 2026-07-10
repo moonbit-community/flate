@@ -31,14 +31,20 @@ fn coverage_dynamic_header(
 /// Both decoder implementations must reject the same complete malformed stream.
 fn coverage_expect_both_errors(data : Bytes, expected : String) -> Unit raise {
   try ignore(inflate_all(data)) catch {
-    InflateError(message) => assert_eq(message, expected)
+    InflateError(kind, message) => {
+      assert_true(kind == Corrupt)
+      assert_eq(message, expected)
+    }
   } noraise {
     _ => fail("in-memory decoder accepted malformed DEFLATE")
   }
   let inflater = Inflater::new()
   let output = FixedArray::make(1, b'\x00')
   try ignore(inflater.step(data[:], output.mut_view())) catch {
-    InflateError(message) => assert_eq(message, expected)
+    InflateError(kind, message) => {
+      assert_true(kind == Corrupt)
+      assert_eq(message, expected)
+    }
   } noraise {
     _ => fail("streaming decoder accepted malformed DEFLATE")
   }
@@ -61,8 +67,10 @@ test "code-length repeat interpretation is shared and total" {
   assert_eq(repeat18.extra_bits, 7)
   assert_eq(repeat18.value, 0)
   try ignore(interpret_code_length_repeat(19, None)) catch {
-    InflateError(message) =>
+    InflateError(kind, message) => {
+      assert_true(kind == Corrupt)
       assert_eq(message, "corrupt: bad code-length symbol")
+    }
   } noraise {
     _ => fail("accepted an invalid code-length repeat symbol")
   }
@@ -74,15 +82,20 @@ test "code-length repeat interpretation is shared and total" {
 test "streaming decoder error classification is total" {
   match classify_decoder_error(NeedInput) {
     DecoderInputExhausted => ()
-    DecoderFailure(_) => fail("NeedInput was classified as corruption")
+    DecoderFailure(_, _) => fail("NeedInput was classified as corruption")
   }
-  match classify_decoder_error(InflateError("known failure")) {
-    DecoderFailure(message) => assert_eq(message, "known failure")
+  match classify_decoder_error(InflateError(Corrupt, "known failure")) {
+    DecoderFailure(kind, message) => {
+      assert_true(kind == Corrupt)
+      assert_eq(message, "known failure")
+    }
     DecoderInputExhausted => fail("InflateError was classified as suspension")
   }
   match classify_decoder_error(CoverageUnexpectedDecoderError) {
-    DecoderFailure(message) =>
+    DecoderFailure(kind, message) => {
+      assert_true(kind == Corrupt)
       assert_eq(message, "corrupt: unexpected decoder error")
+    }
     DecoderInputExhausted => fail("unknown error was classified as suspension")
   }
 }
@@ -244,7 +257,8 @@ test "both inflaters reject a reserved fixed literal-length symbol" {
   let w = BitWriter::new()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
-  w.write_code(fixed_litlen.0[286], fixed_litlen.1[286])
+  let reserved = fixed_litlen_info[286]
+  w.write_code(reserved >> 4, reserved & 0xF)
   coverage_expect_both_errors(
     coverage_finish_bits(w),
     "corrupt: invalid literal/length code",
@@ -257,7 +271,8 @@ test "both inflaters reject a reserved fixed distance symbol" {
   let w = BitWriter::new()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
-  w.write_code(fixed_litlen.0[257], fixed_litlen.1[257]) // length 3
+  let length3 = fixed_litlen_info[257]
+  w.write_code(length3 >> 4, length3 & 0xF) // length 3
   w.write_code(30, 5)
   coverage_expect_both_errors(
     coverage_finish_bits(w),
@@ -271,7 +286,8 @@ test "both inflaters reject a back-reference before the window" {
   let w = BitWriter::new()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
-  w.write_code(fixed_litlen.0[257], fixed_litlen.1[257]) // length 3
+  let length3 = fixed_litlen_info[257]
+  w.write_code(length3 >> 4, length3 & 0xF) // length 3
   w.write_code(0, 5) // distance 1
   coverage_expect_both_errors(
     coverage_finish_bits(w),
@@ -285,16 +301,18 @@ test "both inflaters reject a back-reference before the window" {
 test "stored header truncation stages streaming input" {
   let truncated : Bytes = [0x01]
   try ignore(inflate_all(truncated)) catch {
-    InflateError(message) => assert_eq(message, "unexpected end of input")
+    InflateError(kind, message) => {
+      assert_true(kind == Truncated)
+      assert_eq(message, "unexpected end of input")
+    }
   } noraise {
     _ => fail("in-memory decoder accepted a truncated stored header")
   }
   let inflater = Inflater::new()
   let output = FixedArray::make(1, b'\x00')
-  let (status, consumed, produced) = inflater.step(
-    truncated[:],
-    output.mut_view(),
-  )
+  let status = inflater.step(truncated[:], output.mut_view())
+  let consumed = inflater.last_consumed()
+  let produced = inflater.last_produced()
   assert_true(status is NeedMoreInput)
   assert_eq(consumed, 1)
   assert_eq(produced, 0)
@@ -335,60 +353,19 @@ test "both inflaters reject a stored length mismatch" {
 test "fixed-symbol truncation suspends only the streaming inflater" {
   let truncated : Bytes = [0x03]
   try ignore(inflate_all(truncated)) catch {
-    InflateError(message) => assert_eq(message, "unexpected end of input")
+    InflateError(kind, message) => {
+      assert_true(kind == Truncated)
+      assert_eq(message, "unexpected end of input")
+    }
   } noraise {
     _ => fail("in-memory decoder accepted a truncated fixed block")
   }
   let inflater = Inflater::new()
   let output = FixedArray::make(1, b'\x00')
-  let (status, consumed, produced) = inflater.step(
-    truncated[:],
-    output.mut_view(),
-  )
+  let status = inflater.step(truncated[:], output.mut_view())
+  let consumed = inflater.last_consumed()
+  let produced = inflater.last_produced()
   assert_true(status is NeedMoreInput)
   assert_eq(consumed, 1)
   assert_eq(produced, 0)
-}
-
-///|
-/// Once an incomplete first header is accepted into the internal staging tail,
-/// stream configuration is committed and a late dictionary must be rejected.
-test "panic Inflater set_dictionary after staging the first header" {
-  let inflater = Inflater::new()
-  let output = FixedArray::make(1, b'\x00')
-  let partial : Bytes = [0x00]
-  let (status, consumed, produced) = inflater.step(
-    partial[:],
-    output.mut_view(),
-  )
-  assert_true(status is NeedMoreInput)
-  assert_eq(consumed, 1)
-  assert_eq(produced, 0)
-  assert_true(inflater.started)
-  inflater.set_dictionary(b"history"[:])
-}
-
-///|
-/// A non-final zero-length stored block returns to AtBlock without producing
-/// history. The old structural guard therefore mistook it for a fresh stream.
-test "panic Inflater set_dictionary after a non-final empty stored block" {
-  let inflater = Inflater::new()
-  let output = FixedArray::make(1, b'\x00')
-  let empty_nonfinal : Bytes = [0x00, 0x00, 0x00, 0xFF, 0xFF]
-  ignore(inflater.step(empty_nonfinal[:], output.mut_view()))
-  inflater.set_dictionary(b"late dictionary"[:])
-}
-
-///|
-test "panic Inflater set_dictionary rejects a second dictionary" {
-  let inflater = Inflater::new()
-  inflater.set_dictionary(b"first"[:])
-  inflater.set_dictionary(b"second"[:])
-}
-
-///|
-test "panic Deflater set_dictionary rejects a second dictionary" {
-  let deflater = Deflater::new()
-  deflater.set_dictionary(b"first"[:])
-  deflater.set_dictionary(b"second"[:])
 }

@@ -7,11 +7,15 @@ test "gzip header FNAME bytes are discarded, not retained" {
   let obuf = FixedArray::make(1, b'\x00')
   // Fixed header with FLG = FNAME only.
   let hdr : Bytes = [0x1F, 0x8B, 0x08, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF]
-  let (_st, _c, _p) = dec.step(hdr[:], obuf.mut_view())
+  let _st = dec.step(hdr[:], obuf.mut_view())
+  let _c = dec.last_consumed()
+  let _p = dec.last_produced()
   // 64 KB of name bytes with no terminator, fed in 1 KB chunks.
   let chunk = Bytes::make(1024, b'x')
   for _i in 0..<64 {
-    let (_st2, _c2, _p2) = dec.step(chunk[:], obuf.mut_view())
+    let _st2 = dec.step(chunk[:], obuf.mut_view())
+    let _c2 = dec.last_consumed()
+    let _p2 = dec.last_produced()
     assert_eq(dec.pending.length(), 0)
   }
 }
@@ -30,7 +34,9 @@ test "gzip body backpressure reuses pending storage" {
   let obuf = FixedArray::make(1, b'\x00')
   let split = 9000
   assert_true(gz.length() > split + 1)
-  let (_st, consumed, produced) = dec.step(gz[:split], obuf.mut_view())
+  let _st = dec.step(gz[:split], obuf.mut_view())
+  let consumed = dec.last_consumed()
+  let produced = dec.last_produced()
   assert_eq(consumed, split)
   assert_eq(produced, 1)
   let backing_len = dec.pending.length()
@@ -38,7 +44,9 @@ test "gzip body backpressure reuses pending storage" {
   assert_true(backing_len > 8900)
   assert_eq(dec.pending_bytes.length(), dec.pending_snapshot_end)
   for _i in 0..<64 {
-    let (_st2, c, p) = dec.step(b""[:], obuf.mut_view())
+    let _st2 = dec.step(b""[:], obuf.mut_view())
+    let c = dec.last_consumed()
+    let p = dec.last_produced()
     assert_eq(c, 0)
     assert_eq(p, 1)
     assert_eq(dec.pending.length(), backing_len)
@@ -50,7 +58,9 @@ test "gzip body backpressure reuses pending storage" {
   // snapshot. It will be merged only after the inflater exhausts the prefix.
   let snapshot_end = dec.pending_snapshot_end
   let pending_len = dec.pending.length()
-  let (_st3, c3, p3) = dec.step(gz[split:split + 1], obuf.mut_view())
+  let _st3 = dec.step(gz[split:split + 1], obuf.mut_view())
+  let c3 = dec.last_consumed()
+  let p3 = dec.last_produced()
   assert_eq(c3, 1)
   assert_eq(p3, 1)
   assert_eq(dec.pending.length(), pending_len + 1)
@@ -72,10 +82,9 @@ test "gzip completion releases consumed input and caches read-ahead" {
   }
   let decoder = Decoder::new()
   let output = FixedArray::make(128, b'\x00')
-  let (status, consumed, _) = decoder.step(
-    Bytes::from_array(combined)[:],
-    output.mut_view(),
-  )
+  let status = decoder.step(Bytes::from_array(combined)[:], output.mut_view())
+  let consumed = decoder.last_consumed()
+  let _produced = decoder.last_produced()
   assert_true(status is Done)
   assert_eq(consumed, gzip_stream.length() + suffix.length())
   assert_eq(decoder.pending.length(), 0)
@@ -107,6 +116,8 @@ test "gzip failed state freezes decoder cursors" {
   } noraise {
     _ => fail("expected malformed gzip input to fail")
   }
+  assert_eq(decoder.last_consumed(), 0)
+  assert_eq(decoder.last_produced(), 0)
   let pending_pos = decoder.pending_pos
   let pending_length = decoder.pending.length()
   let snapshot_end = decoder.pending_snapshot_end
@@ -123,6 +134,8 @@ test "gzip failed state freezes decoder cursors" {
   } noraise {
     _ => fail("a failed gzip decoder resumed")
   }
+  assert_eq(decoder.last_consumed(), 0)
+  assert_eq(decoder.last_produced(), 0)
   assert_true(first_kind == InvalidDeflate)
   assert_true(repeated_kind == first_kind)
   assert_eq(repeated_error, first_error)

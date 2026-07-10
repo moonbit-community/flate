@@ -30,14 +30,17 @@ fn deflate_1b(data : Bytes, level : Int) -> Bytes {
   let n = data.length()
   let mut i = 0
   while i < n {
-    let (_st, c, p) = def.step(data[i:i + 1], ob.mut_view())
+    ignore(def.step(data[i:i + 1], ob.mut_view()))
+    let c = def.last_consumed()
+    let p = def.last_produced()
     if p == 1 {
       comp.write_byte(ob[0])
     }
     i = i + c
   }
   for ;; {
-    let (st, _c, p) = def.step(data[n:n], ob.mut_view(), end=true)
+    let st = def.step(data[n:n], ob.mut_view(), action=Finish)
+    let p = def.last_produced()
     if p == 1 {
       comp.write_byte(ob[0])
     }
@@ -60,7 +63,9 @@ fn inflate_1b(comp : Bytes) -> Bytes raise {
   let mut consumed = 0
   for ;; {
     let endi = if consumed < n { consumed + 1 } else { consumed }
-    let (st, c, p) = inf.step(comp[consumed:endi], ob.mut_view(), end=endi == n)
+    let st = inf.step(comp[consumed:endi], ob.mut_view(), end=endi == n)
+    let c = inf.last_consumed()
+    let p = inf.last_produced()
     consumed = consumed + c
     if p == 1 {
       out.write_byte(ob[0])

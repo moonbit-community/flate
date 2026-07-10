@@ -47,13 +47,15 @@ fn inflate_exact(input : BytesView) -> Bytes raise ZlibError {
   let out = Buffer()
   let mut pos = 0
   for ;; {
-    let (status, consumed, produced) = inf.step(input[pos:], scratch.mut_view()) catch {
-      InflateError(message) =>
+    let status = inf.step(input[pos:], scratch.mut_view()) catch {
+      InflateError(_, message) =>
         raise ZlibError(
           InvalidDeflate,
           "zlib: invalid DEFLATE stream: \{message}",
         )
     }
+    let consumed = inf.last_consumed()
+    let produced = inf.last_produced()
     pos = pos + consumed
     for i in 0..<produced {
       out.write_byte(scratch[i])

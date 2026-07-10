@@ -13,10 +13,8 @@ test "zlib completion releases consumed input and caches read-ahead" {
   }
   let decoder = Decoder::new()
   let output = FixedArray::make(128, b'\x00')
-  let (status, consumed, _) = decoder.step(
-    Bytes::from_array(combined)[:],
-    output.mut_view(),
-  )
+  let status = decoder.step(Bytes::from_array(combined)[:], output.mut_view())
+  let consumed = decoder.last_consumed()
   assert_true(status is Done)
   assert_eq(consumed, stream.length() + suffix.length())
   assert_eq(decoder.pending.length(), 0)

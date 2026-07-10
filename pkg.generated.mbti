@@ -12,29 +12,48 @@ pub fn deflate_all_optimal(Bytes, iterations? : Int) -> Bytes
 
 pub fn inflate_all(Bytes) -> Bytes raise InflateError
 
+pub fn inflate_all_limited(Bytes, max_output~ : Int) -> Bytes raise InflateError
+
+pub fn inflate_exact(Bytes) -> Bytes raise InflateError
+
 // Errors
 pub suberror InflateError {
-  InflateError(String)
+  InflateError(InflateErrorKind, String)
 }
 
 // Types and methods
+pub(all) enum DeflateAction {
+  Continue
+  SyncFlush
+  Finish
+} derive(Eq, @debug.Debug)
+
 pub struct Deflater {
   // private fields
 }
 pub fn Deflater::is_finished(Self) -> Bool
-pub fn Deflater::new(level? : Int) -> Self
-pub fn Deflater::reset(Self) -> Unit
-pub fn Deflater::set_dictionary(Self, BytesView) -> Unit
-pub fn Deflater::step(Self, BytesView, MutArrayView[Byte], end? : Bool, flush? : Bool) -> (Status, Int, Int)
+pub fn Deflater::last_consumed(Self) -> Int
+pub fn Deflater::last_produced(Self) -> Int
+pub fn Deflater::new(level? : Int, dictionary? : BytesView) -> Self
+pub fn Deflater::reset(Self, dictionary? : BytesView) -> Unit
+pub fn Deflater::step(Self, BytesView, MutArrayView[Byte], action? : DeflateAction) -> Status
+
+pub(all) enum InflateErrorKind {
+  Truncated
+  Corrupt
+  TrailingData
+  OutputLimitExceeded
+} derive(Eq, @debug.Debug)
 
 pub struct Inflater {
   // private fields
 }
 pub fn Inflater::is_finished(Self) -> Bool
-pub fn Inflater::new() -> Self
-pub fn Inflater::reset(Self) -> Unit
-pub fn Inflater::set_dictionary(Self, BytesView) -> Unit
-pub fn Inflater::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> (Status, Int, Int) raise InflateError
+pub fn Inflater::last_consumed(Self) -> Int
+pub fn Inflater::last_produced(Self) -> Int
+pub fn Inflater::new(dictionary? : BytesView) -> Self
+pub fn Inflater::reset(Self, dictionary? : BytesView) -> Unit
+pub fn Inflater::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> Status raise InflateError
 
 pub(all) enum Status {
   Done

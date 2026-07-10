@@ -47,21 +47,88 @@ fn hash3(data : Bytes, i : Int) -> Int {
 }
 
 ///|
-fn match_len(data : Bytes, src : Int, pos : Int, n : Int) -> Int {
-  let max = if n - pos < 258 { n - pos } else { 258 }
+/// `Bytes` and `FixedArray[Byte]` share the same immutable backing layout in
+/// the current MoonBit runtime. Keep this experimental identity bridge private
+/// and confined to the native/linear-wasm SIMD loader.
+#cfg(any(target="native", target="wasm"))
+fn bytes_as_fixedarray(data : Bytes) -> FixedArray[Byte] = "%identity"
+
+///|
+#cfg(any(target="native", target="wasm"))
+fn match_len_up_to(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
+  // Every wide-loop iteration proves both offsets have 16 available bytes.
+  // Hoist the zero-copy representation bridge and call v128_load directly;
+  // an otherwise tiny wrapper survives native optimization as two calls per
+  // compared chunk.
+  let bytes = bytes_as_fixedarray(data)
   let mut k = 0
-  while k < max && data[src + k] == data[pos + k] {
+  while k + 16 <= limit {
+    let equal_lanes = @v128.i8x16_bitmask(
+      @v128.i8x16_eq(
+        @v128.v128_load(bytes, src + k),
+        @v128.v128_load(bytes, pos + k),
+      ),
+    )
+    if equal_lanes != 0xFFFF {
+      return k + (equal_lanes ^ 0xFFFF).ctz()
+    }
+    k = k + 16
+  }
+  while k < limit && data[src + k] == data[pos + k] {
     k = k + 1
   }
   k
 }
 
 ///|
+/// JS and wasm-gc currently lower V128 byte comparisons to BigInt/per-lane
+/// fallback code. Keep their match finder scalar until those backends provide
+/// real SIMD lowering; the native and linear-wasm implementation above remains
+/// the semantic reference.
+#cfg(not(any(target="native", target="wasm")))
+fn match_len_up_to(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
+  let mut k = 0
+  while k < limit && data[src + k] == data[pos + k] {
+    k = k + 1
+  }
+  k
+}
+
+///|
+/// Cheaply reject a hash-chain candidate that cannot improve `best_len` before
+/// paying for a wide comparison. For an existing match, zlib-style probes at
+/// both ends of the known prefix catch most collisions without scanning it.
+#inline
+fn match_candidate_can_beat(
+  data : Bytes,
+  candidate : Int,
+  position : Int,
+  best_len : Int,
+  limit : Int,
+) -> Bool {
+  if best_len >= limit {
+    return false
+  }
+  if best_len < 3 {
+    data[candidate] == data[position] &&
+    data[candidate + 1] == data[position + 1] &&
+    data[candidate + 2] == data[position + 2]
+  } else {
+    data[candidate] == data[position] &&
+    data[candidate + 1] == data[position + 1] &&
+    data[candidate + best_len - 1] == data[position + best_len - 1] &&
+    data[candidate + best_len] == data[position + best_len]
+  }
+}
+
+///|
 /// Longest back-reference for position `i` that beats `base`, found by walking
-/// the hash chain (does not insert `i`). Returns (length, distance); a zero
-/// distance means nothing longer than `base` was found. zlib heuristics: the
-/// chain budget shrinks 4x once `base` is already a good match, and the search
-/// stops outright at `nice_length`.
+/// the hash chain (does not insert `i`). Returns `length << 16 | distance`; a
+/// zero distance means nothing longer than `base` was found. Both fields fit
+/// exactly within their packed ranges (length <= 258, distance <= 32768), and
+/// the scalar return avoids allocating a tuple at every searched position.
+/// zlib heuristics: the chain budget shrinks 4x once `base` is already a good
+/// match, and the search stops outright at `nice_length`.
 fn find_match(
   data : Bytes,
   head : Array[Int],
@@ -71,18 +138,23 @@ fn find_match(
   base : Int,
   cfg : LevelConfig,
   seed_from : Int,
-) -> (Int, Int) {
+) -> Int {
   let h = hash3(data, i)
   let mut cand = head[h]
   let mut best_len = base
   let mut best_dist = 0
+  let limit = if n - i < 258 { n - i } else { 258 }
   let mut budget = cfg.max_chain
   if base >= cfg.good_length {
     budget = budget >> 2
   }
   let mut steps = 0
   while cand >= 0 && steps < budget && i - cand <= 32768 {
-    let l = match_len(data, cand, i, n)
+    let l = if match_candidate_can_beat(data, cand, i, best_len, limit) {
+      match_len_up_to(data, cand, i, limit)
+    } else {
+      best_len
+    }
     if l > best_len {
       best_len = l
       best_dist = i - cand
@@ -95,7 +167,7 @@ fn find_match(
     cand = prev[cand - seed_from]
     steps = steps + 1
   }
-  (best_len, best_dist)
+  (best_len << 16) | best_dist
 }
 
 ///|
@@ -116,16 +188,22 @@ fn insert_pos(
 }
 
 ///|
-priv enum Token {
-  Lit(Int)
-  Match(Int, Int) // (length, distance)
+/// Packed private token representation. Literals are their byte value 0..255.
+/// A match is `(length << 16) | distance`, the same layout returned by
+/// `find_match`. With length <= 258 and distance <= 32768, every token is a
+/// non-negative Int below 2^25 on every backend. Unlike enum payloads, this
+/// scalar representation does not allocate once per input token.
+#inline
+fn pack_match_token(length : Int, distance : Int) -> Int {
+  (length << 16) | distance
 }
 
 ///|
-/// LZ77 over `data[start:end)` with the given level's search tuning, returning
-/// the tokens, the literal/length and distance frequency tables (sized
-/// 286 / 30, end-of-block not yet counted), and the absolute position one past
-/// the last byte consumed (≥ `end` when a match straddled the boundary).
+/// LZ77 over `data[start:end)` with the given level's search tuning. Appends to
+/// the caller-owned `tokens`, increments the caller-owned literal/length and
+/// distance frequency tables (sized 286 / 30, end-of-block not yet counted),
+/// and returns the absolute position one past the last byte consumed (≥ `end`
+/// when a match straddled the boundary). Callers pass fresh, zeroed outputs.
 ///
 /// The window-eligible suffix of `data[0:start)` is seeded into the hash chain
 /// as history so matches may reference it, but is not itself tokenized.
@@ -138,11 +216,11 @@ fn tokenize(
   start : Int,
   end : Int,
   cfg : LevelConfig,
-) -> (Array[Token], Array[Int], Array[Int], Int) {
+  tokens : Array[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Int {
   let n = data.length()
-  let tokens : Array[Token] = []
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
   // LZ77 with hash chains: head[hash] is the most recent position with a
   // given 3-byte hash, prev[pos] the next-older. "Lazy" means a match found
   // at i is held back to see if i+1 starts a longer one.
@@ -170,24 +248,26 @@ fn tokenize(
     // good enough to commit without looking for a longer one (zlib).
     let searching = i + 3 <= n && !(have_prev && prev_len >= cfg.max_lazy)
     let base = if have_prev { prev_len } else { 0 }
-    let (cur_len, cur_dist) = if searching {
+    let match_info = if searching {
       find_match(data, head, prev, i, n, base, cfg, seed_from)
     } else {
-      (0, 0)
+      0
     }
+    let cur_len = match_info >> 16
+    let cur_dist = match_info & 0xFFFF
     insert_pos(data, head, prev, i, n, seed_from)
     if have_prev {
       if cur_dist > 0 {
         // A longer match starts at i: emit a literal for i-1, keep deferring.
         let b = data[i - 1].to_int()
-        tokens.push(Lit(b))
+        tokens.push(b)
         ll_freq[b] += 1
         prev_len = cur_len
         prev_dist = cur_dist
         i = i + 1
       } else {
         // The deferred match (starting at i-1) wins: emit it.
-        tokens.push(Match(prev_len, prev_dist))
+        tokens.push(pack_match_token(prev_len, prev_dist))
         ll_freq[257 + len_to_idx[prev_len]] += 1
         d_freq[dist_index(prev_dist)] += 1
         let match_end = i - 1 + prev_len
@@ -200,7 +280,7 @@ fn tokenize(
     } else if cur_dist > 0 && cur_len >= 3 {
       if cfg.max_lazy == 0 {
         // Greedy levels (1-3): commit the match immediately.
-        tokens.push(Match(cur_len, cur_dist))
+        tokens.push(match_info)
         ll_freq[257 + len_to_idx[cur_len]] += 1
         d_freq[dist_index(cur_dist)] += 1
         let match_end = i + cur_len
@@ -216,17 +296,17 @@ fn tokenize(
       }
     } else {
       let b = data[i].to_int()
-      tokens.push(Lit(b))
+      tokens.push(b)
       ll_freq[b] += 1
       i = i + 1
     }
   }
   if have_prev {
     // A still-pending match at the boundary commits here.
-    tokens.push(Match(prev_len, prev_dist))
+    tokens.push(pack_match_token(prev_len, prev_dist))
     ll_freq[257 + len_to_idx[prev_len]] += 1
     d_freq[dist_index(prev_dist)] += 1
     i = i - 1 + prev_len
   }
-  (tokens, ll_freq, d_freq, i)
+  i
 }

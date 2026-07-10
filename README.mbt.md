@@ -37,11 +37,13 @@ test "README streaming Deflater" {
   let mut first = true
   for ;; {
     let input = if first { source[:] } else { b""[:] }
-    let (status, consumed, produced) = encoder.step(
+    let status = encoder.step(
       input,
       chunk.mut_view(),
-      end=first,
+      action=if first { Finish } else { Continue },
     )
+    let consumed = encoder.last_consumed()
+    let produced = encoder.last_produced()
     assert_eq(consumed, if first { source.length() } else { 0 })
     first = false
     for i in 0..<produced {
@@ -57,8 +59,9 @@ test "README streaming Deflater" {
 
 ### State-machine contract
 
-- `(status, consumed, produced)` describes exactly the prefixes accepted and
-  written by that call. Drop only `input[:consumed]`; large input views may be
+- `step` returns the state-machine `Status`; `last_consumed()` and
+  `last_produced()` describe exactly the prefixes accepted and written by that
+  call. Drop only `input[:consumed]`; large input views may be
   partially consumed when output is backpressured, keeping internal memory
   bounded.
 - `NeedMoreOutput` preserves all pending work. Resume with another non-empty
@@ -66,22 +69,47 @@ test "README streaming Deflater" {
 - `Inflater` owns the bounded tail of an incomplete atomic unit. On
   `NeedMoreInput`, feed the next non-overlapping chunk; no growing replay window
   is required.
-- Pass `end=true` with the physical final input and `flush=true` with the final
-  input of a flush batch. If `consumed < input.length()`, re-present that suffix
-  with the same flag. Once the complete view is accepted, the request remains
-  latched across output backpressure.
+- Encoders take one `DeflateAction`: `Continue`, `SyncFlush`, or `Finish`.
+  Pass the requested action with the final input of that batch. If
+  `consumed < input.length()`, re-present that suffix with the same action. Once
+  the complete view is accepted, the request remains latched across output
+  backpressure.
 - Raw `Inflater::step(..., end=true)` and the container decoders turn physical
   EOF before `Done` into a stable truncation error. After any decoder error,
   discard or reset the raw engine; container decoder instances stably rethrow
   the same error.
 - Once `Done` is returned, new input is not consumed; reset the raw engine or
   create a new wrapper before reuse.
+- Configure a raw preset dictionary through `Deflater::new`/`Inflater::new`, or
+  while starting a fresh stream through `reset(dictionary=...)`; dictionary
+  selection cannot be mutated after a stream begins.
 - gzip/zlib decoders may accept transport read-ahead beyond their trailer;
   after `Done`, recover that suffix with `unused_input()` before parsing the
   next protocol frame. For an exact one-member gzip boundary, construct the
   decoder with `multistream=false`.
-- Malformed raw streams raise `InflateError`; gzip/zlib expose structured
-  `GzipErrorKind`/`ZlibErrorKind` categories alongside stable diagnostic text.
+- Raw failures expose a stable `InflateErrorKind` (`Truncated`, `Corrupt`,
+  `TrailingData`, or `OutputLimitExceeded`) alongside diagnostic text; gzip/zlib
+  similarly expose `GzipErrorKind`/`ZlibErrorKind`.
+
+### Exact and bounded one-shot decoding
+
+`inflate_all` remains the convenient trusted-input API: it accepts a raw
+DEFLATE prefix and grows its output without a limit. Use `inflate_exact` when the
+input must contain exactly one raw stream, and `inflate_all_limited` when decoded
+size must be bounded:
+
+```mbt check
+///|
+test "README exact and limited inflate" {
+  let source = b"bounded convenience API"
+  let compressed = @flate.deflate_all(source)
+  assert_eq(@flate.inflate_exact(compressed), source)
+  assert_eq(
+    @flate.inflate_all_limited(compressed, max_output=source.length()),
+    source,
+  )
+}
+```
 
 ## Architecture
 
@@ -106,8 +134,9 @@ ENCODE: bytes → raw DEFLATE
  └────────────┬─────────────┘    └─────────────┬──────────────┘
               └────────────┬───────────────────┘
                            ▼
-           (tokens, ll_freq, d_freq)    ← the seam: any parser/planner
-                           │              pair feeds the same writer
+           packed tokens + caller-owned frequencies
+                           │              ← the seam: any parser/planner
+                           │                pair feeds the same writer
                            ▼
            block_writer.mbt  ◄──  huffman_build.mbt
            one block: stored /      (package-merge length-limited
@@ -148,8 +177,16 @@ CONTAINERS: thin framing over the engine
 
  shared by both pipelines:
    tables.mbt  RFC 1951 symbol tables, fixed codes, window size
+   decode_rules.mbt  pure distance/count/stored-block/history validation shared
+                     by the one-shot and streaming decoders
    status.mbt  Done / NeedMoreInput / NeedMoreOutput
 ```
+
+`inflate_all` intentionally keeps its direct, growable-output `MemDecoder` fast
+path instead of paying the streaming state machine's staging and circular-window
+costs. Both decoders call the same pure RFC validation rules, and a deterministic
+differential-fuzz suite checks them across randomized chunk/output schedules,
+truncations, and bit flips.
 
 ## Effort tiers
 
