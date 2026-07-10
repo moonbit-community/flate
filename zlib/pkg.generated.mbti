@@ -3,6 +3,7 @@ package "moonbit-community/flate/zlib"
 
 import {
   "moonbit-community/flate",
+  "moonbitlang/core/debug",
 }
 
 // Values
@@ -10,11 +11,11 @@ pub fn zlib_compress(Bytes, level? : Int) -> Bytes
 
 pub fn zlib_compress_optimal(Bytes, iterations? : Int) -> Bytes
 
-pub fn zlib_decompress(Bytes) -> Bytes raise
+pub fn zlib_decompress(Bytes) -> Bytes raise ZlibError
 
 // Errors
 pub suberror ZlibError {
-  ZlibError(String)
+  ZlibError(ZlibErrorKind, String)
 }
 
 // Types and methods
@@ -23,7 +24,8 @@ pub struct Decoder {
 }
 pub fn Decoder::is_finished(Self) -> Bool
 pub fn Decoder::new(dictionary? : Bytes) -> Self
-pub fn Decoder::step(Self, BytesView, MutArrayView[Byte]) -> (@flate.Status, Int, Int) raise
+pub fn Decoder::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> (@flate.Status, Int, Int) raise ZlibError
+pub fn Decoder::unused_input(Self) -> Bytes
 
 pub struct Encoder {
   // private fields
@@ -31,6 +33,16 @@ pub struct Encoder {
 pub fn Encoder::is_finished(Self) -> Bool
 pub fn Encoder::new(level? : Int, dictionary? : Bytes) -> Self
 pub fn Encoder::step(Self, BytesView, MutArrayView[Byte], end? : Bool, flush? : Bool) -> (@flate.Status, Int, Int)
+
+pub(all) enum ZlibErrorKind {
+  Truncated
+  InvalidHeader
+  DictionaryRequired
+  DictionaryMismatch
+  InvalidDeflate
+  ChecksumMismatch
+  TrailingData
+} derive(Eq, @debug.Debug)
 
 // Type aliases
 

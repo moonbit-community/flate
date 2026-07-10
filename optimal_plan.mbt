@@ -87,7 +87,7 @@ fn block_cost_bits(
   for it in codelen_syms {
     dyn_hdr = dyn_hdr + codelen_code_len[it.sym] + it.nextra
   }
-  let stored = 8 * (byte_len + 5 * (byte_len / 65535 + 1))
+  let stored = 8 * (byte_len + 5 * stored_block_count(byte_len))
   let dynamic = 3 + dyn_hdr + dyn_sym + extra
   let fixed = 3 + fixed_sym + extra
   let mut best = stored
@@ -178,9 +178,6 @@ fn find_best_split(
     phi = nhi
   }
   for k in plo..<=phi {
-    if k <= lo || k >= hi {
-      continue
-    }
     let c = eval(k)
     if c < best_cost {
       best_cost = c

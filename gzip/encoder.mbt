@@ -18,7 +18,7 @@ priv enum EncMode {
 }
 
 ///|
-/// Streaming gzip compressor . 
+/// Streaming gzip compressor.
 pub struct Encoder {
   priv def : @flate.Deflater
   priv crc : @checksum.Crc32
@@ -27,10 +27,11 @@ pub struct Encoder {
   priv mut stage : FixedArray[Byte] // header or trailer bytes being drained
   priv mut stage_pos : Int
   priv mut ending : Bool
+  priv mut flushing : Bool // sticky until the inner sync-flush is drained
 }
 
 ///|
-/// Create a fresh gzip compressor. 
+/// Create a fresh gzip compressor.
 pub fn Encoder::new(level? : Int = 6) -> Encoder {
   {
     def: @flate.Deflater::new(level~),
@@ -40,6 +41,7 @@ pub fn Encoder::new(level? : Int = 6) -> Encoder {
     stage: gzip_header_bytes,
     stage_pos: 0,
     ending: false,
+    flushing: false,
   }
 }
 
@@ -67,11 +69,13 @@ fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
 }
 
 ///|
-/// Run one compression step. Buffers `input` (folding it into the running
-/// CRC-32 and ISIZE), then drains gzip output into the mutable view `output`.
-/// Returns `(status, consumed, produced)`; `consumed` is always the whole input
-/// view. Pass `end=true` to finalize and keep calling while it returns
-/// `NeedMoreOutput` to drain the rest.
+/// Run one compression step. Accepts a bounded prefix of `input` (folding only
+/// that prefix into CRC-32 and ISIZE), then drains gzip output into `output`.
+/// Drop only `input[:consumed]`: output backpressure may make a large input
+/// partially consumed. Re-present its suffix with the same `end=true` or
+/// `flush=true` request; once the complete view is accepted, that request is
+/// sticky across header and body backpressure. After finalization, later input
+/// is not accepted and `consumed` is zero.
 pub fn Encoder::step(
   self : Encoder,
   input : BytesView,
@@ -79,20 +83,32 @@ pub fn Encoder::step(
   end? : Bool = false,
   flush? : Bool = false,
 ) -> (@flate.Status, Int, Int) {
-  // Fold this call's input into the checksum and buffer it in the Deflater
-  // exactly once. An empty output view makes `Deflater::step` only accumulate.
-  if input.length() > 0 {
-    self.crc.update(input)
-    self.isize = self.isize + input.length().reinterpret_as_uint()
-    let scratch = FixedArray::make(0, b'\x00').mut_view()
-    let _ = self.def.step(input, scratch)
+  if self.mode is Finished {
+    return (Done, 0, 0)
   }
-  if end {
-    self.ending = true
+  let mut consumed = 0
+  if !self.ending {
+    // Feed through the bounded inner state machine even while the wrapper
+    // header is backpressured. Its zero-sized sink caps accepted input at one
+    // block window and reports the exact prefix whose checksum we may commit.
+    let scratch = FixedArray::make(0, b'\x00').mut_view()
+    let (_, accepted, _) = self.def.step(input, scratch, end~, flush~)
+    consumed = accepted
+    if accepted > 0 {
+      self.crc.update(input[:accepted])
+      self.isize = self.isize + accepted.reinterpret_as_uint()
+    }
+    if accepted == input.length() {
+      if end {
+        self.ending = true
+      }
+      if flush {
+        self.flushing = true
+      }
+    }
   }
   let out_end = output.length()
   let mut op = 0
-  let consumed = input.length()
   for ;; {
     match self.mode {
       Header | Trailer => {
@@ -111,16 +127,20 @@ pub fn Encoder::step(
           b""[:],
           output.mut_view(start=op),
           end=self.ending,
-          flush~,
+          flush=self.flushing,
         )
         op = op + p
         if st is NeedMoreInput {
+          // The inner deflater returns NeedMoreInput only after the sync-flush
+          // marker (if requested) and all preceding compressed bytes drained.
+          self.flushing = false
           return (NeedMoreInput, consumed, op)
         }
         if st is NeedMoreOutput {
           return (NeedMoreOutput, consumed, op)
         }
         // The DEFLATE stream is complete; stage the trailer.
+        self.flushing = false
         self.stage = self.build_trailer()
         self.stage_pos = 0
         self.mode = Trailer

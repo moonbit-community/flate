@@ -34,7 +34,7 @@ pub fn Inflater::is_finished(Self) -> Bool
 pub fn Inflater::new() -> Self
 pub fn Inflater::reset(Self) -> Unit
 pub fn Inflater::set_dictionary(Self, BytesView) -> Unit
-pub fn Inflater::step(Self, BytesView, MutArrayView[Byte]) -> (Status, Int, Int) raise
+pub fn Inflater::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> (Status, Int, Int) raise InflateError
 
 pub(all) enum Status {
   Done

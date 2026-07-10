@@ -37,6 +37,9 @@ pub struct Deflater {
   priv mut emitted_final : Bool // the final block has been written into `w`
   priv mut done : Bool // the final block has been fully drained
   priv mut flush_done : Bool // the current buffered content has been sync-flushed
+  priv mut flush_requested : Bool // sticky until the requested flush is emitted
+  priv mut end_requested : Bool // sticky until reset; no later input is accepted
+  priv mut started : Bool // dictionary fixed, input accepted, or control emitted
   priv level : Int // compression level 0-9 (0 = stored only)
   priv cfg : LevelConfig // match-search tuning for `level`
 }
@@ -54,8 +57,26 @@ pub fn Deflater::new(level? : Int = 6) -> Deflater {
     emitted_final: false,
     done: false,
     flush_done: false,
+    flush_requested: false,
+    end_requested: false,
+    started: false,
     level: lv,
     cfg: level_configs[lv],
+  }
+}
+
+///|
+/// Enforce the one-time dictionary configuration contract. Panic tests exercise
+/// the rejection path, but a terminating native subprocess cannot flush its
+/// coverage trace, so keep this narrow precondition helper out of the metric.
+#coverage.skip
+fn Deflater::require_fresh_dictionary(self : Deflater) -> Unit {
+  guard !self.started &&
+    self.pending.length() == 0 &&
+    self.w.out.length() == 0 &&
+    self.w.bit_count == 0 &&
+    !self.emitted_final else {
+    abort("Deflater::set_dictionary: stream already started")
   }
 }
 
@@ -66,12 +87,7 @@ pub fn Deflater::new(level? : Int = 6) -> Deflater {
 /// `new()` or `reset()`, before any input. The decoder needs the same
 /// dictionary.
 pub fn Deflater::set_dictionary(self : Deflater, dict : BytesView) -> Unit {
-  guard self.pending.length() == 0 &&
-    self.w.out.length() == 0 &&
-    self.w.bit_count == 0 &&
-    !self.emitted_final else {
-    abort("Deflater::set_dictionary: stream already started")
-  }
+  self.require_fresh_dictionary()
   let start = if dict.length() > window_size {
     dict.length() - window_size
   } else {
@@ -81,6 +97,9 @@ pub fn Deflater::set_dictionary(self : Deflater, dict : BytesView) -> Unit {
     self.pending.push(dict[i])
   }
   self.window_carry = self.pending.length()
+  // Dictionary selection is a one-time stream configuration, including for an
+  // empty dictionary. This also makes a second call unambiguously invalid.
+  self.started = true
 }
 
 ///|
@@ -97,6 +116,9 @@ pub fn Deflater::reset(self : Deflater) -> Unit {
   self.emitted_final = false
   self.done = false
   self.flush_done = false
+  self.flush_requested = false
+  self.end_requested = false
+  self.started = false
 }
 
 ///|
@@ -106,16 +128,25 @@ pub fn Deflater::is_finished(self : Deflater) -> Bool {
 }
 
 ///|
-/// Run one compression step. Buffers `input`, emits as many blocks as the
-/// accrued input allows, and drains compressed bytes into the mutable view
-/// `output`. Returns `(status, consumed, produced)`; `consumed` is always the
-/// whole input view. Pass `end=true` (with any remaining input, or none) to
-/// finalize, and keep calling with `end=true` while it returns `NeedMoreOutput`
-/// to drain the rest. Pass `flush=true` to sync-flush (zlib `Z_SYNC_FLUSH`):
+/// Run one compression step. Accepts as much of `input` as fits in one bounded
+/// block window, emits blocks, and drains compressed bytes into `output`.
+/// Returns `(status, consumed, produced)`; drop only `input[:consumed]` and
+/// re-present the suffix. With a small output buffer a large input may be
+/// consumed only partially, which propagates output backpressure instead of
+/// growing internal memory with the caller's input size. Once a final block has
+/// been emitted, calls only drain that block and consume no new input; after
+/// completion they idempotently return `(Done, 0, 0)`.
+///
+/// Pass `end=true` with the final input view. The request is accepted after that
+/// entire view has been consumed, then remains latched across `NeedMoreOutput`;
+/// if a call reports partial consumption, re-present the suffix with `end=true`.
+/// Later input is left unconsumed. Pass `flush=true` similarly to sync-flush
+/// (zlib `Z_SYNC_FLUSH`):
 /// everything buffered is compressed and the bit stream is padded to a byte
 /// boundary with an empty stored block, so all produced bytes are final and
-/// transmittable while the stream continues. An empty `output` only accumulates
-/// `input` (no bytes are produced).
+/// transmittable while the stream continues. A flush request is sticky across
+/// output backpressure once accepted. An empty `output` may accept at most one
+/// bounded block window before returning `NeedMoreOutput`.
 pub fn Deflater::step(
   self : Deflater,
   input : BytesView,
@@ -123,19 +154,28 @@ pub fn Deflater::step(
   end? : Bool = false,
   flush? : Bool = false,
 ) -> (Status, Int, Int) {
-  for i in 0..<input.length() {
-    self.pending.push(input[i])
+  // Completion is a stable terminal state. In particular, input presented by
+  // a generic driver after it observes EOF remains unconsumed instead of
+  // disappearing into a stream that can no longer encode it.
+  if self.done {
+    return (Done, 0, 0)
   }
-  // New input invalidates a prior sync-flush: a later `flush` must emit again.
-  // Without this latch a caller that re-passes `flush=true` across the multiple
-  // `step` calls needed to drain a small output buffer would re-emit the empty
-  // stored-block marker every call and never reach `NeedMoreInput` (unbounded
-  // output). The marker is emitted at most once per buffered batch.
-  if input.length() > 0 {
-    self.flush_done = false
+  // An empty view is already fully accepted, so its control request can be
+  // latched even while older compressed output is still backpressured.
+  if input.length() == 0 && !self.end_requested && !self.emitted_final {
+    if end {
+      self.started = true
+      self.end_requested = true
+      self.flush_requested = false
+    } else if flush && !self.flush_done {
+      self.started = true
+      self.flush_requested = true
+    }
   }
-  let consumed = input.length()
   let out_end = output.length()
+  let input_end = input.length()
+  let input_limit = deflate_block_size + min_lookahead
+  let mut consumed = 0
   let mut write_pos = 0
   for ;; {
     // Drain compressed bytes already produced into the caller's buffer.
@@ -156,17 +196,50 @@ pub fn Deflater::step(
       self.done = true
       return (Done, consumed, write_pos)
     }
-    // Produce the next block, or wait for more input.
-    if end {
+    // Produce already-requested control blocks before accepting later input.
+    if self.end_requested {
+      self.flush_requested = false
       self.emit_final()
-    } else if flush && !self.flush_done {
+      continue
+    }
+    if self.flush_requested {
       self.emit_flush()
       self.flush_done = true
-    } else if self.pending.length() - self.window_carry >=
-      deflate_block_size + min_lookahead {
-      self.emit_one()
-    } else {
-      return (NeedMoreInput, consumed, write_pos)
+      self.flush_requested = false
+      continue
     }
+    // A full token window becomes one bounded non-final block before more
+    // input is accepted. This is the high-water mark that propagates output
+    // backpressure through `consumed`.
+    let buffered = self.pending.length() - self.window_carry
+    if buffered >= input_limit {
+      self.emit_one()
+      continue
+    }
+    if consumed < input_end {
+      let remaining = input_end - consumed
+      let capacity = input_limit - buffered
+      let take = if remaining < capacity { remaining } else { capacity }
+      for i in consumed..<(consumed + take) {
+        self.pending.push(input[i])
+      }
+      consumed = consumed + take
+      if take > 0 {
+        self.started = true
+        self.flush_done = false
+      }
+      // Latch control the instant its complete input view is accepted, before
+      // emitting that block can return through output backpressure.
+      if consumed == input_end {
+        if end {
+          self.end_requested = true
+          self.flush_requested = false
+        } else if flush && !self.flush_done {
+          self.flush_requested = true
+        }
+      }
+      continue
+    }
+    return (NeedMoreInput, consumed, write_pos)
   }
 }

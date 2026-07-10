@@ -1,3 +1,15 @@
 #!/bin/sh
 
-moon check
+set -eu
+
+moon check --target all --warn-list +73 --deny-warn
+moon test
+moon info
+moon fmt
+git diff --exit-code
+untracked_mbti=$(git ls-files --others --exclude-standard -- pkg.generated.mbti ':(glob)**/pkg.generated.mbti')
+if [ -n "$untracked_mbti" ]; then
+  echo "moon info generated untracked interface files:" >&2
+  printf '%s\n' "$untracked_mbti" >&2
+  exit 1
+fi

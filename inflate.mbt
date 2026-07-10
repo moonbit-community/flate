@@ -3,8 +3,9 @@
 // Suspension model:
 //  - Input: each block header and each literal/match "unit" is decoded
 //    atomically. A bit read past the end of the current input raises the
-//    internal `NeedInput`; `step` rewinds (bitbuf, bit_count, in_pos) and returns
-//    `NeedMoreInput`, so the unit re-runs unchanged once more input arrives.
+//    internal `NeedInput`; the decoder rewinds that unit and owns its bounded
+//    byte tail, so `step` can accept non-overlapping chunks and resume once more
+//    input arrives.
 //  - Output: a unit needs room for only its first byte; a match longer than the
 //    remaining output is copied in pieces, with `copy_remaining`/`copy_dist`
 //    carrying the rest to the next `step`. Stored blocks copy byte-by-byte and
@@ -20,6 +21,51 @@ pub suberror InflateError {
 ///|
 /// Internal control-flow signal: the current input view was exhausted mid-unit.
 priv suberror NeedInput
+
+///|
+/// Static interpretation of one dynamic-header repeat symbol. Keeping this
+/// independent of either bit reader makes the streaming and in-memory decoders
+/// agree on the symbol's base count, extra-bit width, and repeated value.
+priv struct CodeLengthRepeat {
+  base : Int
+  extra_bits : Int
+  value : Int
+}
+
+///|
+fn interpret_code_length_repeat(
+  symbol : Int,
+  previous : Int?,
+) -> CodeLengthRepeat raise InflateError {
+  match symbol {
+    16 =>
+      match previous {
+        Some(value) => { base: 3, extra_bits: 2, value }
+        None => raise InflateError("corrupt: repeat with no previous length")
+      }
+    17 => { base: 3, extra_bits: 3, value: 0 }
+    18 => { base: 11, extra_bits: 7, value: 0 }
+    _ => raise InflateError("corrupt: bad code-length symbol")
+  }
+}
+
+///|
+/// Total classification of every error that can cross one atomic streaming
+/// decode boundary. Unknown future error kinds become the stable public
+/// corruption diagnostic instead of leaking through `Inflater::step`.
+priv enum DecoderErrorClass {
+  DecoderInputExhausted
+  DecoderFailure(String)
+}
+
+///|
+fn classify_decoder_error(err : Error) -> DecoderErrorClass {
+  match err {
+    NeedInput => DecoderInputExhausted
+    InflateError(message) => DecoderFailure(message)
+    _ => DecoderFailure("corrupt: unexpected decoder error")
+  }
+}
 
 ///|
 priv enum Mode {
@@ -58,17 +104,27 @@ pub struct Inflater {
   // the decoder make progress into an output buffer as small as one byte.
   priv mut copy_remaining : Int
   priv mut copy_dist : Int
+  priv mut started : Bool // dictionary fixed or first block header parsed
+  // Bytes belonging to one incomplete atomic unit. Owning this bounded tail
+  // lets callers drop every byte reported as consumed instead of re-presenting
+  // a growing view on NeedMoreInput.
+  priv mut staged_input : Array[Byte]
+  priv mut staged_pos : Int
+  priv mut ending : Bool // physical EOF has been declared by the caller
+  priv mut failure : String? // stable terminal corruption/truncation error
   // Step-local cursors (reset on each `step`).
   priv mut view : BytesView
   priv mut in_pos : Int
   priv mut out_pos : Int
   priv mut out : MutArrayView[Byte]
   priv mut out_end : Int // one past the last writable index in `out`
+  priv empty_out : FixedArray[Byte]
 }
 
 ///|
 /// Create a fresh decompressor positioned at the start of a DEFLATE stream.
 pub fn Inflater::new() -> Inflater {
+  let empty_out = FixedArray::make(0, b'\x00')
   {
     mode: AtBlock,
     bitbuf: 0,
@@ -87,11 +143,17 @@ pub fn Inflater::new() -> Inflater {
     codebits: Array::make(num_codes, 0),
     copy_remaining: 0,
     copy_dist: 0,
+    started: false,
+    staged_input: [],
+    staged_pos: 0,
+    ending: false,
+    failure: None,
     view: b""[:],
     in_pos: 0,
     out_pos: 0,
-    out: FixedArray::make(0, b'\x00').mut_view(),
+    out: empty_out.mut_view(),
     out_end: 0,
+    empty_out,
   }
 }
 
@@ -102,14 +164,26 @@ pub fn Inflater::is_finished(self : Inflater) -> Bool {
 }
 
 ///|
+/// Enforce the one-time dictionary configuration contract. Panic tests exercise
+/// the rejection path, but a terminating native subprocess cannot flush its
+/// coverage trace, so keep this narrow precondition helper out of the metric.
+#coverage.skip
+fn Inflater::require_fresh_dictionary(self : Inflater) -> Unit {
+  guard !self.started &&
+    self.wpos == 0 &&
+    self.bit_count == 0 &&
+    self.mode is AtBlock else {
+    abort("Inflater::set_dictionary: stream already started")
+  }
+}
+
+///|
 /// Preload the history window with a preset dictionary (the last 32 KB of
 /// `dict`), so the stream's back-references may reach into it (zlib
 /// `inflateSetDictionary`). Must be called on a fresh stream — right after
 /// `new()` or `reset()`, before any input.
 pub fn Inflater::set_dictionary(self : Inflater, dict : BytesView) -> Unit {
-  guard self.wpos == 0 && self.bit_count == 0 && self.mode is AtBlock else {
-    abort("Inflater::set_dictionary: stream already started")
-  }
+  self.require_fresh_dictionary()
   let start = if dict.length() > window_size {
     dict.length() - window_size
   } else {
@@ -122,6 +196,8 @@ pub fn Inflater::set_dictionary(self : Inflater, dict : BytesView) -> Unit {
   if self.wpos >= window_size {
     self.filled = true
   }
+  // Even an empty dictionary is a one-time stream configuration.
+  self.started = true
 }
 
 ///|
@@ -143,6 +219,16 @@ pub fn Inflater::reset(self : Inflater) -> Unit {
   self.filled = false
   self.copy_remaining = 0
   self.copy_dist = 0
+  self.started = false
+  self.staged_input.clear()
+  self.staged_pos = 0
+  self.ending = false
+  self.failure = None
+  self.view = b""[:]
+  self.in_pos = 0
+  self.out_pos = 0
+  self.out = self.empty_out.mut_view()
+  self.out_end = 0
 }
 
 // ---- bit reader (raises NeedInput when the current view is exhausted) ----
@@ -150,13 +236,19 @@ pub fn Inflater::reset(self : Inflater) -> Unit {
 ///|
 fn Inflater::fill(self : Inflater, n : Int) -> Unit raise NeedInput {
   while self.bit_count < n {
-    if self.in_pos >= self.view.length() {
+    let b = if self.staged_pos < self.staged_input.length() {
+      let byte = self.staged_input[self.staged_pos]
+      self.staged_pos = self.staged_pos + 1
+      byte
+    } else if self.in_pos < self.view.length() {
+      let byte = self.view[self.in_pos]
+      self.in_pos = self.in_pos + 1
+      byte
+    } else {
       raise NeedInput
     }
-    self.bitbuf = self.bitbuf |
-      (self.view[self.in_pos].to_int() << self.bit_count)
+    self.bitbuf = self.bitbuf | (b.to_int() << self.bit_count)
     self.bit_count = self.bit_count + 8
-    self.in_pos = self.in_pos + 1
   }
 }
 
@@ -251,31 +343,14 @@ fn Inflater::read_dynamic(self : Inflater) -> Unit raise {
       self.clbits[i] = x
       i = i + 1
     } else {
-      let mut rep = 0
-      let mut extra_bits = 0
-      let mut repeat_val = 0
-      if x == 16 {
-        if i == 0 {
-          raise InflateError("corrupt: repeat with no previous length")
-        }
-        rep = 3
-        extra_bits = 2
-        repeat_val = self.clbits[i - 1]
-      } else if x == 17 {
-        rep = 3
-        extra_bits = 3
-      } else if x == 18 {
-        rep = 11
-        extra_bits = 7
-      } else {
-        raise InflateError("corrupt: bad code-length symbol")
-      }
-      rep = rep + self.read_bits(extra_bits)
+      let previous = if i == 0 { None } else { Some(self.clbits[i - 1]) }
+      let repeat = interpret_code_length_repeat(x, previous)
+      let rep = repeat.base + self.read_bits(repeat.extra_bits)
       if i + rep > n {
         raise InflateError("corrupt: code-length repeat overflow")
       }
       for _j in 0..<rep {
-        self.clbits[i] = repeat_val
+        self.clbits[i] = repeat.value
         i = i + 1
       }
     }
@@ -322,6 +397,9 @@ fn Inflater::parse_block_header(self : Inflater) -> Unit raise {
   } else {
     raise InflateError("corrupt: reserved block type")
   }
+  // Set this only after the complete block header (including dynamic tables or
+  // stored LEN/NLEN) succeeds. NeedInput therefore leaves a fresh decoder fresh.
+  self.started = true
 }
 
 ///|
@@ -333,6 +411,10 @@ fn Inflater::next_stored_byte(self : Inflater) -> Byte? {
     self.bitbuf = self.bitbuf >> 8
     self.bit_count = self.bit_count - 8
     Some(b)
+  } else if self.staged_pos < self.staged_input.length() {
+    let b = self.staged_input[self.staged_pos]
+    self.staged_pos = self.staged_pos + 1
+    Some(b)
   } else if self.in_pos < self.view.length() {
     let b = self.view[self.in_pos]
     self.in_pos = self.in_pos + 1
@@ -340,6 +422,55 @@ fn Inflater::next_stored_byte(self : Inflater) -> Byte? {
   } else {
     None
   }
+}
+
+///|
+/// Preserve the unconsumed tail of an incomplete atomic unit. Every byte from
+/// the external view is then either permanently decoded or owned here, so the
+/// public call may report that complete view as consumed.
+fn Inflater::stage_incomplete_input(self : Inflater) -> Unit {
+  let kept : Array[Byte] = []
+  for i in self.staged_pos..<self.staged_input.length() {
+    kept.push(self.staged_input[i])
+  }
+  for i in self.in_pos..<self.view.length() {
+    kept.push(self.view[i])
+  }
+  self.staged_input = kept
+  self.staged_pos = 0
+  if kept.length() > 0 {
+    self.started = true
+  }
+}
+
+///|
+/// Drop bytes permanently consumed from the staged atomic tail while retaining
+/// an unconsumed suffix across output backpressure.
+fn Inflater::compact_staged_input(self : Inflater) -> Unit {
+  if self.staged_pos == 0 {
+    return
+  }
+  if self.staged_pos == self.staged_input.length() {
+    self.staged_input.clear()
+  } else {
+    let kept : Array[Byte] = []
+    for i in self.staged_pos..<self.staged_input.length() {
+      kept.push(self.staged_input[i])
+    }
+    self.staged_input = kept
+  }
+  self.staged_pos = 0
+}
+
+///|
+/// Release call-owned views after every success or error so a suspended engine
+/// never pins the caller's network input or mutable output buffer.
+fn Inflater::release_step_views(self : Inflater) -> Unit {
+  self.view = b""[:]
+  self.in_pos = 0
+  self.out_pos = 0
+  self.out = self.empty_out.mut_view()
+  self.out_end = 0
 }
 
 ///|
@@ -397,46 +528,28 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
 }
 
 ///|
-/// Run one decompression step. Reads from `input`, writes into the mutable
-/// view `output`. Returns `(status, consumed, produced)`, where `produced` is
-/// the number of bytes written into `output`. An empty `output` makes no
-/// progress (it returns `NeedMoreOutput` with 0 produced), so supply at least
-/// one byte; one byte always suffices to advance.
-///
-/// Input contract: a decoding unit (a block header, or a literal/match) is read
-/// atomically — a unit needs every one of its bytes visible in the same call,
-/// and a stored-block header alone spans ~5 bytes. When a unit's bytes are not
-/// all present yet, `step` consumes nothing (`consumed == 0`) and returns
-/// `NeedMoreInput`. So on `NeedMoreInput` the next call must re-present every
-/// still-unconsumed byte *plus* more — i.e. feed a non-shrinking, growing input
-/// view (drop only the reported `consumed` prefix). Feeding a fixed-size sliding
-/// window smaller than one unit deadlocks: the unit never fits and `consumed`
-/// stays 0 forever.
-pub fn Inflater::step(
-  self : Inflater,
-  input : BytesView,
-  output : MutArrayView[Byte],
-) -> (Status, Int, Int) raise {
-  self.view = input
-  self.in_pos = 0
-  self.out_pos = 0
-  self.out = output
-  self.out_end = output.length()
+/// Drive the decoder over the currently installed step-local views.
+fn Inflater::run_step(self : Inflater) -> (Status, Int, Int) raise InflateError {
   for ;; {
     match self.mode {
       Done => return (Done, self.in_pos, self.out_pos)
       AtBlock => {
         let cb = self.bitbuf
         let cn = self.bit_count
+        let staged_pos_mark = self.staged_pos
         let in_pos_mark = self.in_pos
         self.parse_block_header() catch {
-          NeedInput => {
-            self.bitbuf = cb
-            self.bit_count = cn
-            self.in_pos = in_pos_mark
-            return (NeedMoreInput, in_pos_mark, self.out_pos)
-          }
-          err => raise err
+          err =>
+            match classify_decoder_error(err) {
+              DecoderInputExhausted => {
+                self.bitbuf = cb
+                self.bit_count = cn
+                self.staged_pos = staged_pos_mark
+                self.in_pos = in_pos_mark
+                return (NeedMoreInput, in_pos_mark, self.out_pos)
+              }
+              DecoderFailure(message) => raise InflateError(message)
+            }
         }
       }
       InStored => {
@@ -469,15 +582,20 @@ pub fn Inflater::step(
         }
         let cb = self.bitbuf
         let cn = self.bit_count
+        let staged_pos_mark = self.staged_pos
         let in_pos_mark = self.in_pos
         let eob = self.decode_unit() catch {
-          NeedInput => {
-            self.bitbuf = cb
-            self.bit_count = cn
-            self.in_pos = in_pos_mark
-            return (NeedMoreInput, in_pos_mark, self.out_pos)
-          }
-          err => raise err
+          err =>
+            match classify_decoder_error(err) {
+              DecoderInputExhausted => {
+                self.bitbuf = cb
+                self.bit_count = cn
+                self.staged_pos = staged_pos_mark
+                self.in_pos = in_pos_mark
+                return (NeedMoreInput, in_pos_mark, self.out_pos)
+              }
+              DecoderFailure(message) => raise InflateError(message)
+            }
         }
         if eob {
           self.mode = if self.final_block { Done } else { AtBlock }
@@ -485,4 +603,65 @@ pub fn Inflater::step(
       }
     }
   }
+}
+
+///|
+/// Run one decompression step. Reads from `input`, writes into `output`, and
+/// returns `(status, consumed, produced)`. Drop exactly `input[:consumed]`.
+/// An empty output makes no progress (`NeedMoreOutput`, zero produced); one
+/// output byte always suffices to advance.
+///
+/// Headers and Huffman symbols remain atomic internally, but an incomplete
+/// unit's small tail is retained by the engine. Therefore callers may feed
+/// ordinary non-overlapping chunks: on `NeedMoreInput` the complete supplied
+/// view has been accepted and need not be re-presented. Pass `end=true` with
+/// the physical final input view; the signal is sticky across output
+/// backpressure, and an incomplete stream then raises `InflateError` instead of
+/// returning `NeedMoreInput` forever. Once any error is raised, later calls
+/// stably raise the same error until `reset()`.
+pub fn Inflater::step(
+  self : Inflater,
+  input : BytesView,
+  output : MutArrayView[Byte],
+  end? : Bool = false,
+) -> (Status, Int, Int) raise InflateError {
+  match self.failure {
+    Some(message) => raise InflateError(message)
+    None => ()
+  }
+  if end {
+    self.ending = true
+  }
+  self.view = input
+  self.in_pos = 0
+  self.out_pos = 0
+  self.out = output
+  self.out_end = output.length()
+  let result = self.run_step() catch {
+    InflateError(message) => {
+      self.failure = Some(message)
+      self.staged_input.clear()
+      self.staged_pos = 0
+      self.release_step_views()
+      raise InflateError(message)
+    }
+  }
+  let (status, decoded_input, produced) = result
+  let consumed = if status is NeedMoreInput {
+    self.stage_incomplete_input()
+    if self.ending {
+      let message = "unexpected end of input"
+      self.failure = Some(message)
+      self.staged_input.clear()
+      self.staged_pos = 0
+      self.release_step_views()
+      raise InflateError(message)
+    }
+    input.length()
+  } else {
+    self.compact_staged_input()
+    decoded_input
+  }
+  self.release_step_views()
+  (status, consumed, produced)
 }

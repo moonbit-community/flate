@@ -1,5 +1,10 @@
 name: check
 
+env:
+  MOONBIT_VERSION: 0.10.3+16975d007
+  MOONBIT_CORE_VERSION: 0.10.3+16975d007
+  MIN_COVERAGE_PERCENT: 100
+
 on:
   push:
     branches:
@@ -9,8 +14,20 @@ on:
     - cron: "30 0 * * 1" # Every Monday at half past midnight UTC
 
 jobs:
+  flake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+
   build:
     strategy:
+      fail-fast: false
       matrix:
         os:
           - name: ubuntu-latest
@@ -18,21 +35,14 @@ jobs:
           - name: windows-latest
 
     runs-on: ${{ matrix.os.name }}
-    continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: install
-        if: ${{ matrix.os.name != 'windows-latest' }}
-        run: |
-          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s
-          echo "$HOME/.moon/bin" >> $GITHUB_PATH
-
-      - name: install on windows
-        if: ${{ matrix.os.name == 'windows-latest' }}
-        run: |
-          Set-ExecutionPolicy RemoteSigned -Scope CurrentUser; irm https://cli.moonbitlang.com/install/powershell.ps1 | iex
-          "C:\Users\runneradmin\.moon\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: install pinned MoonBit
+        uses: hustcer/setup-moonbit@9199da0ab63ea0c0bab1dc15f03d76e17ed4f75f # v1.22
+        with:
+          version: ${{ env.MOONBIT_VERSION }}
+          core-version: ${{ env.MOONBIT_CORE_VERSION }}
 
       - name: moon version
         run: |
@@ -42,13 +52,20 @@ jobs:
       - name: moon check
         run: |
           moon update
-          moon check
+          moon check --target all --warn-list +73 --deny-warn
 
       - name: moon info and moon fmt
+        shell: bash
         run: |
           moon info
           moon fmt
           git diff --exit-code
+          untracked_mbti="$(git ls-files --others --exclude-standard -- pkg.generated.mbti ':(glob)**/pkg.generated.mbti')"
+          if [ -n "$untracked_mbti" ]; then
+            echo "moon info generated untracked interface files:"
+            printf '%s\n' "$untracked_mbti"
+            exit 1
+          fi
 
       - name: moon test
         env:
@@ -62,3 +79,21 @@ jobs:
           moon test --target js --release
           moon test --target native
           moon test --target native --release
+
+      - name: coverage gate
+        if: ${{ matrix.os.name == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          coverage_file="$RUNNER_TEMP/flate-coverage.txt"
+          moon coverage clean
+          moon test --target native --enable-coverage --no-parallelize \
+            --warn-list +73 --deny-warn
+          moon coverage report -- -f summary | tee "$coverage_file"
+          awk -v minimum="$MIN_COVERAGE_PERCENT" '
+            /^Total:/ {
+              split($2, counts, "/")
+              found = 1
+              if (100 * counts[1] / counts[2] < minimum) exit 1
+            }
+            END { if (!found) exit 1 }
+          ' "$coverage_file"

@@ -196,31 +196,14 @@ fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
       self.clbits[i] = x
       i = i + 1
     } else {
-      let mut rep = 0
-      let mut extra_bits = 0
-      let mut repeat_val = 0
-      if x == 16 {
-        if i == 0 {
-          raise InflateError("corrupt: repeat with no previous length")
-        }
-        rep = 3
-        extra_bits = 2
-        repeat_val = self.clbits[i - 1]
-      } else if x == 17 {
-        rep = 3
-        extra_bits = 3
-      } else if x == 18 {
-        rep = 11
-        extra_bits = 7
-      } else {
-        raise InflateError("corrupt: bad code-length symbol")
-      }
-      rep = rep + self.read_bits(extra_bits)
+      let previous = if i == 0 { None } else { Some(self.clbits[i - 1]) }
+      let repeat = interpret_code_length_repeat(x, previous)
+      let rep = repeat.base + self.read_bits(repeat.extra_bits)
       if i + rep > n {
         raise InflateError("corrupt: code-length repeat overflow")
       }
       for _j in 0..<rep {
-        self.clbits[i] = repeat_val
+        self.clbits[i] = repeat.value
         i = i + 1
       }
     }
@@ -258,7 +241,11 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
 }
 
 ///|
-/// Decompress a complete raw DEFLATE stream held entirely in memory
+/// Decompress a raw DEFLATE stream held entirely in memory. Bytes after the
+/// final block are ignored; use streaming `Inflater::step` and its `consumed`
+/// count when an exact framing boundary is required. The output grows without
+/// bound; for untrusted input use `Inflater` with caller-sized output buffers
+/// and an application-level decoded-size limit.
 pub fn inflate_all(input : Bytes) -> Bytes raise InflateError {
   let d = MemDecoder::new(input)
   d.run()

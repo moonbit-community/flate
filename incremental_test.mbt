@@ -41,7 +41,7 @@ fn deflate_1b(data : Bytes, level : Int) -> Bytes {
     if p == 1 {
       comp.write_byte(ob[0])
     }
-    if st is @flate.Done {
+    if st is Done {
       break
     }
   }
@@ -49,34 +49,27 @@ fn deflate_1b(data : Bytes, level : Int) -> Bytes {
 }
 
 ///|
-/// Decompress with a one-byte output and a GROWING input window: the visible
-/// input grows one byte at a time only when the engine asks for more
-/// (`NeedMoreInput`). A fixed one-byte *sliding* window would deadlock, because
-/// a unit (e.g. a stored-block header) may need several bytes visible at once
-/// and the engine rewinds, consuming nothing, until they are — exactly the
-/// "feed 1 byte, grow by 1 if not enough" contract.
+/// Decompress with non-overlapping one-byte input and output chunks. Incomplete
+/// atomic units are retained inside Inflater, so every consumed byte is fed
+/// exactly once; no growing replay window is required.
 fn inflate_1b(comp : Bytes) -> Bytes raise {
   let inf = @flate.Inflater::new()
   let out = Buffer()
   let ob = FixedArray::make(1, b'\x00')
   let n = comp.length()
-  let mut consumed = 0 // bytes the engine has permanently taken
-  let mut avail = 0 // bytes released to the engine so far (window end)
+  let mut consumed = 0
   for ;; {
-    let (st, c, p) = inf.step(comp[consumed:avail], ob.mut_view())
+    let endi = if consumed < n { consumed + 1 } else { consumed }
+    let (st, c, p) = inf.step(comp[consumed:endi], ob.mut_view(), end=endi == n)
     consumed = consumed + c
     if p == 1 {
       out.write_byte(ob[0])
     }
-    if st is @flate.Done {
+    if st is Done {
       break
     }
-    if st is @flate.NeedMoreInput {
-      if avail < n {
-        avail = avail + 1 // release one more byte and retry the unit
-      } else {
-        break // all input visible but stream not done => truncated
-      }
+    if st is NeedMoreInput {
+      assert_true(consumed < n)
     }
     // NeedMoreOutput: drained one byte; loop to drain the next.
   }

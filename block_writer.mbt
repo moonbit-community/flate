@@ -11,6 +11,18 @@ priv struct CodeLenSym {
 }
 
 ///|
+/// Number of stored blocks required for `byte_len` bytes. An empty range still
+/// needs one block, while every non-empty exact 65535-byte multiple ends in its
+/// last full block rather than requiring a second empty block.
+fn stored_block_count(byte_len : Int) -> Int {
+  if byte_len == 0 {
+    1
+  } else {
+    (byte_len - 1) / 65535 + 1
+  }
+}
+
+///|
 /// Run-length-encode the concatenated literal/length and distance code lengths
 /// into code-length symbols (RFC 1951 §3.2.7), using 16/17/18.
 fn build_codelen_syms(
@@ -149,7 +161,7 @@ fn emit_block(
   // Stored: ~5 bytes of framing per 65535-byte chunk, data verbatim. This is
   // the fallback that caps worst-case expansion on incompressible data.
   let len = end - start
-  let stored_bits = 8 * (len + 5 * (len / 65535 + 1))
+  let stored_bits = 8 * (len + 5 * stored_block_count(len))
   let dyn_total = dyn_hdr_bits + dyn_sym_bits + extra_bits
   let fixed_total = fixed_sym_bits + extra_bits
   if stored_bits < dyn_total && stored_bits < fixed_total {
@@ -232,7 +244,11 @@ fn write_stored(
     let n = end - p
     let chunk = if n < 65535 { n } else { 65535 }
     let last = p + chunk == end
-    w.write_bit(if is_final && last { 1 } else { 0 }) // BFINAL
+    if is_final && last {
+      w.write_bit(1) // BFINAL
+    } else {
+      w.write_bit(0)
+    }
     w.write_bits(0, 2) // BTYPE = 00 (stored)
     w.flush() // stored blocks are byte-aligned
     let nlen = chunk ^ 0xFFFF

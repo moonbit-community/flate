@@ -116,3 +116,100 @@ test "Deflater emits multiple blocks for a large input and round-trips" {
   assert_true(compressed.length() < data.length() / 4)
   assert_eq(@flate.inflate_all(compressed), data)
 }
+
+///|
+/// A final-input request is accepted only after older output is drained. The
+/// caller re-presents an unconsumed suffix with `end=true`; once accepted, the
+/// request remains sticky and later protocol input is left untouched.
+test "Deflater finalization preserves unconsumed input under backpressure" {
+  let prefix = Bytes::from_array(Array::make(17000, b'\x5A'))
+  let final_input = b"terminal-state payload"
+  let after_end = b"belongs to the next protocol state"
+  let def = @flate.Deflater::new(level=0)
+  let no_output = FixedArray::make(0, b'\x00')
+  let compressed = Buffer()
+  let (prefix_status, prefix_consumed, prefix_produced) = def.step(
+    prefix[:],
+    no_output.mut_view(),
+  )
+  assert_true(prefix_status is NeedMoreOutput)
+  assert_true(prefix_consumed < prefix.length())
+  assert_eq(prefix_produced, 0)
+  let obuf = FixedArray::make(257, b'\x00')
+  let mut prefix_pos = prefix_consumed
+  for ;; {
+    let (status, consumed, produced) = def.step(
+      prefix[prefix_pos:],
+      obuf.mut_view(),
+    )
+    prefix_pos = prefix_pos + consumed
+    for i in 0..<produced {
+      compressed.write_byte(obuf[i])
+    }
+    if prefix_pos == prefix.length() && status is NeedMoreInput {
+      break
+    }
+  }
+  // Queue a sync-flush marker without output room so final input first meets
+  // older compressed output and must remain wholly unconsumed.
+  let (flush_status, _, _) = def.step(b""[:], no_output.mut_view(), flush=true)
+  assert_true(flush_status is NeedMoreOutput)
+  let (first_status, first_consumed, first_produced) = def.step(
+    final_input[:],
+    no_output.mut_view(),
+    end=true,
+  )
+  assert_true(first_status is NeedMoreOutput)
+  assert_eq(first_consumed, 0)
+  assert_eq(first_produced, 0)
+  let mut drain_calls = 0
+  let mut final_pos = 0
+  for ;; {
+    let view = if final_pos < final_input.length() {
+      final_input[final_pos:]
+    } else {
+      after_end[:]
+    }
+    let (status, consumed, produced) = def.step(
+      view,
+      obuf.mut_view(),
+      end=final_pos < final_input.length(),
+    )
+    if final_pos < final_input.length() {
+      final_pos = final_pos + consumed
+    } else {
+      assert_eq(consumed, 0)
+    }
+    for i in 0..<produced {
+      compressed.write_byte(obuf[i])
+    }
+    drain_calls = drain_calls + 1
+    if status is Done {
+      break
+    }
+    assert_true(status is NeedMoreOutput)
+  }
+  assert_true(drain_calls > 1)
+  assert_eq(final_pos, final_input.length())
+  assert_true(def.is_finished())
+  let expected = Buffer()
+  for byte in prefix {
+    expected.write_byte(byte)
+  }
+  for byte in final_input {
+    expected.write_byte(byte)
+  }
+  assert_eq(@flate.inflate_all(compressed.to_bytes()), expected.to_bytes())
+  let sentinel = FixedArray::make(4, b'\xA5')
+  let (done_status, done_consumed, done_produced) = def.step(
+    after_end[:],
+    sentinel.mut_view(),
+    flush=true,
+  )
+  assert_true(done_status is Done)
+  assert_eq(done_consumed, 0)
+  assert_eq(done_produced, 0)
+  for byte in sentinel {
+    assert_eq(byte, b'\xA5')
+  }
+}

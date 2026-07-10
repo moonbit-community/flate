@@ -249,7 +249,7 @@ test "Deflater sync flush makes the prefix decodable" {
   let enc = @flate.Deflater::new()
   let obuf = FixedArray::make(4096, b'\x00')
   let (st1, c1, p1) = enc.step(part1[:], obuf.mut_view(), flush=true)
-  assert_true(st1 is @flate.NeedMoreInput)
+  assert_true(st1 is NeedMoreInput)
   assert_eq(c1, part1.length())
   // zlib sync-flush signature: the flushed bytes end with 00 00 FF FF.
   assert_true(p1 >= 4)
@@ -257,6 +257,15 @@ test "Deflater sync flush makes the prefix decodable" {
   assert_eq(obuf[p1 - 3], b'\x00')
   assert_eq(obuf[p1 - 2], b'\xFF')
   assert_eq(obuf[p1 - 1], b'\xFF')
+  // Repeating the same request without new input is idempotent.
+  let (repeat_status, repeat_consumed, repeat_produced) = enc.step(
+    b""[:],
+    obuf.mut_view(),
+    flush=true,
+  )
+  assert_true(repeat_status is NeedMoreInput)
+  assert_eq(repeat_consumed, 0)
+  assert_eq(repeat_produced, 0)
   // The prefix alone already decodes to part1 (stream not finished).
   let prefix : Array[Byte] = []
   for i in 0..<p1 {
@@ -265,7 +274,7 @@ test "Deflater sync flush makes the prefix decodable" {
   let inf = @flate.Inflater::new()
   let dbuf = FixedArray::make(4096, b'\x00')
   let (dst, _dc, dp) = inf.step(Bytes::from_array(prefix)[:], dbuf.mut_view())
-  assert_true(dst is @flate.NeedMoreInput)
+  assert_true(dst is NeedMoreInput)
   let got : Array[Byte] = []
   for i in 0..<dp {
     got.push(dbuf[i])
@@ -284,7 +293,7 @@ test "Deflater sync flush makes the prefix decodable" {
     for i in 0..<p {
       out.write_byte(obuf[i])
     }
-    if st is @flate.Done {
+    if st is Done {
       break
     }
   }
@@ -296,6 +305,64 @@ test "Deflater sync flush makes the prefix decodable" {
     full.push(b)
   }
   assert_eq(@flate.inflate_all(out.to_bytes()), Bytes::from_array(full))
+}
+
+///|
+/// A one-shot flush request can arrive while an earlier block is still waiting
+/// for output space. It must remain pending even when later drain calls no
+/// longer pass `flush=true`.
+test "Deflater latches sync flush across output backpressure" {
+  // Exactly one internal high-water window: the whole view is accepted, then
+  // its stored block is backpressured before the empty flush request arrives.
+  let src = Bytes::from_array(Array::make(16642, b'\x5A'))
+  let enc = @flate.Deflater::new(level=0)
+  let no_output = FixedArray::make(0, b'\x00')
+  let (initial_status, initial_consumed, initial_produced) = enc.step(
+    src[:],
+    no_output.mut_view(),
+  )
+  assert_true(initial_status is NeedMoreOutput)
+  assert_eq(initial_consumed, src.length())
+  assert_eq(initial_produced, 0)
+  let (flush_status, flush_consumed, flush_produced) = enc.step(
+    b""[:],
+    no_output.mut_view(),
+    flush=true,
+  )
+  assert_true(flush_status is NeedMoreOutput)
+  assert_eq(flush_consumed, 0)
+  assert_eq(flush_produced, 0)
+  let obuf = FixedArray::make(257, b'\x00')
+  let prefix = Buffer()
+  for ;; {
+    let (status, consumed, produced) = enc.step(b""[:], obuf.mut_view())
+    assert_eq(consumed, 0)
+    for i in 0..<produced {
+      prefix.write_byte(obuf[i])
+    }
+    if status is NeedMoreInput {
+      break
+    }
+    assert_true(status is NeedMoreOutput)
+  }
+  let flushed = prefix.to_bytes()
+  assert_true(flushed.length() >= 4)
+  assert_eq(flushed[flushed.length() - 4], b'\x00')
+  assert_eq(flushed[flushed.length() - 3], b'\x00')
+  assert_eq(flushed[flushed.length() - 2], b'\xFF')
+  assert_eq(flushed[flushed.length() - 1], b'\xFF')
+  let inf = @flate.Inflater::new()
+  let decoded = FixedArray::make(18000, b'\x00')
+  let (decode_status, decode_consumed, decode_produced) = inf.step(
+    flushed[:],
+    decoded.mut_view(),
+  )
+  assert_true(decode_status is NeedMoreInput)
+  assert_eq(decode_consumed, flushed.length())
+  assert_eq(decode_produced, src.length())
+  for i in 0..<src.length() {
+    assert_eq(decoded[i], src[i])
+  }
 }
 
 // ---- compression levels + reset ----
@@ -333,10 +400,10 @@ test "reset reuses engines across streams" {
   let d = @flate.Deflater::new()
   let obuf = FixedArray::make(4096, b'\x00')
   let (st1, _, _) = d.step(s1[:], obuf.mut_view(), end=true)
-  assert_true(st1 is @flate.Done)
+  assert_true(st1 is Done)
   d.reset()
   let (st2, _, p2) = d.step(s2[:], obuf.mut_view(), end=true)
-  assert_true(st2 is @flate.Done)
+  assert_true(st2 is Done)
   let reused : Array[Byte] = []
   for i in 0..<p2 {
     reused.push(obuf[i])
@@ -345,7 +412,7 @@ test "reset reuses engines across streams" {
   let inf = @flate.Inflater::new()
   let dbuf = FixedArray::make(4096, b'\x00')
   let (ist1, _, ip1) = inf.step(@flate.deflate_all(s1)[:], dbuf.mut_view())
-  assert_true(ist1 is @flate.Done)
+  assert_true(ist1 is Done)
   let got1 : Array[Byte] = []
   for i in 0..<ip1 {
     got1.push(dbuf[i])
@@ -353,7 +420,7 @@ test "reset reuses engines across streams" {
   assert_eq(Bytes::from_array(got1), s1)
   inf.reset()
   let (ist2, _, ip2) = inf.step(@flate.deflate_all(s2)[:], dbuf.mut_view())
-  assert_true(ist2 is @flate.Done)
+  assert_true(ist2 is Done)
   let got2 : Array[Byte] = []
   for i in 0..<ip2 {
     got2.push(dbuf[i])
@@ -372,7 +439,7 @@ test "preset dictionary: raw deflate round-trip" {
   d.set_dictionary(dict[:])
   let obuf = FixedArray::make(4096, b'\x00')
   let (st, _, p) = d.step(msg[:], obuf.mut_view(), end=true)
-  assert_true(st is @flate.Done)
+  assert_true(st is Done)
   let comp : Array[Byte] = []
   for i in 0..<p {
     comp.push(obuf[i])
@@ -385,7 +452,7 @@ test "preset dictionary: raw deflate round-trip" {
   inf.set_dictionary(dict[:])
   let dbuf = FixedArray::make(4096, b'\x00')
   let (ist, _, ip) = inf.step(compressed[:], dbuf.mut_view())
-  assert_true(ist is @flate.Done)
+  assert_true(ist is Done)
   let got : Array[Byte] = []
   for i in 0..<ip {
     got.push(dbuf[i])
@@ -396,8 +463,7 @@ test "preset dictionary: raw deflate round-trip" {
   try {
     let _ = inf2.step(compressed[:], dbuf.mut_view())
   } catch {
-    @flate.InflateError(_) => ()
-    _ => fail("expected an InflateError")
+    InflateError(_) => ()
   } noraise {
     _ => fail("expected the dictionary-less decode to fail")
   }

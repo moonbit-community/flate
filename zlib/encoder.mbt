@@ -27,6 +27,7 @@ pub struct Encoder {
   priv mut stage : FixedArray[Byte]
   priv mut stage_pos : Int
   priv mut ending : Bool
+  priv mut flushing : Bool // latched until the inner sync flush is drained
 }
 
 ///|
@@ -60,6 +61,7 @@ pub fn Encoder::new(level? : Int = 6, dictionary? : Bytes) -> Encoder {
     stage,
     stage_pos: 0,
     ending: false,
+    flushing: false,
   }
 }
 
@@ -82,11 +84,12 @@ fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
 }
 
 ///|
-/// Run one compression step. Buffers `input` (folding it into the running
-/// Adler-32), then drains zlib output into the mutable view `output`. Returns
-/// `(status, consumed, produced)`; `consumed` is always the whole input view.
-/// Pass `end=true` to finalize and keep calling while it returns
-/// `NeedMoreOutput` to drain the rest.
+/// Run one compression step. Accepts a bounded prefix of `input`, folds only
+/// that prefix into Adler-32, then drains zlib output into `output`. Drop only
+/// `input[:consumed]`: a large view may be partially consumed under output
+/// backpressure. Re-present its suffix with the same `end=true` or `flush=true`
+/// request; once the complete view is accepted, the request remains sticky.
+/// Later input is left unconsumed while the finished stream is drained.
 pub fn Encoder::step(
   self : Encoder,
   input : BytesView,
@@ -94,17 +97,32 @@ pub fn Encoder::step(
   end? : Bool = false,
   flush? : Bool = false,
 ) -> (@flate.Status, Int, Int) {
-  if input.length() > 0 {
-    self.adler.update(input)
-    let scratch = FixedArray::make(0, b'\x00').mut_view()
-    let _ = self.def.step(input, scratch)
+  // A terminal encoder must not claim or checksum input that cannot become
+  // part of the already-finished stream.
+  if self.mode is Finished {
+    return (Done, 0, 0)
   }
-  if end {
-    self.ending = true
+  let mut consumed = 0
+  if !self.ending {
+    let scratch = FixedArray::make(0, b'\x00').mut_view()
+    let (_, accepted, _) = self.def.step(input, scratch, end~, flush~)
+    consumed = accepted
+    if accepted > 0 {
+      self.adler.update(input[:accepted])
+    }
+    if accepted == input.length() {
+      if end {
+        self.ending = true
+      }
+      if flush {
+        // Header/trailer backpressure may postpone entry into Body to a later
+        // call, so the request must outlive this call's optional argument.
+        self.flushing = true
+      }
+    }
   }
   let out_end = output.length()
   let mut op = 0
-  let consumed = input.length()
   for ;; {
     match self.mode {
       Header | Trailer => {
@@ -123,15 +141,19 @@ pub fn Encoder::step(
           b""[:],
           output.mut_view(start=op),
           end=self.ending,
-          flush~,
+          flush=self.flushing,
         )
         op = op + p
         if st is NeedMoreInput {
+          // Deflater returns NeedMoreInput only after a requested sync flush
+          // (including its marker) has been fully emitted.
+          self.flushing = false
           return (NeedMoreInput, consumed, op)
         }
         if st is NeedMoreOutput {
           return (NeedMoreOutput, consumed, op)
         }
+        self.flushing = false
         self.stage = self.build_trailer()
         self.stage_pos = 0
         self.mode = Trailer
