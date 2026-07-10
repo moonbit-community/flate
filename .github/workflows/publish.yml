@@ -59,6 +59,10 @@ jobs:
           moon coverage clean
           moon test --target native --enable-coverage --no-parallelize \
             --warn-list +73 --deny-warn
+          # Merge the scalar fallback selected by JS with the SIMD path
+          # selected by native; both are mutually exclusive source variants.
+          moon test --target js --enable-coverage --no-parallelize \
+            --warn-list +73 --deny-warn
           moon coverage report -- -f summary | tee "$coverage_file"
           awk -v minimum="$MIN_COVERAGE_PERCENT" '
             /^Total:/ {
