@@ -28,7 +28,7 @@ let deflate_block_size = 16384
 
 ///|
 /// Streaming DEFLATE compressor : a push-based, suspendable state
-/// machine. It emits the stream block-by-block as input arrives , and chooses fixed- or dynamic-Huffman per block.
+/// machine. It emits the stream block-by-block as input arrives, and chooses fixed- or dynamic-Huffman per block.
 pub struct Deflater {
   priv mut pending : Array[Byte] // carried window history + un-emitted input
   priv mut window_carry : Int // leading history-only bytes in `pending`

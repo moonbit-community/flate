@@ -15,7 +15,7 @@ let min_lookahead = 258
 
 ///|
 /// Trim `pending` so at most a 32 KB window of already-processed bytes remains
-/// as history , and reset `window_carry`.
+/// as history, and reset `window_carry`.
 fn Deflater::trim_window(self : Deflater, processed : Int) -> Unit {
   let newstart = if processed > window_size {
     processed - window_size
@@ -36,7 +36,7 @@ fn Deflater::trim_window(self : Deflater, processed : Int) -> Unit {
 /// Emit one non-final block covering at most `deflate_block_size` tokenizable
 /// bytes (plus up to 257 bytes of match overhang), then trim `pending` back to
 /// a 32 KB history window. The caller guarantees enough input is present for
-/// matches at the boundary to see their full extent .
+/// matches at the boundary to see their full extent.
 fn Deflater::emit_capped(self : Deflater) -> Unit {
   let data = Bytes::from_array(self.pending)
   let cap = self.window_carry + deflate_block_size

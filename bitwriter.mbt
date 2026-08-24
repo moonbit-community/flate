@@ -48,7 +48,8 @@ fn BitWriter::write_rcode(self : BitWriter, code : UInt, n : Int) -> Unit {
 
 ///|
 /// Pad any sub-byte remainder in `bitbuf` out to a whole byte (zero-filling the
-/// high bits) and emit it, it is only valid at the very end of a stream
+/// high bits) and emit it. Required before a byte-aligned stored block and at
+/// the very end of a stream
 fn BitWriter::flush(self : BitWriter) -> Unit {
   if self.bit_count > 0 {
     self.out.push((self.bitbuf & 0xFF).to_byte())

@@ -20,7 +20,7 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
   let cfg = level_configs[lv]
   // Each non-final block covers up to `deflate_block_size` tokenizable bytes; a
   // boundary match may overhang, so `processed` (not `target`) sets the next
-  // start. 
+  // start.
   let mut pos = 0
   for ;; {
     let target = if pos + deflate_block_size < n {
