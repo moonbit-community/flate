@@ -119,7 +119,7 @@ fn inflate_differential_stream_bytes(
     steps = steps + 1
     if steps > 1000000 {
       fail(
-        "streaming differential driver stalled: schedule_seed=\{to_repr(schedule_seed)}, input_length=\{input.length()}",
+        "streaming differential driver stalled: schedule_seed=\{Repr(schedule_seed)}, input_length=\{input.length()}",
       )
     }
     match status {
@@ -159,7 +159,7 @@ fn inflate_differential_compare(
   )
   if one_shot != streaming {
     fail(
-      "inflate differential mismatch: corpus=\{corpus}, schedule_seed=\{to_repr(schedule_seed)}, input_length=\{input.length()}, one_shot=\{to_repr(one_shot)}, streaming=\{to_repr(streaming)}",
+      "inflate differential mismatch: corpus=\{corpus}, schedule_seed=\{Repr(schedule_seed)}, input_length=\{input.length()}, one_shot=\{Repr(one_shot)}, streaming=\{Repr(streaming)}",
     )
   }
 }
@@ -186,7 +186,7 @@ test "inflate_all and streaming Inflater agree under deterministic fuzz" {
       let one_shot = inflate_differential_one_shot(compressed)
       if one_shot != expected {
         fail(
-          "valid differential corpus failed: corpus=\{corpus}, expected=\{to_repr(expected)}, one_shot=\{to_repr(one_shot)}",
+          "valid differential corpus failed: corpus=\{corpus}, expected=\{Repr(expected)}, one_shot=\{Repr(one_shot)}",
         )
       }
 
@@ -264,7 +264,7 @@ test "inflate_all and streaming Inflater agree on deterministic raw noise" {
     inflate_differential_compare(
       input,
       schedule_seed,
-      "raw-noise-\{case_index}/seed-\{to_repr(corpus_seed)}",
+      "raw-noise-\{case_index}/seed-\{Repr(corpus_seed)}",
       false,
     )
   }

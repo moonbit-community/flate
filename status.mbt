@@ -13,6 +13,9 @@ pub(all) enum Status {
   NeedMoreOutput
 } derive(Eq, Debug)
 
+pub extend Status with Eq::{not_equal, equal}
+pub extend Status with Debug::{to_repr}
+
 ///|
 /// Requested action for one streaming compression step.
 ///
@@ -28,3 +31,6 @@ pub(all) enum DeflateAction {
   /// Finish the DEFLATE stream after all input in this view has been accepted.
   Finish
 } derive(Eq, Debug)
+
+pub extend DeflateAction with Eq::{not_equal, equal}
+pub extend DeflateAction with Debug::{to_repr}

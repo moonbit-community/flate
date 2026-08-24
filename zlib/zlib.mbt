@@ -21,6 +21,9 @@ pub(all) enum ZlibErrorKind {
   TrailingData
 } derive(Eq, Debug)
 
+pub extend ZlibErrorKind with Eq::{not_equal, equal}
+pub extend ZlibErrorKind with Debug::{to_repr}
+
 ///|
 /// Structured zlib decoding failure: a stable category plus a human-readable
 /// diagnostic.
