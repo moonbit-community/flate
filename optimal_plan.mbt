@@ -20,8 +20,10 @@ let optimal_max_blocks = 15
 
 ///|
 /// Exact cost in bits of one block (3-bit header included): the cheapest of
-/// stored / fixed / dynamic, mirroring `emit_block`'s accounting. Judges both
-/// split candidates and squeeze iterations.
+/// stored / fixed / dynamic, mirroring `emit_block`'s choice. Judges both
+/// split candidates and squeeze iterations. Delegates the accounting to the
+/// shared `build_dynamic_codes` + `estimate_block_cost` pair, so the planner
+/// can never drift from what the writer actually emits.
 fn block_cost_bits(
   byte_len : Int,
   ll_freq_in : Array[Int],
@@ -32,73 +34,14 @@ fn block_cost_bits(
     ll_freq[s] = ll_freq_in[s]
   }
   ll_freq[256] += 1
-  let dll_len = Array::make(286, 0)
-  gen_huffman(ll_freq, 286, 15, dll_len)
-  let dd_len = Array::make(30, 0)
-  gen_huffman(d_freq, 30, 15, dd_len)
-  let mut have_dist = false
-  for d in 0..<30 {
-    if dd_len[d] > 0 {
-      have_dist = true
-      break
-    }
+  let codes = build_dynamic_codes(ll_freq, d_freq)
+  let cost = estimate_block_cost(codes, byte_len, ll_freq, d_freq)
+  let mut best = cost.stored
+  if cost.fixed < best {
+    best = cost.fixed
   }
-  if !have_dist {
-    dd_len[0] = 1
-  }
-  let mut hlit = 286
-  while hlit > 257 && dll_len[hlit - 1] == 0 {
-    hlit = hlit - 1
-  }
-  let mut hdist = 30
-  while hdist > 1 && dd_len[hdist - 1] == 0 {
-    hdist = hdist - 1
-  }
-  let codelen_syms = build_codelen_syms(dll_len, hlit, dd_len, hdist)
-  let codelen_freq = Array::make(19, 0)
-  for it in codelen_syms {
-    codelen_freq[it.sym] += 1
-  }
-  let codelen_code_len = Array::make(19, 0)
-  gen_huffman(codelen_freq, 19, 7, codelen_code_len)
-  let mut hclen = 19
-  while hclen > 4 && codelen_code_len[code_order[hclen - 1]] == 0 {
-    hclen = hclen - 1
-  }
-  let mut dyn_sym = 0
-  let mut fixed_sym = 0
-  for s in 0..<286 {
-    if ll_freq[s] != 0 {
-      dyn_sym = dyn_sym + ll_freq[s] * dll_len[s]
-      fixed_sym = fixed_sym + ll_freq[s] * (fixed_litlen_info[s] & 0xF)
-    }
-  }
-  for d in 0..<30 {
-    if d_freq[d] != 0 {
-      dyn_sym = dyn_sym + d_freq[d] * dd_len[d]
-      fixed_sym = fixed_sym + d_freq[d] * 5
-    }
-  }
-  let mut extra = 0
-  for i in 0..<29 {
-    extra = extra + ll_freq[257 + i] * len_extra[i]
-  }
-  for d in 0..<30 {
-    extra = extra + d_freq[d] * dist_extra[d]
-  }
-  let mut dyn_hdr = 14 + 3 * hclen
-  for it in codelen_syms {
-    dyn_hdr = dyn_hdr + codelen_code_len[it.sym] + it.nextra
-  }
-  let stored = 8 * (byte_len + 5 * stored_block_count(byte_len))
-  let dynamic = 3 + dyn_hdr + dyn_sym + extra
-  let fixed = 3 + fixed_sym + extra
-  let mut best = stored
-  if fixed < best {
-    best = fixed
-  }
-  if dynamic < best {
-    best = dynamic
+  if cost.dynamic < best {
+    best = cost.dynamic
   }
   best
 }

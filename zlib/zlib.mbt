@@ -21,7 +21,10 @@ pub(all) enum ZlibErrorKind {
   TrailingData
 } derive(Eq, Debug)
 
+///|
 pub extend ZlibErrorKind with Eq::{not_equal, equal}
+
+///|
 pub extend ZlibErrorKind with Debug::{to_repr}
 
 ///|

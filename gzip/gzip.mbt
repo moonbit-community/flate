@@ -17,7 +17,10 @@ pub(all) enum GzipErrorKind {
   LengthMismatch
 } derive(Eq, Debug)
 
+///|
 pub extend GzipErrorKind with Eq::{not_equal, equal}
+
+///|
 pub extend GzipErrorKind with Debug::{to_repr}
 
 ///|

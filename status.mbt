@@ -13,7 +13,10 @@ pub(all) enum Status {
   NeedMoreOutput
 } derive(Eq, Debug)
 
+///|
 pub extend Status with Eq::{not_equal, equal}
+
+///|
 pub extend Status with Debug::{to_repr}
 
 ///|
@@ -32,5 +35,8 @@ pub(all) enum DeflateAction {
   Finish
 } derive(Eq, Debug)
 
+///|
 pub extend DeflateAction with Eq::{not_equal, equal}
+
+///|
 pub extend DeflateAction with Debug::{to_repr}

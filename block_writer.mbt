@@ -81,25 +81,38 @@ fn build_codelen_syms(
 }
 
 ///|
-/// Write one DEFLATE block for `tokens` into `w`, choosing stored, fixed- or
-/// dynamic-Huffman by estimated size. `data[start:end)` is the raw input the
-/// tokens cover, copied verbatim when the stored encoding wins (incompressible
-/// data). `is_final` sets the BFINAL bit. Counts the end-of-block symbol into
-/// `ll_freq` itself. Does not flush `w`: the bit stream continues into the
-/// next block, so the caller flushes once, after the final block.
-fn emit_block(
-  w : BitWriter,
-  data : Bytes,
-  start : Int,
-  end : Int,
-  tokens : ArrayView[Int],
+/// Exact bit cost of each candidate encoding for one block, 3-bit block
+/// header included.
+priv struct BlockCost {
+  stored : Int
+  fixed : Int
+  dynamic : Int
+}
+
+///|
+/// Code tables of one dynamic-Huffman block, built once and shared between
+/// cost estimation and `emit_block`'s write path so both always see the same
+/// `hlit`/`hdist`/`hclen`, code lengths, and code words.
+priv struct DynamicCodes {
+  dll_len : Array[Int]
+  dll_val : Array[UInt]
+  dd_len : Array[Int]
+  dd_val : Array[UInt]
+  hlit : Int
+  hdist : Int
+  codelen_syms : Array[CodeLenSym]
+  codelen_code_len : Array[Int]
+  codelen_code_val : Array[UInt]
+  hclen : Int
+}
+
+///|
+/// Build the dynamic-Huffman code tables for one block from its symbol
+/// frequencies. `ll_freq` must already include the end-of-block symbol.
+fn build_dynamic_codes(
   ll_freq : Array[Int],
   d_freq : Array[Int],
-  is_final~ : Bool,
-) -> Unit {
-  ll_freq[256] += 1 // end-of-block
-
-  // Build dynamic codes.
+) -> DynamicCodes {
   let dll_len = Array::make(286, 0)
   let dll_val = Array::make(286, 0U)
   gen_huffman(ll_freq, 286, 15, dll_len, code_val=dll_val)
@@ -136,21 +149,45 @@ fn emit_block(
   while hclen > 4 && codelen_code_len[code_order[hclen - 1]] == 0 {
     hclen = hclen - 1
   }
+  {
+    dll_len,
+    dll_val,
+    dd_len,
+    dd_val,
+    hlit,
+    hdist,
+    codelen_syms,
+    codelen_code_len,
+    codelen_code_val,
+    hclen,
+  }
+}
 
-  // Estimate all three encodings. Length/distance extra bits are shared by
-  // fixed and dynamic but absent from stored, so they join the comparison.
+///|
+/// Exact bit cost of each candidate encoding for one block of `byte_len`
+/// input bytes. `ll_freq` must already include the end-of-block symbol.
+/// Shared by `emit_block`'s encoding choice and the optimal planner's split
+/// decisions, so both always use the same accounting.
+fn estimate_block_cost(
+  codes : DynamicCodes,
+  byte_len : Int,
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> BlockCost {
+  // Length/distance extra bits are shared by fixed and dynamic but absent
+  // from stored, so they join the comparison.
   let mut dyn_sym_bits = 0
   let mut fixed_sym_bits = 0
   for s in 0..<286 {
     if ll_freq[s] != 0 {
-      dyn_sym_bits = dyn_sym_bits + ll_freq[s] * dll_len[s]
+      dyn_sym_bits = dyn_sym_bits + ll_freq[s] * codes.dll_len[s]
       fixed_sym_bits = fixed_sym_bits +
         ll_freq[s] * (fixed_litlen_info[s] & 0xF)
     }
   }
   for d in 0..<30 {
     if d_freq[d] != 0 {
-      dyn_sym_bits = dyn_sym_bits + d_freq[d] * dd_len[d]
+      dyn_sym_bits = dyn_sym_bits + d_freq[d] * codes.dd_len[d]
       fixed_sym_bits = fixed_sym_bits + d_freq[d] * 5
     }
   }
@@ -161,56 +198,86 @@ fn emit_block(
   for d in 0..<30 {
     extra_bits = extra_bits + d_freq[d] * dist_extra[d]
   }
-  let mut dyn_hdr_bits = 14 + 3 * hclen
-  for it in codelen_syms {
-    dyn_hdr_bits = dyn_hdr_bits + codelen_code_len[it.sym] + it.nextra
+  let mut dyn_hdr_bits = 14 + 3 * codes.hclen
+  for it in codes.codelen_syms {
+    dyn_hdr_bits = dyn_hdr_bits + codes.codelen_code_len[it.sym] + it.nextra
   }
   // Stored: ~5 bytes of framing per 65535-byte chunk, data verbatim. This is
   // the fallback that caps worst-case expansion on incompressible data.
-  let len = end - start
-  let stored_bits = 8 * (len + 5 * stored_block_count(len))
-  let dyn_total = dyn_hdr_bits + dyn_sym_bits + extra_bits
-  let fixed_total = fixed_sym_bits + extra_bits
-  if stored_bits < dyn_total && stored_bits < fixed_total {
+  let stored_bits = 8 * (byte_len + 5 * stored_block_count(byte_len))
+  {
+    stored: stored_bits,
+    fixed: 3 + fixed_sym_bits + extra_bits,
+    dynamic: 3 + dyn_hdr_bits + dyn_sym_bits + extra_bits,
+  }
+}
+
+///|
+/// Write one DEFLATE block for `tokens` into `w`, choosing stored, fixed- or
+/// dynamic-Huffman by estimated size. `data[start:end)` is the raw input the
+/// tokens cover, copied verbatim when the stored encoding wins (incompressible
+/// data). `is_final` sets the BFINAL bit. Counts the end-of-block symbol into
+/// `ll_freq` itself. Does not flush `w`: the bit stream continues into the
+/// next block, so the caller flushes once, after the final block.
+fn emit_block(
+  w : BitWriter,
+  data : Bytes,
+  start : Int,
+  end : Int,
+  tokens : ArrayView[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+  is_final~ : Bool,
+) -> Unit {
+  ll_freq[256] += 1 // end-of-block
+
+  // Build dynamic codes once, then let the shared accounting choose the
+  // encoding and the write path reuse the same tables.
+  let codes = build_dynamic_codes(ll_freq, d_freq)
+  let cost = estimate_block_cost(codes, end - start, ll_freq, d_freq)
+  if cost.stored < cost.fixed && cost.stored < cost.dynamic {
     write_stored(w, data, start, end, is_final~)
     return
   }
-  let use_dynamic = dyn_total < fixed_total
+  let use_dynamic = cost.dynamic < cost.fixed
   w.write_bit(if is_final { 1 } else { 0 }) // BFINAL
   if use_dynamic {
     w.write_bits(2, 2) // BTYPE = 10 (dynamic)
-    w.write_bits(hlit - 257, 5)
-    w.write_bits(hdist - 1, 5)
-    w.write_bits(hclen - 4, 4)
-    for k in 0..<hclen {
-      w.write_bits(codelen_code_len[code_order[k]], 3)
+    w.write_bits(codes.hlit - 257, 5)
+    w.write_bits(codes.hdist - 1, 5)
+    w.write_bits(codes.hclen - 4, 4)
+    for k in 0..<codes.hclen {
+      w.write_bits(codes.codelen_code_len[code_order[k]], 3)
     }
-    for it in codelen_syms {
-      w.write_rcode(codelen_code_val[it.sym], codelen_code_len[it.sym])
+    for it in codes.codelen_syms {
+      w.write_rcode(
+        codes.codelen_code_val[it.sym],
+        codes.codelen_code_len[it.sym],
+      )
       if it.nextra > 0 {
         w.write_bits(it.extra, it.nextra)
       }
     }
     for tok in tokens {
       if tok < 256 {
-        w.write_rcode(dll_val[tok], dll_len[tok])
+        w.write_rcode(codes.dll_val[tok], codes.dll_len[tok])
       } else {
         let length = tok >> 16
         let dist = tok & 0xFFFF
         let lidx = len_to_idx[length]
         let lsym = 257 + lidx
-        w.write_rcode(dll_val[lsym], dll_len[lsym])
+        w.write_rcode(codes.dll_val[lsym], codes.dll_len[lsym])
         if len_extra[lidx] > 0 {
           w.write_bits(length - len_base[lidx], len_extra[lidx])
         }
         let didx = dist_index(dist)
-        w.write_rcode(dd_val[didx], dd_len[didx])
+        w.write_rcode(codes.dd_val[didx], codes.dd_len[didx])
         if dist_extra[didx] > 0 {
           w.write_bits(dist - dist_base[didx], dist_extra[didx])
         }
       }
     }
-    w.write_rcode(dll_val[256], dll_len[256]) // EOB
+    w.write_rcode(codes.dll_val[256], codes.dll_len[256]) // EOB
   } else {
     w.write_bits(1, 2) // BTYPE = 01 (fixed)
     for tok in tokens {

@@ -25,7 +25,10 @@ pub(all) enum InflateErrorKind {
   OutputLimitExceeded
 } derive(Eq, Debug)
 
+///|
 pub extend InflateErrorKind with Eq::{not_equal, equal}
+
+///|
 pub extend InflateErrorKind with Debug::{to_repr}
 
 ///|
