@@ -28,4 +28,3 @@ pub fn Crc32::update_byte(Self, Byte) -> Unit
 // Type aliases
 
 // Traits
-

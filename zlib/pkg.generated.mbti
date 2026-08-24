@@ -47,8 +47,10 @@ pub(all) enum ZlibErrorKind {
   ChecksumMismatch
   TrailingData
 } derive(Eq, @debug.Debug)
+pub fn ZlibErrorKind::equal(Self, Self) -> Bool
+pub fn ZlibErrorKind::not_equal(Self, Self) -> Bool
+pub fn ZlibErrorKind::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 
 // Traits
-

@@ -1,8 +1,6 @@
 name: publish-package
 
 env:
-  MOONBIT_VERSION: 0.10.3+16975d007
-  MOONBIT_CORE_VERSION: 0.10.3+16975d007
   MIN_COVERAGE_PERCENT: 100
 
 on:
@@ -19,11 +17,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: install pinned MoonBit
-        uses: hustcer/setup-moonbit@9199da0ab63ea0c0bab1dc15f03d76e17ed4f75f # v1.22
-        with:
-          version: ${{ env.MOONBIT_VERSION }}
-          core-version: ${{ env.MOONBIT_CORE_VERSION }}
+      - name: install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
       - name: post install
         run: |
