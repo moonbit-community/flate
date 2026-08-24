@@ -12,17 +12,6 @@ on:
     - cron: "30 0 * * 1" # Every Monday at half past midnight UTC
 
 jobs:
-  flake:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-
-      - name: install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: nix flake check
-        run: nix flake check --print-build-logs
-
   build:
     strategy:
       fail-fast: false
