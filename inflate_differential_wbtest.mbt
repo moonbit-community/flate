@@ -11,7 +11,7 @@ priv struct InflateDifferentialRng {
 
 ///|
 fn InflateDifferentialRng::new(seed : UInt) -> InflateDifferentialRng {
-  { state: seed }
+  { state: seed, }
 }
 
 ///|
@@ -267,5 +267,84 @@ test "inflate_all and streaming Inflater agree on deterministic raw noise" {
       "raw-noise-\{case_index}/seed-\{Repr(corpus_seed)}",
       false,
     )
+  }
+}
+
+///|
+fn inflate_differential_exact_kind(
+  input : Bytes,
+  preallocated : Bool,
+) -> InflateErrorKind? {
+  try ignore(inflate_exact(input, preallocated~)) catch {
+    InflateError(kind, _) => Some(kind)
+  } noraise {
+    _ => None
+  }
+}
+
+///|
+/// The preallocated path replays the same deterministic decode, so it must
+/// agree byte-for-byte on valid streams and report the same error kind on
+/// truncated, trailing, and bit-flipped input.
+test "preallocated inflate_exact matches the grow path" {
+  let sources = inflate_differential_sources()
+  for level_index in 0..<4 {
+    let level = [0, 1, 6, 9][level_index]
+    for source_index in 0..<sources.length() {
+      let source = sources[source_index]
+      let compressed = deflate_all(source, level~)
+      let corpus = "source-\{source_index}/level-\{level}"
+      assert_eq(
+        inflate_exact(compressed, preallocated=true),
+        inflate_exact(compressed),
+      )
+      let framed = compressed + b"TAIL"
+      let default_outcome = inflate_differential_exact_kind(framed, false)
+      let preallocated_outcome = inflate_differential_exact_kind(framed, true)
+      if default_outcome != preallocated_outcome {
+        fail(
+          "preallocated vs grow mismatch on trailing corpus: \{corpus}, default=\{Repr(default_outcome)}, preallocated=\{Repr(preallocated_outcome)}",
+        )
+      }
+      let truncation_points = [
+        0,
+        compressed.length() / 2,
+        compressed.length() - 1,
+      ]
+      for mutation_index in 0..<truncation_points.length() {
+        let end = truncation_points[mutation_index]
+        let truncated = compressed[:end].to_owned()
+        let default_outcome = inflate_differential_exact_kind(truncated, false)
+        let preallocated_outcome = inflate_differential_exact_kind(
+          truncated, true,
+        )
+        if default_outcome != preallocated_outcome {
+          fail(
+            "preallocated vs grow mismatch on truncate-\{mutation_index}-at-\{end}: corpus=\{corpus}, default=\{Repr(default_outcome)}, preallocated=\{Repr(preallocated_outcome)}",
+          )
+        }
+      }
+      let flip_positions = [
+        0,
+        compressed.length() / 3,
+        compressed.length() * 2 / 3,
+        compressed.length() - 1,
+      ]
+      for mutation_index in 0..<flip_positions.length() {
+        let position = flip_positions[mutation_index]
+        let bit = (mutation_index * 3 + source_index + level_index) % 8
+        let mask = 1 << bit
+        let mutated = inflate_differential_flip(compressed, position, mask)
+        let default_outcome = inflate_differential_exact_kind(mutated, false)
+        let preallocated_outcome = inflate_differential_exact_kind(
+          mutated, true,
+        )
+        if default_outcome != preallocated_outcome {
+          fail(
+            "preallocated vs grow mismatch on flip-\{mutation_index}-byte-\{position}-bit-\{bit}: corpus=\{corpus}, default=\{Repr(default_outcome)}, preallocated=\{Repr(preallocated_outcome)}",
+          )
+        }
+      }
+    }
   }
 }

@@ -117,14 +117,14 @@ test "Huffman decoder uses its two-level table" {
   let stream9 = Inflater::new()
   stream9.view = code9[:]
   assert_eq(stream9.huff_sym(h), 9)
-  let memory9 = MemDecoder::new(code9)
+  let memory9 = MemDecoder::new(code9, () => false)
   assert_eq(memory9.huff_sym(h), 9)
 
   let code10 : Bytes = [0xFF, 0x03]
   let stream10 = Inflater::new()
   stream10.view = code10[:]
   assert_eq(stream10.huff_sym(h), 10)
-  let memory10 = MemDecoder::new(code10)
+  let memory10 = MemDecoder::new(code10, () => false)
   assert_eq(memory10.huff_sym(h), 10)
 }
 

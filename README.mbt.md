@@ -88,8 +88,13 @@ test "README streaming Deflater" {
   next protocol frame. For an exact one-member gzip boundary, construct the
   decoder with `multistream=false`.
 - Raw failures expose a stable `InflateErrorKind` (`Truncated`, `Corrupt`,
-  `TrailingData`, or `OutputLimitExceeded`) alongside diagnostic text; gzip/zlib
-  similarly expose `GzipErrorKind`/`ZlibErrorKind`.
+  `TrailingData`, `OutputLimitExceeded`, or `Cancelled`) alongside diagnostic
+  text; gzip/zlib similarly expose `GzipErrorKind`/`ZlibErrorKind`.
+- One-shot decoding (`inflate_all`, `inflate_all_limited`, `inflate_exact`)
+  accepts an optional `cancelled` callback, polled at entry and then every
+  ~4-8 KiB of decoded output; returning `true` raises
+  `InflateError(Cancelled, _)`, so untrusted-input loops can react to
+  cancellation without streaming plumbing.
 
 ### Exact and bounded one-shot decoding
 
@@ -108,8 +113,21 @@ test "README exact and limited inflate" {
     @flate.inflate_all_limited(compressed, max_output=source.length()),
     source,
   )
+  assert_eq(
+    @flate.inflate_exact(compressed, max_output=Some(source.length())),
+    source,
+  )
 }
 ```
+
+`inflate_exact` combines exact framing with optional bounds: `max_output` caps
+the decoded size (raising `OutputLimitExceeded` before any oversized result is
+built; negative limits are rejected), and `preallocated=true` replays the
+deterministic decode a second time into one exactly sized allocation. The
+preallocated mode trades roughly double the decode work for a peak memory of
+about one decoded output (instead of a growing buffer plus a final copy), which
+matters for very large single streams. The default stays single-pass for
+callers that do not need the memory bound.
 
 ## Architecture
 

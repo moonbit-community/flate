@@ -68,6 +68,9 @@ test "bench deflate_all" (b : @bench.T) {
   b.bench(name="deflate L6 256K random", () => {
     b.keep(@flate.deflate_all(rnd, level=6))
   })
+  b.bench(name="deflate L1 256K random", () => {
+    b.keep(@flate.deflate_all(rnd, level=1))
+  })
   b.bench(name="deflate L6 256K mixed", () => {
     b.keep(@flate.deflate_all(mix, level=6))
   })
@@ -80,6 +83,52 @@ test "bench inflate_all" (b : @bench.T) {
   let comp_mix = @flate.deflate_all(bench_mixed(n), level=6)
   b.bench(name="inflate 256K repetitive", () => b.keep(bench_inflate(comp_rep)))
   b.bench(name="inflate 256K mixed", () => b.keep(bench_inflate(comp_mix)))
+}
+
+///|
+/// Decode without raising out of the bench closure.
+fn bench_inflate_exact(c : Bytes, preallocated : Bool) -> Bytes {
+  @flate.inflate_exact(c, preallocated~) catch {
+    _ => b""
+  }
+}
+
+///|
+/// Grow-path vs preallocated (two-pass, exact allocation) one-shot decode.
+test "bench inflate_exact grow vs preallocated" (b : @bench.T) {
+  let n = 262144
+  let comp_rep = @flate.deflate_all(bench_repetitive(n), level=6)
+  let comp_mix = @flate.deflate_all(bench_mixed(n), level=6)
+  b.bench(name="inflate_exact 256K repetitive grow", () => {
+    b.keep(bench_inflate_exact(comp_rep, false))
+  })
+  b.bench(name="inflate_exact 256K repetitive preallocated", () => {
+    b.keep(bench_inflate_exact(comp_rep, true))
+  })
+  b.bench(name="inflate_exact 256K mixed grow", () => {
+    b.keep(bench_inflate_exact(comp_mix, false))
+  })
+  b.bench(name="inflate_exact 256K mixed preallocated", () => {
+    b.keep(bench_inflate_exact(comp_mix, true))
+  })
+}
+
+///|
+/// Zip-style payloads mix many small parts with a few large ones; show the
+/// small-part overhead of dynamic-Huffman levels to pick a zip default.
+test "bench deflate_all by size and level" (b : @bench.T) {
+  for size in [512, 4096, 65536] {
+    let rep = bench_repetitive(size)
+    let mix = bench_mixed(size)
+    for level in [0, 1, 6] {
+      b.bench(name="deflate L\{level} \{size}B repetitive", () => {
+        b.keep(@flate.deflate_all(rep, level~))
+      })
+      b.bench(name="deflate L\{level} \{size}B mixed", () => {
+        b.keep(@flate.deflate_all(mix, level~))
+      })
+    }
+  }
 }
 
 ///|

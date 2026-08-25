@@ -6,6 +6,8 @@ priv struct MemDecoder {
   mut bitbuf : UInt // LSB-first bit accumulator
   mut bit_count : Int // valid bits in `bitbuf`
   out : Array[Byte]
+  cancelled : () -> Bool // polled every `cancel_granularity` produced bytes
+  mut next_cancel : Int // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
   dyn_dist : HuffmanDecoder // distance
   clbits : Array[Int] // decoded literal+distance code lengths
@@ -13,18 +15,44 @@ priv struct MemDecoder {
 }
 
 ///|
-fn MemDecoder::new(input : Bytes) -> MemDecoder {
+let cancel_granularity = 4096
+
+///|
+/// Output chunk size for the streaming one-shot drivers: each `step` call
+/// writes into this scratch, so cancellation is polled at this granularity.
+let inflate_scratch_size = 8192
+
+///|
+fn MemDecoder::new(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
   {
     input,
     pos: 0,
     bitbuf: 0,
     bit_count: 0,
     out: [],
+    cancelled,
+    next_cancel: 0,
     dyn_litlen: HuffmanDecoder::new(),
     dyn_dist: HuffmanDecoder::new(),
     clbits: Array::make(max_num_lit + max_num_dist, 0),
     codebits: Array::make(num_codes, 0),
   }
+}
+
+///|
+fn MemDecoder::check_cancel(self : MemDecoder) -> Unit raise InflateError {
+  if self.out.length() >= self.next_cancel {
+    if (self.cancelled)() {
+      raise InflateError(Cancelled, "cancelled by caller")
+    }
+    self.next_cancel = self.out.length() + cancel_granularity
+  }
+}
+
+///|
+fn MemDecoder::push(self : MemDecoder, b : Byte) -> Unit raise InflateError {
+  self.out.push(b)
+  self.check_cancel()
 }
 
 ///|
@@ -97,7 +125,7 @@ fn MemDecoder::decode_block(
   for ;; {
     let v = self.huff_sym(hl)
     if v < 256 {
-      self.out.push(v.to_byte())
+      self.push(v.to_byte())
     } else if v == 256 {
       return
     } else if v < 286 {
@@ -133,7 +161,7 @@ fn MemDecoder::decode_block(
       }
       let start = available_history - dist
       for k in 0..<length {
-        self.out.push(self.out[start + k])
+        self.push(self.out[start + k])
       }
     } else {
       raise InflateError(Corrupt, "corrupt: invalid literal/length code")
@@ -159,7 +187,7 @@ fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
     raise InflateError(Truncated, "unexpected end of input")
   }
   for k in 0..<len {
-    self.out.push(self.input[self.pos + k])
+    self.push(self.input[self.pos + k])
   }
   self.pos = self.pos + len
 }
@@ -208,6 +236,7 @@ fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
 
 ///|
 fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
+  self.check_cancel()
   for ;; {
     self.need(3)
     let bfinal = (self.bitbuf & 1) == 1
@@ -235,8 +264,13 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
 /// final block are ignored; use `inflate_exact` when an exact framing boundary
 /// is required. The output grows without bound; for untrusted input use
 /// `inflate_all_limited` or drive `Inflater` with caller-sized output buffers.
-pub fn inflate_all(input : Bytes) -> Bytes raise InflateError {
-  let d = MemDecoder::new(input)
+/// If supplied, `cancelled` is polled at entry and then every 4096 produced
+/// bytes; returning `true` raises `InflateError(Cancelled, _)`.
+pub fn inflate_all(
+  input : Bytes,
+  cancelled? : () -> Bool = () => false,
+) -> Bytes raise InflateError {
+  let d = MemDecoder::new(input, cancelled)
   d.run()
   Bytes::from_array(d.out)
 }
@@ -245,14 +279,20 @@ pub fn inflate_all(input : Bytes) -> Bytes raise InflateError {
 /// Drive the streaming inflater over an in-memory input. If `exact` is true,
 /// reject bytes after the final DEFLATE block. If `max_output` is present, one
 /// fixed scratch buffer may be filled past that boundary internally, but no
-/// oversized result is returned.
+/// oversized result is returned. `cancelled` is polled at entry and once per
+/// step (every 8192 produced bytes); returning `true` raises
+/// `InflateError(Cancelled, _)`.
 fn inflate_streaming_all(
   input : Bytes,
   max_output : Int?,
   exact : Bool,
+  cancelled : () -> Bool,
 ) -> Bytes raise InflateError {
+  guard !cancelled() else {
+    raise InflateError(Cancelled, "cancelled by caller")
+  }
   let inflater = Inflater::new()
-  let scratch = FixedArray::make(8192, b'\x00')
+  let scratch = FixedArray::make(inflate_scratch_size, b'\x00')
   let decoded : Array[Byte] = []
   let mut input_pos = 0
   for ;; {
@@ -260,15 +300,14 @@ fn inflate_streaming_all(
     let consumed = inflater.last_consumed()
     let produced = inflater.last_produced()
     input_pos = input_pos + consumed
-    match max_output {
-      Some(limit) =>
-        if produced > limit - decoded.length() {
-          raise InflateError(
-            OutputLimitExceeded,
-            "decoded output exceeds max_output",
-          )
-        }
-      None => ()
+    guard !cancelled() else {
+      raise InflateError(Cancelled, "cancelled by caller")
+    }
+    guard max_output.map_or(true, limit => produced <= limit - decoded.length()) else {
+      raise InflateError(
+        OutputLimitExceeded,
+        "decoded output exceeds max_output",
+      )
     }
     for i in 0..<produced {
       decoded.push(scratch[i])
@@ -289,20 +328,128 @@ fn inflate_streaming_all(
 ///|
 /// Decompress exactly one raw DEFLATE stream. Unlike `inflate_all`, this rejects
 /// any bytes after the final block.
-pub fn inflate_exact(input : Bytes) -> Bytes raise InflateError {
-  inflate_streaming_all(input, None, true)
+///
+/// Optional controls:
+///  - `max_output`: decoded output beyond this size raises
+///    `InflateError(OutputLimitExceeded, _)`. A negative value is rejected the
+///    same way.
+///  - `cancelled`: polled at entry and then once per internal step (every 8192
+///    produced bytes); returning `true` raises `InflateError(Cancelled, _)`.
+///  - `preallocated`: when `true`, decode runs twice — a counting pass that
+///    validates the whole stream, then a second pass filling one exactly sized
+///    allocation. Peak memory stays at roughly one decoded output, at the cost
+///    of roughly double the decode work; the default `false` grows one buffer
+///    in a single pass, trading transient memory for one decode pass.
+pub fn inflate_exact(
+  input : Bytes,
+  max_output? : Int? = None,
+  cancelled? : () -> Bool = () => false,
+  preallocated? : Bool = false,
+) -> Bytes raise InflateError {
+  let limit = match max_output {
+    Some(limit) if limit < 0 =>
+      raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
+    _ => max_output
+  }
+  if preallocated {
+    inflate_preallocated(input, limit, cancelled)
+  } else {
+    inflate_streaming_all(input, limit, true, cancelled)
+  }
+}
+
+///|
+/// Drive one inflater over the whole in-memory input, delivering produced
+/// chunks to `emit` (called once per step with the scratch contents). Returns
+/// the total number of bytes produced. `max_output` raises once the total
+/// exceeds it; `exact` rejects bytes after the final block; `cancelled` is
+/// polled once per step and raises `InflateError(Cancelled, _)`.
+fn inflate_drive(
+  inflater : Inflater,
+  input : Bytes,
+  max_output : Int?,
+  exact : Bool,
+  cancelled : () -> Bool,
+  emit : (FixedArray[Byte], Int) -> Unit,
+) -> Int raise InflateError {
+  let scratch = FixedArray::make(inflate_scratch_size, b'\x00')
+  let mut total = 0
+  let mut input_pos = 0
+  for ;; {
+    let status = inflater.step(input[input_pos:], scratch.mut_view(), end=true)
+    let consumed = inflater.last_consumed()
+    let produced = inflater.last_produced()
+    input_pos = input_pos + consumed
+    total = total + produced
+    guard !cancelled() else {
+      raise InflateError(Cancelled, "cancelled by caller")
+    }
+    guard max_output.map_or(true, limit => total <= limit) else {
+      raise InflateError(
+        OutputLimitExceeded,
+        "decoded output exceeds max_output",
+      )
+    }
+    emit(scratch, produced)
+    match status {
+      Done => {
+        if exact && input_pos != input.length() {
+          raise InflateError(TrailingData, "trailing data after DEFLATE stream")
+        }
+        return total
+      }
+      NeedMoreOutput => ()
+      NeedMoreInput => raise InflateError(Truncated, "unexpected end of input")
+    }
+  }
+}
+
+///|
+/// `inflate_exact` with `preallocated=true`: validate and count in one pass
+/// over an 8 KiB scratch, then replay the deterministic decode into one exact
+/// allocation (the same `Inflater` is reused via `reset`).
+fn inflate_preallocated(
+  input : Bytes,
+  max_output : Int?,
+  cancelled : () -> Bool,
+) -> Bytes raise InflateError {
+  guard !cancelled() else {
+    raise InflateError(Cancelled, "cancelled by caller")
+  }
+  let inflater = Inflater::new()
+  let size = inflate_drive(inflater, input, max_output, true, cancelled, (
+    _scratch,
+    _produced,
+  ) => ())
+  inflater.reset()
+  let buf = Array::make(size, b'\x00')
+  let mut filled = 0
+  ignore(
+    inflate_drive(inflater, input, None, true, cancelled, (scratch, produced) => {
+      for i in 0..<produced {
+        buf[filled + i] = scratch[i]
+      }
+      filled = filled + produced
+    }),
+  )
+  if filled != size {
+    raise InflateError(Corrupt, "corrupt: preallocation size mismatch")
+  }
+  Bytes::from_array(buf)
 }
 
 ///|
 /// Decompress one raw DEFLATE stream without allowing the returned output to
 /// exceed `max_output`. Bytes after the final block retain `inflate_all`'s
-/// prefix semantics and are ignored.
+/// prefix semantics and are ignored. `cancelled` follows `inflate_all`'s
+/// polling contract.
 pub fn inflate_all_limited(
   input : Bytes,
   max_output~ : Int,
+  cancelled? : () -> Bool = () => false,
 ) -> Bytes raise InflateError {
-  if max_output < 0 {
+  guard max_output >= 0 else {
     raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
   }
-  inflate_streaming_all(input, Some(max_output), false)
+  inflate_streaming_all(input, Some(max_output), false, cancelled)
 }

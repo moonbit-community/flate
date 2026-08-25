@@ -10,11 +10,11 @@ pub fn deflate_all(Bytes, level? : Int) -> Bytes
 
 pub fn deflate_all_optimal(Bytes, iterations? : Int) -> Bytes
 
-pub fn inflate_all(Bytes) -> Bytes raise InflateError
+pub fn inflate_all(Bytes, cancelled? : () -> Bool) -> Bytes raise InflateError
 
-pub fn inflate_all_limited(Bytes, max_output~ : Int) -> Bytes raise InflateError
+pub fn inflate_all_limited(Bytes, max_output~ : Int, cancelled? : () -> Bool) -> Bytes raise InflateError
 
-pub fn inflate_exact(Bytes) -> Bytes raise InflateError
+pub fn inflate_exact(Bytes, max_output? : Int?, cancelled? : () -> Bool, preallocated? : Bool) -> Bytes raise InflateError
 
 // Errors
 pub suberror InflateError {
@@ -46,6 +46,7 @@ pub(all) enum InflateErrorKind {
   Corrupt
   TrailingData
   OutputLimitExceeded
+  Cancelled
 } derive(Eq, @debug.Debug)
 pub fn InflateErrorKind::equal(Self, Self) -> Bool
 pub fn InflateErrorKind::not_equal(Self, Self) -> Bool

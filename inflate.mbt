@@ -23,6 +23,8 @@ pub(all) enum InflateErrorKind {
   TrailingData
   /// Decoded output would exceed the caller-supplied safety limit.
   OutputLimitExceeded
+  /// A caller-supplied cancellation callback requested an early stop.
+  Cancelled
 } derive(Eq, Debug)
 
 ///|
@@ -59,12 +61,12 @@ fn interpret_code_length_repeat(
   match symbol {
     16 =>
       match previous {
-        Some(value) => { base: 3, extra_bits: 2, value }
+        Some(value) => { base: 3, extra_bits: 2, value, }
         None =>
           raise InflateError(Corrupt, "corrupt: repeat with no previous length")
       }
-    17 => { base: 3, extra_bits: 3, value: 0 }
-    18 => { base: 11, extra_bits: 7, value: 0 }
+    17 => { base: 3, extra_bits: 3, value: 0, }
+    18 => { base: 11, extra_bits: 7, value: 0, }
     _ => raise InflateError(Corrupt, "corrupt: bad code-length symbol")
   }
 }
