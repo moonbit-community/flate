@@ -59,7 +59,7 @@ fn collect_matches(
           best
         }
         if l > best {
-          frontier.push({ len: l, dist: i - cand })
+          frontier.push({ len: l, dist: i - cand, })
           best = l
           if l >= limit {
             break

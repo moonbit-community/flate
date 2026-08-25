@@ -10,7 +10,7 @@ priv struct BitWriter {
 
 ///|
 fn BitWriter::new() -> BitWriter {
-  { out: [], bitbuf: 0, bit_count: 0 }
+  { out: [], bitbuf: 0, bit_count: 0, }
 }
 
 ///|

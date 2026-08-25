@@ -35,7 +35,7 @@ priv struct MatchLenDifferentialRng {
 
 ///|
 fn MatchLenDifferentialRng::new(seed : UInt) -> MatchLenDifferentialRng {
-  { state: seed }
+  { state: seed, }
 }
 
 ///|

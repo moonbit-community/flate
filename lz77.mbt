@@ -26,16 +26,16 @@ priv struct LevelConfig {
 
 ///|
 let level_configs : FixedArray[LevelConfig] = [
-  { good_length: 0, max_lazy: 0, nice_length: 0, max_chain: 0 }, // 0: stored
-  { good_length: 4, max_lazy: 0, nice_length: 8, max_chain: 4 },
-  { good_length: 4, max_lazy: 0, nice_length: 16, max_chain: 8 },
-  { good_length: 4, max_lazy: 0, nice_length: 32, max_chain: 32 },
-  { good_length: 4, max_lazy: 4, nice_length: 16, max_chain: 16 },
-  { good_length: 8, max_lazy: 16, nice_length: 32, max_chain: 32 },
-  { good_length: 8, max_lazy: 16, nice_length: 128, max_chain: 128 }, // 6: default
-  { good_length: 8, max_lazy: 32, nice_length: 128, max_chain: 256 },
-  { good_length: 32, max_lazy: 128, nice_length: 258, max_chain: 1024 },
-  { good_length: 32, max_lazy: 258, nice_length: 258, max_chain: 4096 }, // 9
+  { good_length: 0, max_lazy: 0, nice_length: 0, max_chain: 0, }, // 0: stored
+  { good_length: 4, max_lazy: 0, nice_length: 8, max_chain: 4, },
+  { good_length: 4, max_lazy: 0, nice_length: 16, max_chain: 8, },
+  { good_length: 4, max_lazy: 0, nice_length: 32, max_chain: 32, },
+  { good_length: 4, max_lazy: 4, nice_length: 16, max_chain: 16, },
+  { good_length: 8, max_lazy: 16, nice_length: 32, max_chain: 32, },
+  { good_length: 8, max_lazy: 16, nice_length: 128, max_chain: 128, }, // 6: default
+  { good_length: 8, max_lazy: 32, nice_length: 128, max_chain: 256, },
+  { good_length: 32, max_lazy: 128, nice_length: 258, max_chain: 1024, },
+  { good_length: 32, max_lazy: 258, nice_length: 258, max_chain: 4096, }, // 9
 ]
 
 ///|

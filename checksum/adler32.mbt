@@ -13,7 +13,7 @@ pub struct Adler32 {
 ///|
 /// Create a fresh Adler-32 accumulator.
 pub fn Adler32::new() -> Adler32 {
-  { a: 1, b: 0 }
+  { a: 1, b: 0, }
 }
 
 ///|

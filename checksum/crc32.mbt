@@ -27,7 +27,7 @@ pub struct Crc32 {
 ///|
 /// Create a fresh CRC-32 accumulator.
 pub fn Crc32::new() -> Crc32 {
-  { state: 0xFFFFFFFF }
+  { state: 0xFFFFFFFF, }
 }
 
 ///|

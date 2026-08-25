@@ -19,7 +19,7 @@ priv struct LevelInfo {
 
 ///|
 fn LevelInfo::new() -> LevelInfo {
-  { level: 0, last_freq: 0, next_char_freq: 0, next_pair_freq: 0, needed: 0 }
+  { level: 0, last_freq: 0, next_char_freq: 0, next_pair_freq: 0, needed: 0, }
 }
 
 ///|
@@ -151,7 +151,7 @@ fn gen_huffman(
   let nodes : Array[Node] = []
   for i in 0..<size {
     if freq[i] != 0 {
-      nodes.push({ lit: i, freq: freq[i] })
+      nodes.push({ lit: i, freq: freq[i], })
     }
   }
   let count = nodes.length()

@@ -51,28 +51,28 @@ fn build_codelen_syms(
     if cur == 0 {
       while run >= 11 {
         let r = if run < 138 { run } else { 138 }
-        out.push({ sym: 18, extra: r - 11, nextra: 7 })
+        out.push({ sym: 18, extra: r - 11, nextra: 7, })
         run = run - r
       }
       while run >= 3 {
         let r = if run < 10 { run } else { 10 }
-        out.push({ sym: 17, extra: r - 3, nextra: 3 })
+        out.push({ sym: 17, extra: r - 3, nextra: 3, })
         run = run - r
       }
       while run > 0 {
-        out.push({ sym: 0, extra: 0, nextra: 0 })
+        out.push({ sym: 0, extra: 0, nextra: 0, })
         run = run - 1
       }
     } else {
-      out.push({ sym: cur, extra: 0, nextra: 0 })
+      out.push({ sym: cur, extra: 0, nextra: 0, })
       run = run - 1
       while run >= 3 {
         let r = if run < 6 { run } else { 6 }
-        out.push({ sym: 16, extra: r - 3, nextra: 2 })
+        out.push({ sym: 16, extra: r - 3, nextra: 2, })
         run = run - r
       }
       while run > 0 {
-        out.push({ sym: cur, extra: 0, nextra: 0 })
+        out.push({ sym: cur, extra: 0, nextra: 0, })
         run = run - 1
       }
     }

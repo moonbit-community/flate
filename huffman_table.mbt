@@ -23,7 +23,7 @@ priv struct HuffmanDecoder {
 
 ///|
 fn HuffmanDecoder::new() -> HuffmanDecoder {
-  { min: 0, chunks: Array::make(512, 0U), links: [], link_mask: 0 }
+  { min: 0, chunks: Array::make(512, 0U), links: [], link_mask: 0, }
 }
 
 ///|
