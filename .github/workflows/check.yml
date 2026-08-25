@@ -29,10 +29,10 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            powershell -ExecutionPolicy Bypass -Command "irm https://cli.moonbitlang.com/install/powershell.ps1 | iex"
+            powershell -ExecutionPolicy Bypass -Command "irm https://cli.moonbitlang.com/install/powershell.ps1 | iex -s nightly"
             echo "$USERPROFILE/.moon/bin" >> "$GITHUB_PATH"
           else
-            curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+            curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s nightly
             echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
           fi
 
