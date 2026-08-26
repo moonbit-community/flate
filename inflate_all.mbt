@@ -391,16 +391,13 @@ fn inflate_drive(
       )
     }
     emit(scratch, produced)
-    match status {
-      Done => {
-        if exact && input_pos != input.length() {
-          raise InflateError(TrailingData, "trailing data after DEFLATE stream")
-        }
-        return total
-      }
-      NeedMoreOutput => ()
-      NeedMoreInput => raise InflateError(Truncated, "unexpected end of input")
+    // `Inflater::step(end=true)` raises `Truncated` on exhausted input, so
+    // only `Done` and `NeedMoreOutput` can be returned here.
+    guard status is Done else { continue }
+    if exact && input_pos != input.length() {
+      raise InflateError(TrailingData, "trailing data after DEFLATE stream")
     }
+    return total
   }
 }
 
@@ -432,9 +429,6 @@ fn inflate_preallocated(
       filled = filled + produced
     }),
   )
-  if filled != size {
-    raise InflateError(Corrupt, "corrupt: preallocation size mismatch")
-  }
   Bytes::from_array(buf)
 }
 

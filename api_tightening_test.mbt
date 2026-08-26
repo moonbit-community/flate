@@ -162,6 +162,21 @@ test "inflate_exact entry cancellation raises Cancelled" {
 }
 
 ///|
+test "preallocated inflate_exact entry cancellation raises Cancelled" {
+  let source = Bytes::from_array(Array::make(30000, b'A'))
+  let compressed = @flate.deflate_all(source)
+  try
+    ignore(
+      @flate.inflate_exact(compressed, preallocated=true, cancelled=() => true),
+    )
+  catch {
+    InflateError(kind, _) => assert_true(kind == Cancelled)
+  } noraise {
+    _ => fail("preallocated entry cancellation was not honored")
+  }
+}
+
+///|
 test "preallocated inflate_exact honors cancellation in both passes" {
   let source = Bytes::from_array(Array::make(30000, b'A'))
   let compressed = @flate.deflate_all(source)
