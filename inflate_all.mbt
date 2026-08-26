@@ -402,6 +402,20 @@ fn inflate_drive(
 }
 
 ///|
+/// The replay pass must produce exactly the size measured by the counting pass.
+/// A mismatch indicates an internal decoder invariant failure rather than bad
+/// caller input, so this defensive branch is excluded from behavior coverage.
+#coverage.skip
+fn validate_preallocation_size(
+  size : Int,
+  filled : Int,
+) -> Unit raise InflateError {
+  if filled != size {
+    raise InflateError(Corrupt, "corrupt: preallocation size mismatch")
+  }
+}
+
+///|
 /// `inflate_exact` with `preallocated=true`: validate and count in one pass
 /// over an 8 KiB scratch, then replay the deterministic decode into one exact
 /// allocation (the same `Inflater` is reused via `reset`).
@@ -429,6 +443,7 @@ fn inflate_preallocated(
       filled = filled + produced
     }),
   )
+  validate_preallocation_size(size, filled)
   Bytes::from_array(buf)
 }
 
