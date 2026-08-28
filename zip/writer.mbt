@@ -129,17 +129,14 @@ fn build_zip64_extra(
   let buf = Buffer()
   write_u16_buf(buf, zip64_extra_id)
   write_u16_buf(buf, 8 * count)
-  match uncomp {
-    Some(value) => write_u64_buf(buf, value.to_uint64_checked())
-    None => ()
+  if uncomp is Some(value) {
+    write_u64_buf(buf, value.to_uint64_checked())
   }
-  match comp {
-    Some(value) => write_u64_buf(buf, value.to_uint64_checked())
-    None => ()
+  if comp is Some(value) {
+    write_u64_buf(buf, value.to_uint64_checked())
   }
-  match offset {
-    Some(value) => write_u64_buf(buf, value.to_uint64_checked())
-    None => ()
+  if offset is Some(value) {
+    write_u64_buf(buf, value.to_uint64_checked())
   }
   buf.to_bytes()
 }
@@ -248,14 +245,18 @@ fn write_local_record(
   out.write_u16(local_extra.length())
   out.write_bytes(name_bytes)
   out.write_bytes(local_extra)
-  guard payload.compressed is Some(compressed) else {
+  // Both arms fall through to the data descriptor below, so the descriptor is
+  // emitted (and, in the sizing pass, counted) for STORED and DEFLATE entries
+  // alike — a `guard` would `return` out of the missing-payload branch and
+  // skip it.
+  if payload.compressed is Some(compressed) {
+    out.write_bytes(compressed)
+  } else {
     match entry.compression {
       Store => out.write_bytes(entry.data)
       Deflate => out.count(compressed_size)
     }
-    return
   }
-  out.write_bytes(compressed)
   if use_descriptor {
     out.write_u32(data_descriptor_sig)
     out.write_u32(crc)

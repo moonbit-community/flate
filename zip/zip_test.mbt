@@ -104,6 +104,29 @@ test "zip data descriptor write round-trips" {
 }
 
 ///|
+test "zip stored data-descriptor entry round-trips" {
+  let archive = @zip.Archive::new()
+  archive.add(
+    "s.txt",
+    b"stored descriptor payload",
+    compression=@zip.Compression::Store,
+    data_descriptor=true,
+  )
+  let bytes = @zip.write(archive)
+  let parsed = @zip.read(bytes)
+  assert_eq(parsed.get("s.txt"), Some(b"stored descriptor payload"[:]))
+  assert_eq(parsed.entries()[0].data_descriptor(), true)
+}
+
+///|
+test "zip write_limited sizes a data-descriptor entry correctly" {
+  let archive = @zip.Archive::new()
+  archive.add("d.txt", b"limited descriptor payload", data_descriptor=true)
+  let exact = @zip.write(archive)
+  assert_eq(@zip.write_limited(archive, max_output_bytes=exact.length()), exact)
+}
+
+///|
 test "zip write_preserving re-emits a read archive byte-for-byte" {
   let archive = @zip.Archive::new()
   archive.add("a.txt", b"alpha")
