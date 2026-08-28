@@ -4,7 +4,7 @@ package "moonbit-community/flate/checksum"
 // Values
 pub fn adler32(Bytes) -> UInt
 
-pub fn crc32(Bytes) -> UInt
+pub fn crc32(BytesView) -> UInt
 
 // Errors
 

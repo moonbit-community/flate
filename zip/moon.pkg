@@ -1,0 +1,9 @@
+// Package "@zip": the ZIP (APPNOTE.TXT) container format over the `@flate`
+// DEFLATE engine. In-memory `Archive` convenience plus bounded reads, ZIP64,
+// data descriptors, and byte-preserving rewrites. io-free and suspendable.
+
+import {
+  "moonbit-community/flate",
+  "moonbit-community/flate/checksum",
+  "moonbitlang/core/encoding/utf8" @encoding/utf8,
+}

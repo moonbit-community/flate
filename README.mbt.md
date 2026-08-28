@@ -129,6 +129,32 @@ about one decoded output (instead of a growing buffer plus a final copy), which
 matters for very large single streams. The default stays single-pass for
 callers that do not need the memory bound.
 
+## ZIP container
+
+The `@zip` package reads and writes the ZIP (APPNOTE.TXT) container format over
+the same engine. It is io-free and suspendable like the rest of the library:
+
+```mbt nocheck
+///|
+test "README zip round-trip" {
+  let archive = @zip.Archive::new()
+  archive.add("hello.txt", b"hello, zip")
+  let bytes = @zip.write(archive)
+  let parsed = @zip.read(bytes)
+  assert_eq(parsed.get("hello.txt"), Some(b"hello, zip"[:]))
+}
+```
+
+`read` accepts a `ReadLimits` value (package bytes, entry count, per-entry and
+total decompressed bytes, retained source records) and a `cancelled` callback,
+so untrusted archives cannot exhaust memory; exceeding a limit raises
+`ZipError(LimitExceeded(kind, limit, actual))`. STORED and DEFLATE entries,
+ZIP64 sizes/offsets, data descriptors, UTF-8 names, and archive comments are
+handled. `write_preserving` re-emits pristine entries byte-for-byte from their
+retained source records (round-tripping `read` → `write_preserving` exactly),
+while `write_limited` / `write_preserving_limited` enforce an output ceiling
+without materializing an oversized candidate.
+
 ## Architecture
 
 ```
@@ -186,12 +212,14 @@ DECODE: raw DEFLATE → bytes
 CONTAINERS: thin framing over the engine
 ════════════════════════════════════════
 
- gzip/  Encoder/Decoder, gzip_compress/gunzip            (RFC 1952)
-        10 B header (optional fields skipped in O(1)) + CRC-32 + ISIZE;
-        decodes concatenated multi-member streams (§2.2)
- zlib/  Encoder/Decoder, zlib_compress/zlib_decompress   (RFC 1950)
-        2 B header (+ FDICT dictionary id) + Adler-32
- checksum/  incremental CRC-32 / Adler-32 digests
+  gzip/  Encoder/Decoder, gzip_compress/gunzip            (RFC 1952)
+         10 B header (optional fields skipped in O(1)) + CRC-32 + ISIZE;
+         decodes concatenated multi-member streams (§2.2)
+  zlib/  Encoder/Decoder, zlib_compress/zlib_decompress   (RFC 1950)
+         2 B header (+ FDICT dictionary id) + Adler-32
+  zip/   read/write, Archive/Entry, bounded reads, ZIP64,   (APPNOTE.TXT)
+         data descriptors, byte-preserving rewrites
+  checksum/  incremental CRC-32 / Adler-32 digests
 
  shared by both pipelines:
    tables.mbt  RFC 1951 symbol tables, fixed codes, window size

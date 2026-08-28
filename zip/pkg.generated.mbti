@@ -1,0 +1,98 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbit-community/flate/zip"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn read(BytesView, limits? : ReadLimits, cancelled? : () -> Bool) -> Archive raise ZipError
+
+pub fn write(Archive, level? : Int) -> Bytes raise ZipError
+
+pub fn write_limited(Archive, max_output_bytes~ : Int, level? : Int) -> Bytes raise ZipError
+
+pub fn write_preserving(Archive, level? : Int) -> Bytes raise ZipError
+
+pub fn write_preserving_limited(Archive, max_output_bytes~ : Int, level? : Int) -> Bytes raise ZipError
+
+// Errors
+pub suberror ZipError {
+  ZipError(ZipErrorKind, String)
+}
+
+// Types and methods
+pub struct Archive {
+  // private fields
+}
+pub fn Archive::add(Self, String, BytesView, compression? : Compression, data_descriptor? : Bool) -> Unit
+pub fn Archive::comment(Self) -> BytesView
+pub fn Archive::entries(Self) -> ArrayView[Entry]
+pub fn Archive::get(Self, StringView) -> BytesView?
+pub fn Archive::new() -> Self
+pub fn Archive::remove(Self, StringView) -> Bool
+pub fn Archive::replace(Self, StringView, BytesView) -> Bool
+pub fn Archive::set_comment(Self, BytesView) -> Unit
+
+pub(all) enum Compression {
+  Store
+  Deflate
+} derive(Eq, @debug.Debug)
+pub fn Compression::equal(Self, Self) -> Bool
+pub fn Compression::not_equal(Self, Self) -> Bool
+pub fn Compression::to_repr(Self) -> @debug.Repr
+
+pub struct Entry {
+  // private fields
+}
+pub fn Entry::compression(Self) -> Compression
+pub fn Entry::crc32(Self) -> UInt
+pub fn Entry::data(Self) -> BytesView
+pub fn Entry::data_descriptor(Self) -> Bool
+pub fn Entry::name(Self) -> String
+pub fn Entry::raw_central_record(Self) -> BytesView?
+pub fn Entry::raw_local_record(Self) -> BytesView?
+
+pub(all) enum LimitKind {
+  PackageBytes
+  Entries
+  EntryUncompressedBytes
+  TotalUncompressedBytes
+  PreservedSourceBytes
+  OutputBytes
+} derive(Eq, @debug.Debug)
+pub fn LimitKind::equal(Self, Self) -> Bool
+pub fn LimitKind::not_equal(Self, Self) -> Bool
+pub fn LimitKind::to_repr(Self) -> @debug.Repr
+
+pub struct ReadLimits {
+  max_package_bytes : Int
+  max_entries : Int
+  max_entry_uncompressed_bytes : Int
+  max_total_uncompressed_bytes : Int
+  max_preserved_source_bytes : Int
+}
+pub fn ReadLimits::default() -> Self
+pub fn ReadLimits::with_entries_limit(Self, Int) -> Self
+pub fn ReadLimits::with_entry_limit(Self, Int) -> Self
+pub fn ReadLimits::with_package_limit(Self, Int) -> Self
+pub fn ReadLimits::with_preserved_source_limit(Self, Int) -> Self
+pub fn ReadLimits::with_total_limit(Self, Int) -> Self
+
+pub(all) enum ZipErrorKind {
+  Truncated
+  InvalidSignature
+  MissingEndOfCentral
+  UnsupportedCompression(Int)
+  InvalidUtf8
+  UnsupportedFeature
+  LimitExceeded(LimitKind, Int, Int)
+  Cancelled
+} derive(Eq, @debug.Debug)
+pub fn ZipErrorKind::equal(Self, Self) -> Bool
+pub fn ZipErrorKind::not_equal(Self, Self) -> Bool
+pub fn ZipErrorKind::to_repr(Self) -> @debug.Repr
+
+// Type aliases
+
+// Traits

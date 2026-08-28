@@ -59,8 +59,8 @@ pub fn Crc32::finish(self : Crc32) -> UInt {
 
 ///|
 /// Compute the CRC-32 checksum of `data` in one shot.
-pub fn crc32(data : Bytes) -> UInt {
+pub fn crc32(data : BytesView) -> UInt {
   let d = Crc32::new()
-  d.update(data[:])
+  d.update(data)
   d.finish()
 }
