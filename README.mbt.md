@@ -1,8 +1,8 @@
 # flate
 
 Pure-MoonBit **DEFLATE** (RFC 1951) — a runtime-agnostic, suspendable, io-free
-compression engine, with thin **gzip** (RFC 1952) and **zlib** (RFC 1950)
-wrappers.
+compression engine, with thin **gzip** (RFC 1952), **zlib** (RFC 1950), and
+**zip** (APPNOTE.TXT) container wrappers.
 
 ## Install
 
