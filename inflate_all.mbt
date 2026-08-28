@@ -133,15 +133,14 @@ fn MemDecoder::decode_block(
       let base = length_info >> 3
       let nextra = length_info & 0x7
       let length = if nextra > 0 { base + self.read_bits(nextra) } else { base }
-      let dsym = match hd {
-        Some(h) => self.huff_sym(h)
-        None => {
-          self.need(5)
-          let low5 = self.bitbuf & 0x1F
-          self.bitbuf = self.bitbuf >> 5
-          self.bit_count = self.bit_count - 5
-          reverse8(((low5 << 3) & 0xFF).reinterpret_as_int().to_byte()).to_int()
-        }
+      let dsym = if hd is Some(h) {
+        self.huff_sym(h)
+      } else {
+        self.need(5)
+        let low5 = self.bitbuf & 0x1F
+        self.bitbuf = self.bitbuf >> 5
+        self.bit_count = self.bit_count - 5
+        reverse8(((low5 << 3) & 0xFF).reinterpret_as_int().to_byte()).to_int()
       }
       if dsym.reinterpret_as_uint() >= max_num_dist.reinterpret_as_uint() {
         raise InflateError(Corrupt, "corrupt: invalid distance code")

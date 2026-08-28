@@ -6,10 +6,8 @@ fn match_len_fixture(mismatch? : Int) -> Bytes {
     data[i] = byte
     data[258 + i] = byte
   }
-  match mismatch {
-    Some(index) =>
-      data[258 + index] = (data[258 + index].to_int() ^ 0xFF).to_byte()
-    None => ()
+  if mismatch is Some(index) {
+    data[258 + index] = (data[258 + index].to_int() ^ 0xFF).to_byte()
   }
   Bytes::from_array(data)
 }

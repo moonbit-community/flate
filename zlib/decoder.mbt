@@ -194,16 +194,15 @@ pub fn Decoder::step(
 ) -> @flate.Status raise ZlibError {
   self.step_consumed = 0
   self.step_produced = 0
-  match self.failure_kind {
-    Some(kind) => raise ZlibError(kind, self.failure_message)
-    None =>
-      self.step_active(input, output, end~) catch {
-        ZlibError(kind, message) => {
-          self.failure_kind = Some(kind)
-          self.failure_message = message
-          raise ZlibError(kind, message)
-        }
-      }
+  if self.failure_kind is Some(kind) {
+    raise ZlibError(kind, self.failure_message)
+  }
+  self.step_active(input, output, end~) catch {
+    ZlibError(kind, message) => {
+      self.failure_kind = Some(kind)
+      self.failure_message = message
+      raise ZlibError(kind, message)
+    }
   }
 }
 
@@ -278,25 +277,19 @@ fn Decoder::step_active(
             return self.finish_step(NeedMoreInput, consumed, op)
           }
           let dictid = self.u32_be(2)
-          match self.dict {
-            None =>
-              raise ZlibError(
-                DictionaryRequired,
-                "zlib: preset dictionary required",
-              )
-            Some(dict) => {
-              if @checksum.adler32(dict) != dictid {
-                raise ZlibError(
-                  DictionaryMismatch,
-                  "zlib: dictionary id mismatch",
-                )
-              }
-              // Configure the raw inflater only after FDICT and DICTID have
-              // been validated. Preloading it in `new` would incorrectly let
-              // a stream without FDICT refer to caller-supplied history.
-              self.inf.reset(dictionary=dict[:])
-            }
+          guard self.dict is Some(dict) else {
+            raise ZlibError(
+              DictionaryRequired,
+              "zlib: preset dictionary required",
+            )
           }
+          if @checksum.adler32(dict) != dictid {
+            raise ZlibError(DictionaryMismatch, "zlib: dictionary id mismatch")
+          }
+          // Configure the raw inflater only after FDICT and DICTID have
+          // been validated. Preloading it in `new` would incorrectly let
+          // a stream without FDICT refer to caller-supplied history.
+          self.inf.reset(dictionary=dict[:])
           self.consume_pending(6)
         } else {
           self.consume_pending(2)

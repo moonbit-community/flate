@@ -39,22 +39,21 @@ pub struct Encoder {
 /// FDICT) preloads the match window and is announced in the header via its
 /// Adler-32; the decoder must supply the same dictionary.
 pub fn Encoder::new(level? : Int = 6, dictionary? : Bytes) -> Encoder {
-  let (def, stage) = match dictionary {
-    None => (@flate.Deflater::new(level~), zlib_header_bytes)
-    Some(dict) => {
-      let def = @flate.Deflater::new(level~, dictionary=dict[:])
-      let id = @checksum.adler32(dict)
-      let h = FixedArray::make(6, b'\x00')
-      // CMF=0x78; FLG=0x20 sets FDICT (0x7820 is a multiple of 31, FCHECK ok),
-      // followed by the 4-byte big-endian DICTID.
-      h[0] = b'\x78'
-      h[1] = b'\x20'
-      h[2] = ((id >> 24) & 0xFF).reinterpret_as_int().to_byte()
-      h[3] = ((id >> 16) & 0xFF).reinterpret_as_int().to_byte()
-      h[4] = ((id >> 8) & 0xFF).reinterpret_as_int().to_byte()
-      h[5] = (id & 0xFF).reinterpret_as_int().to_byte()
-      (def, h)
-    }
+  let (def, stage) = if dictionary is Some(dict) {
+    let def = @flate.Deflater::new(level~, dictionary=dict[:])
+    let id = @checksum.adler32(dict)
+    let h = FixedArray::make(6, b'\x00')
+    // CMF=0x78; FLG=0x20 sets FDICT (0x7820 is a multiple of 31, FCHECK ok),
+    // followed by the 4-byte big-endian DICTID.
+    h[0] = b'\x78'
+    h[1] = b'\x20'
+    h[2] = ((id >> 24) & 0xFF).reinterpret_as_int().to_byte()
+    h[3] = ((id >> 16) & 0xFF).reinterpret_as_int().to_byte()
+    h[4] = ((id >> 8) & 0xFF).reinterpret_as_int().to_byte()
+    h[5] = (id & 0xFF).reinterpret_as_int().to_byte()
+    (def, h)
+  } else {
+    (@flate.Deflater::new(level~), zlib_header_bytes)
   }
   {
     def,

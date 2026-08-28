@@ -122,13 +122,11 @@ fn assign_codes(
     }
     chunk.sort_by((a, b) => a.lit - b.lit)
     for node in chunk {
-      match code_val {
-        Some(values) =>
-          values[node.lit] = reverse_bits(
-            code.reinterpret_as_uint() & 0xFFFF,
-            nlen,
-          )
-        None => ()
+      if code_val is Some(values) {
+        values[node.lit] = reverse_bits(
+          code.reinterpret_as_uint() & 0xFFFF,
+          nlen,
+        )
       }
       code_len[node.lit] = nlen
       code = code + 1
@@ -161,10 +159,8 @@ fn gen_huffman(
   if count <= 2 {
     for k in 0..<count {
       code_len[nodes[k].lit] = 1
-      match code_val {
-        Some(values) =>
-          values[nodes[k].lit] = reverse_bits(k.reinterpret_as_uint(), 1)
-        None => ()
+      if code_val is Some(values) {
+        values[nodes[k].lit] = reverse_bits(k.reinterpret_as_uint(), 1)
       }
     }
     return

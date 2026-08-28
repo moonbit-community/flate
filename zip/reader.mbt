@@ -14,7 +14,7 @@ priv struct EntryMeta {
   local_offset : Int
   central_record : Bytes
   central_zip64_offset_position : Int?
-  descriptor : Bool
+  data_descriptor : Bool
 }
 
 ///|
@@ -416,7 +416,7 @@ fn read_impl(
       local_offset,
       central_record,
       central_zip64_offset_position,
-      descriptor: (flags & flag_data_descriptor) != 0,
+      data_descriptor: (flags & flag_data_descriptor) != 0,
     })
   }
   if central_reader.pos != central_size {
@@ -521,9 +521,9 @@ fn read_impl(
     archive.entries.push({
       name: meta.name,
       data,
-      compression: method_from_code(meta.method_id),
+      compression,
       crc32: meta.crc,
-      data_descriptor: meta.descriptor,
+      data_descriptor: meta.data_descriptor,
       compressed_size: meta.compressed_size,
       source,
     })

@@ -59,12 +59,12 @@ fn interpret_code_length_repeat(
   previous : Int?,
 ) -> CodeLengthRepeat raise InflateError {
   match symbol {
-    16 =>
-      match previous {
-        Some(value) => { base: 3, extra_bits: 2, value, }
-        None =>
-          raise InflateError(Corrupt, "corrupt: repeat with no previous length")
+    16 => {
+      guard previous is Some(value) else {
+        raise InflateError(Corrupt, "corrupt: repeat with no previous length")
       }
+      { base: 3, extra_bits: 2, value, }
+    }
     17 => { base: 3, extra_bits: 3, value: 0, }
     18 => { base: 11, extra_bits: 7, value: 0, }
     _ => raise InflateError(Corrupt, "corrupt: bad code-length symbol")
@@ -182,9 +182,8 @@ pub fn Inflater::new(dictionary? : BytesView) -> Inflater {
     out_end: 0,
     empty_out,
   }
-  match dictionary {
-    Some(dict) => inflater.preload_dictionary(dict)
-    None => ()
+  if dictionary is Some(dict) {
+    inflater.preload_dictionary(dict)
   }
   inflater
 }
@@ -259,9 +258,8 @@ pub fn Inflater::reset(self : Inflater, dictionary? : BytesView) -> Unit {
   self.out_pos = 0
   self.out = self.empty_out.mut_view()
   self.out_end = 0
-  match dictionary {
-    Some(dict) => self.preload_dictionary(dict)
-    None => ()
+  if dictionary is Some(dict) {
+    self.preload_dictionary(dict)
   }
 }
 
@@ -579,13 +577,9 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
           if self.out_pos >= self.out_end {
             return NeedMoreOutput
           }
-          match self.next_stored_byte() {
-            Some(b) => {
-              self.emit(b)
-              self.stored_remaining = self.stored_remaining - 1
-            }
-            None => return NeedMoreInput
-          }
+          guard self.next_stored_byte() is Some(b) else { return NeedMoreInput }
+          self.emit(b)
+          self.stored_remaining = self.stored_remaining - 1
         }
         self.mode = if self.final_block { Done } else { AtBlock }
       }
@@ -665,9 +659,8 @@ pub fn Inflater::step(
 ) -> Status raise InflateError {
   self.step_consumed = 0
   self.step_produced = 0
-  match self.failure_kind {
-    Some(kind) => raise InflateError(kind, self.failure_message)
-    None => ()
+  if self.failure_kind is Some(kind) {
+    raise InflateError(kind, self.failure_message)
   }
   if end {
     self.ending = true

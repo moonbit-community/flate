@@ -67,9 +67,8 @@ pub fn Deflater::new(level? : Int = 6, dictionary? : BytesView) -> Deflater {
     level: lv,
     cfg: level_configs[lv],
   }
-  match dictionary {
-    Some(dict) => deflater.preload_dictionary(dict)
-    None => ()
+  if dictionary is Some(dict) {
+    deflater.preload_dictionary(dict)
   }
   deflater
 }
@@ -112,9 +111,8 @@ pub fn Deflater::reset(self : Deflater, dictionary? : BytesView) -> Unit {
   self.end_requested = false
   self.step_consumed = 0
   self.step_produced = 0
-  match dictionary {
-    Some(dict) => self.preload_dictionary(dict)
-    None => ()
+  if dictionary is Some(dict) {
+    self.preload_dictionary(dict)
   }
 }
 

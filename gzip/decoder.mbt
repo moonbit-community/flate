@@ -299,17 +299,14 @@ pub fn Decoder::step(
 ) -> @flate.Status raise GzipError {
   self.step_consumed = 0
   self.step_produced = 0
-  match self.failure_kind {
-    Some(kind) => raise GzipError(kind, self.failure_message)
-    None => {
-      let status = self.step_active(input, output, end~) catch {
-        GzipError(kind, message) => {
-          self.failure_kind = Some(kind)
-          self.failure_message = message
-          raise GzipError(kind, message)
-        }
-      }
-      status
+  if self.failure_kind is Some(kind) {
+    raise GzipError(kind, self.failure_message)
+  }
+  self.step_active(input, output, end~) catch {
+    GzipError(kind, message) => {
+      self.failure_kind = Some(kind)
+      self.failure_message = message
+      raise GzipError(kind, message)
     }
   }
 }
