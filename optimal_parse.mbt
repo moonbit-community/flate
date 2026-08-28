@@ -76,6 +76,43 @@ fn collect_matches(
 }
 
 ///|
+/// Trace the shortest path recorded in `len_choice`/`dist_choice` back from
+/// the end of `data[start:start+m)`, then replay it forward into `tokens`,
+/// tallying the literal/length and distance symbols consumed.
+fn replay_tokens(
+  data : Bytes,
+  start : Int,
+  m : Int,
+  len_choice : Array[Int],
+  dist_choice : Array[Int],
+  tokens : Array[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Unit {
+  let steps : Array[Int] = []
+  let mut o = m
+  while o > 0 {
+    steps.push(o)
+    o = o - len_choice[o]
+  }
+  let mut pos = start
+  for k = steps.length() - 1; k >= 0; k = k - 1 {
+    let at = steps[k]
+    let l = len_choice[at]
+    if l == 1 && dist_choice[at] == 0 {
+      let b = data[pos].to_int()
+      tokens.push(b)
+      ll_freq[b] += 1
+    } else {
+      tokens.push(pack_match_token(l, dist_choice[at]))
+      ll_freq[257 + len_to_idx[l]] += 1
+      d_freq[dist_index(dist_choice[at])] += 1
+    }
+    pos = pos + l
+  }
+}
+
+///|
 /// One shortest-path pass: bit costs in, parse out. `costs[o]` is the minimal
 /// bits to encode `data[start:start+o)`; each position relaxes a literal edge
 /// and every frontier match length.
@@ -123,28 +160,9 @@ fn squeeze_parse(
       lo = e.len + 1
     }
   }
-  // Trace the optimal path back, then replay it forward into tokens.
-  let steps : Array[Int] = []
-  let mut o = m
-  while o > 0 {
-    steps.push(o)
-    o = o - len_choice[o]
-  }
-  let mut pos = start
-  for k = steps.length() - 1; k >= 0; k = k - 1 {
-    let at = steps[k]
-    let l = len_choice[at]
-    if l == 1 && dist_choice[at] == 0 {
-      let b = data[pos].to_int()
-      tokens.push(b)
-      ll_freq[b] += 1
-    } else {
-      tokens.push(pack_match_token(l, dist_choice[at]))
-      ll_freq[257 + len_to_idx[l]] += 1
-      d_freq[dist_index(dist_choice[at])] += 1
-    }
-    pos = pos + l
-  }
+  replay_tokens(
+    data, start, m, len_choice, dist_choice, tokens, ll_freq, d_freq,
+  )
 }
 
 ///|

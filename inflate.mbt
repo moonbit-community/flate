@@ -44,34 +44,6 @@ pub suberror InflateError {
 priv suberror NeedInput
 
 ///|
-/// Static interpretation of one dynamic-header repeat symbol. Keeping this
-/// independent of either bit reader makes the streaming and in-memory decoders
-/// agree on the symbol's base count, extra-bit width, and repeated value.
-priv struct CodeLengthRepeat {
-  base : Int
-  extra_bits : Int
-  value : Int
-}
-
-///|
-fn interpret_code_length_repeat(
-  symbol : Int,
-  previous : Int?,
-) -> CodeLengthRepeat raise InflateError {
-  match symbol {
-    16 => {
-      guard previous is Some(value) else {
-        raise InflateError(Corrupt, "corrupt: repeat with no previous length")
-      }
-      { base: 3, extra_bits: 2, value, }
-    }
-    17 => { base: 3, extra_bits: 3, value: 0, }
-    18 => { base: 11, extra_bits: 7, value: 0, }
-    _ => raise InflateError(Corrupt, "corrupt: bad code-length symbol")
-  }
-}
-
-///|
 /// Total classification of every error that can cross one atomic streaming
 /// decode boundary. Unknown future error kinds become the stable public
 /// corruption diagnostic instead of leaking through `Inflater::step`.
@@ -335,38 +307,40 @@ fn Inflater::emit(self : Inflater, b : Byte) -> Unit {
 // ---- block handling ----
 
 ///|
+/// Translate an error raised by the streaming decoder's bit reader inside the
+/// shared dynamic header decoder into the uniform `InflateError` it requires.
+/// `NeedInput` becomes `Truncated` so the caller can recognize the suspension
+/// at its own boundary.
+#coverage.skip
+fn streaming_header_error(err : Error) -> InflateError {
+  match err {
+    NeedInput => InflateError(Truncated, "unexpected end of input")
+    InflateError(kind, message) => InflateError(kind, message)
+    _ => InflateError(Corrupt, "corrupt: unexpected decoder error")
+  }
+}
+
+///|
 fn Inflater::read_dynamic(self : Inflater) -> Unit raise {
-  let nlit = dynamic_literal_count(self.read_bits(5))
-  let ndist = dynamic_distance_count(self.read_bits(5))
-  let nclen = self.read_bits(4) + 4
-  for i in 0..<nclen {
-    self.codebits[code_order[i]] = self.read_bits(3)
-  }
-  for i in nclen..<code_order.length() {
-    self.codebits[code_order[i]] = 0
-  }
-  if !self.dyn_litlen.initialize(self.codebits[:]) {
-    raise InflateError(Corrupt, "corrupt: bad code-length tree")
-  }
-  let n = nlit + ndist
-  let mut i = 0
-  while i < n {
-    let x = self.huff_sym(self.dyn_litlen)
-    if x < 16 {
-      self.clbits[i] = x
-      i = i + 1
-    } else {
-      let previous = if i == 0 { None } else { Some(self.clbits[i - 1]) }
-      let repeat = interpret_code_length_repeat(x, previous)
-      let rep = repeat.base + self.read_bits(repeat.extra_bits)
-      if i + rep > n {
-        raise InflateError(Corrupt, "corrupt: code-length repeat overflow")
+  let (nlit, ndist) = decode_dynamic_header(
+    n => {
+      self.read_bits(n) catch {
+        NeedInput => raise InflateError(Truncated, "unexpected end of input")
       }
-      for _j in 0..<rep {
-        self.clbits[i] = repeat.value
-        i = i + 1
+    },
+    () => {
+      self.huff_sym(self.dyn_litlen) catch {
+        err => raise streaming_header_error(err)
       }
-    }
+    },
+    self.dyn_litlen,
+    self.codebits,
+    self.clbits,
+  ) catch {
+    // A truncated dynamic header is a suspension, not a failure, in the
+    // streaming decoder: rewind to the block start and wait for more input.
+    InflateError(Truncated, _) => raise NeedInput
+    InflateError(kind, message) => raise InflateError(kind, message)
   }
   if !self.dyn_litlen.initialize(self.clbits[0:nlit]) {
     raise InflateError(Corrupt, "corrupt: bad literal/length tree")
@@ -508,25 +482,19 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
   if v >= 286 {
     raise InflateError(Corrupt, "corrupt: invalid literal/length code")
   }
-  let length_info = length_code_info_table[v - 257]
-  let base = length_info >> 3
-  let nextra = length_info & 0x7
+  let base = length_code_base(v)
+  let nextra = length_code_extra(v)
   let length = if nextra > 0 { base + self.read_bits(nextra) } else { base }
   let dsym = if self.hd_fixed {
-    self.fill(5)
-    let low5 = self.bitbuf & 0x1F
-    self.bitbuf = self.bitbuf >> 5
-    self.bit_count = self.bit_count - 5
-    reverse8(((low5 << 3) & 0xFF).to_byte()).to_int()
+    fixed_distance_symbol(self.read_bits(5))
   } else {
     self.huff_sym(self.hd.unwrap())
   }
   if dsym.reinterpret_as_uint() >= max_num_dist.reinterpret_as_uint() {
     raise InflateError(Corrupt, "corrupt: invalid distance code")
   }
-  let distance_info = distance_code_info_table[dsym]
-  let distance_base = distance_info >> 4
-  let distance_extra_bits = distance_info & 0xF
+  let distance_base = distance_code_base(dsym)
+  let distance_extra_bits = distance_code_extra(dsym)
   let dist = if distance_extra_bits == 0 {
     distance_base
   } else {
@@ -545,6 +513,37 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
 }
 
 ///|
+/// Snapshot of the input cursor taken before one atomic unit. Rewinding to a
+/// mark lets a `NeedInput`-suspended unit re-run verbatim once more input
+/// arrives, instead of resuming mid-unit.
+priv struct CursorMark {
+  bitbuf : Int
+  bit_count : Int
+  staged_pos : Int
+  in_pos : Int
+}
+
+///|
+#inline
+fn Inflater::mark_cursor(self : Inflater) -> CursorMark {
+  {
+    bitbuf: self.bitbuf,
+    bit_count: self.bit_count,
+    staged_pos: self.staged_pos,
+    in_pos: self.in_pos,
+  }
+}
+
+///|
+#inline
+fn Inflater::rewind_cursor(self : Inflater, mark : CursorMark) -> Unit {
+  self.bitbuf = mark.bitbuf
+  self.bit_count = mark.bit_count
+  self.staged_pos = mark.staged_pos
+  self.in_pos = mark.in_pos
+}
+
+///|
 /// Drive the decoder over the currently installed step-local views.
 /// The step-local input/output cursors already live on `self`, so returning
 /// only `Status` avoids allocating an internal three-tuple that `step` would
@@ -554,18 +553,12 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
     match self.mode {
       Done => return Done
       AtBlock => {
-        let cb = self.bitbuf
-        let cn = self.bit_count
-        let staged_pos_mark = self.staged_pos
-        let in_pos_mark = self.in_pos
+        let mark = self.mark_cursor()
         self.parse_block_header() catch {
           err =>
             match classify_decoder_error(err) {
               DecoderInputExhausted => {
-                self.bitbuf = cb
-                self.bit_count = cn
-                self.staged_pos = staged_pos_mark
-                self.in_pos = in_pos_mark
+                self.rewind_cursor(mark)
                 return NeedMoreInput
               }
               DecoderFailure(kind, message) => raise InflateError(kind, message)
@@ -596,18 +589,12 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
         if self.out_pos >= self.out_end {
           return NeedMoreOutput
         }
-        let cb = self.bitbuf
-        let cn = self.bit_count
-        let staged_pos_mark = self.staged_pos
-        let in_pos_mark = self.in_pos
+        let mark = self.mark_cursor()
         let eob = self.decode_unit() catch {
           err =>
             match classify_decoder_error(err) {
               DecoderInputExhausted => {
-                self.bitbuf = cb
-                self.bit_count = cn
-                self.staged_pos = staged_pos_mark
-                self.in_pos = in_pos_mark
+                self.rewind_cursor(mark)
                 return NeedMoreInput
               }
               DecoderFailure(kind, message) => raise InflateError(kind, message)

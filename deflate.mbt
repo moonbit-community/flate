@@ -150,6 +150,19 @@ fn Deflater::finish_step(
 }
 
 ///|
+/// Latch a caller-supplied control action once its input view has been fully
+/// accepted. `Finish` is sticky until the final block is emitted; `SyncFlush`
+/// is sticky until the flush is produced. Later input is left unconsumed.
+fn Deflater::latch_action(self : Deflater, action : DeflateAction) -> Unit {
+  if action is Finish {
+    self.end_requested = true
+    self.flush_requested = false
+  } else if action is SyncFlush && !self.flush_done {
+    self.flush_requested = true
+  }
+}
+
+///|
 /// Run one compression step. Accepts as much of `input` as fits in one bounded
 /// block window, emits blocks, and drains compressed bytes into `output`.
 /// Returns the status; read `last_consumed()` and `last_produced()` immediately
@@ -189,12 +202,7 @@ pub fn Deflater::step(
   // An empty view is already fully accepted, so its control request can be
   // latched even while older compressed output is still backpressured.
   if input.length() == 0 && !self.end_requested && !self.emitted_final {
-    if action is Finish {
-      self.end_requested = true
-      self.flush_requested = false
-    } else if action is SyncFlush && !self.flush_done {
-      self.flush_requested = true
-    }
+    self.latch_action(action)
   }
   let out_end = output.length()
   let input_end = input.length()
@@ -254,12 +262,7 @@ pub fn Deflater::step(
       // Latch control the instant its complete input view is accepted, before
       // emitting that block can return through output backpressure.
       if consumed == input_end {
-        if action is Finish {
-          self.end_requested = true
-          self.flush_requested = false
-        } else if action is SyncFlush && !self.flush_done {
-          self.flush_requested = true
-        }
+        self.latch_action(action)
       }
       continue
     }

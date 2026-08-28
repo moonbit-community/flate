@@ -199,6 +199,35 @@ fn pack_match_token(length : Int, distance : Int) -> Int {
 }
 
 ///|
+/// Record one match token starting at byte `start` with the given `length` and
+/// `distance`: push the packed token, tally its literal/length and distance
+/// symbols, and fill the hash chain over the match's interior bytes so later
+/// positions may match inside it. Returns the position one past the match.
+#inline
+fn commit_match(
+  data : Bytes,
+  head : Array[Int],
+  prev : Array[Int],
+  n : Int,
+  seed_from : Int,
+  start : Int,
+  length : Int,
+  dist : Int,
+  tokens : Array[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Int {
+  tokens.push(pack_match_token(length, dist))
+  ll_freq[257 + len_to_idx[length]] += 1
+  d_freq[dist_index(dist)] += 1
+  let match_end = start + length
+  for j in (start + 1)..<match_end {
+    insert_pos(data, head, prev, j, n, seed_from)
+  }
+  match_end
+}
+
+///|
 /// LZ77 over `data[start:end)` with the given level's search tuning. Appends to
 /// the caller-owned `tokens`, increments the caller-owned literal/length and
 /// distance frequency tables (sized 286 / 30, end-of-block not yet counted),
@@ -267,27 +296,28 @@ fn tokenize(
         i = i + 1
       } else {
         // The deferred match (starting at i-1) wins: emit it.
-        tokens.push(pack_match_token(prev_len, prev_dist))
-        ll_freq[257 + len_to_idx[prev_len]] += 1
-        d_freq[dist_index(prev_dist)] += 1
-        let match_end = i - 1 + prev_len
-        for j in (i + 1)..<match_end {
-          insert_pos(data, head, prev, j, n, seed_from)
-        }
-        i = match_end
+        i = commit_match(
+          data,
+          head,
+          prev,
+          n,
+          seed_from,
+          i - 1,
+          prev_len,
+          prev_dist,
+          tokens,
+          ll_freq,
+          d_freq,
+        )
         have_prev = false
       }
     } else if cur_dist > 0 && cur_len >= 3 {
       if cfg.max_lazy == 0 {
         // Greedy levels (1-3): commit the match immediately.
-        tokens.push(match_info)
-        ll_freq[257 + len_to_idx[cur_len]] += 1
-        d_freq[dist_index(cur_dist)] += 1
-        let match_end = i + cur_len
-        for j in (i + 1)..<match_end {
-          insert_pos(data, head, prev, j, n, seed_from)
-        }
-        i = match_end
+        i = commit_match(
+          data, head, prev, n, seed_from, i, cur_len, cur_dist, tokens, ll_freq,
+          d_freq,
+        )
       } else {
         prev_len = cur_len
         prev_dist = cur_dist
@@ -303,10 +333,19 @@ fn tokenize(
   }
   if have_prev {
     // A still-pending match at the boundary commits here.
-    tokens.push(pack_match_token(prev_len, prev_dist))
-    ll_freq[257 + len_to_idx[prev_len]] += 1
-    d_freq[dist_index(prev_dist)] += 1
-    i = i - 1 + prev_len
+    i = commit_match(
+      data,
+      head,
+      prev,
+      n,
+      seed_from,
+      i - 1,
+      prev_len,
+      prev_dist,
+      tokens,
+      ll_freq,
+      d_freq,
+    )
   }
   i
 }

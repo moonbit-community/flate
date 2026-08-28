@@ -44,3 +44,121 @@ fn back_reference_distance_is_valid(
 ) -> Bool {
   distance.reinterpret_as_uint() - 1U < available_history.reinterpret_as_uint()
 }
+
+///|
+/// Static interpretation of one dynamic-header repeat symbol. Keeping this
+/// independent of either bit reader makes the streaming and in-memory decoders
+/// agree on the symbol's base count, extra-bit width, and repeated value.
+priv struct CodeLengthRepeat {
+  base : Int
+  extra_bits : Int
+  value : Int
+}
+
+///|
+fn interpret_code_length_repeat(
+  symbol : Int,
+  previous : Int?,
+) -> CodeLengthRepeat raise InflateError {
+  match symbol {
+    16 => {
+      guard previous is Some(value) else {
+        raise InflateError(Corrupt, "corrupt: repeat with no previous length")
+      }
+      { base: 3, extra_bits: 2, value, }
+    }
+    17 => { base: 3, extra_bits: 3, value: 0, }
+    18 => { base: 11, extra_bits: 7, value: 0, }
+    _ => raise InflateError(Corrupt, "corrupt: bad code-length symbol")
+  }
+}
+
+///|
+/// Interpret a literal/length code's base length and extra-bit width
+/// (RFC 1951 §3.2.5). The caller adds `read_bits(extra)` to the base.
+/// Split into two scalar helpers rather than returning a tuple so the per-token
+/// decode path allocates nothing.
+#inline
+fn length_code_base(code : Int) -> Int {
+  length_code_info_table[code - 257] >> 3
+}
+
+///|
+#inline
+fn length_code_extra(code : Int) -> Int {
+  length_code_info_table[code - 257] & 0x7
+}
+
+///|
+/// Interpret a distance code's base distance and extra-bit width
+/// (RFC 1951 §3.2.5). The caller adds `read_bits(extra)` to the base.
+#inline
+fn distance_code_base(code : Int) -> Int {
+  distance_code_info_table[code] >> 4
+}
+
+///|
+#inline
+fn distance_code_extra(code : Int) -> Int {
+  distance_code_info_table[code] & 0xF
+}
+
+///|
+/// The fixed-Huffman distance symbol carried by a raw five-bit code: the code
+/// is stored bit-reversed in the lowest five bits (RFC 1951 §3.2.6).
+#inline
+fn fixed_distance_symbol(bits5 : Int) -> Int {
+  reverse8(((bits5 << 3) & 0xFF).to_byte()).to_int()
+}
+
+///|
+/// Decode one dynamic-Huffman block header, shared by the streaming `Inflater`
+/// and the in-memory `MemDecoder` so both interpret HLIT/HDIST/HCLEN and the
+/// code-length run-length encoding identically. `read_bits` and `huff_sym`
+/// come from the caller's bit reader and raise only `InflateError`; the
+/// streaming decoder's input-suspension signal is converted to `Truncated` at
+/// its call site. `huff_sym` reads from the code-length tree, which this
+/// function has just initialized inside `dyn_litlen`. `codebits` must have
+/// `num_codes` slots and `clbits` room for `nlit + ndist`. Returns the
+/// literal/length and distance code counts.
+fn decode_dynamic_header(
+  read_bits : (Int) -> Int raise InflateError,
+  huff_sym : () -> Int raise InflateError,
+  dyn_litlen : HuffmanDecoder,
+  codebits : Array[Int],
+  clbits : Array[Int],
+) -> (Int, Int) raise InflateError {
+  let nlit = dynamic_literal_count(read_bits(5))
+  let ndist = dynamic_distance_count(read_bits(5))
+  let nclen = read_bits(4) + 4
+  for i in 0..<nclen {
+    codebits[code_order[i]] = read_bits(3)
+  }
+  for i in nclen..<code_order.length() {
+    codebits[code_order[i]] = 0
+  }
+  if !dyn_litlen.initialize(codebits[:]) {
+    raise InflateError(Corrupt, "corrupt: bad code-length tree")
+  }
+  let n = nlit + ndist
+  let mut i = 0
+  while i < n {
+    let x = huff_sym()
+    if x < 16 {
+      clbits[i] = x
+      i = i + 1
+    } else {
+      let previous = if i == 0 { None } else { Some(clbits[i - 1]) }
+      let repeat = interpret_code_length_repeat(x, previous)
+      let rep = repeat.base + read_bits(repeat.extra_bits)
+      if i + rep > n {
+        raise InflateError(Corrupt, "corrupt: code-length repeat overflow")
+      }
+      for _j in 0..<rep {
+        clbits[i] = repeat.value
+        i = i + 1
+      }
+    }
+  }
+  (nlit, ndist)
+}

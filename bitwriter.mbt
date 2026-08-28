@@ -25,19 +25,23 @@ fn BitWriter::write_bit(self : BitWriter, bit : Int) -> Unit {
 }
 
 ///|
-/// Write the low `n` bits of `value`, LSB-first.
+/// Write the low `n` bits of `value`, LSB-first. Batched: the bits are shifted
+/// into the accumulator in one step and complete bytes flushed whole, instead
+/// of looping one bit at a time.
 fn BitWriter::write_bits(self : BitWriter, value : Int, n : Int) -> Unit {
-  for i in 0..<n {
-    self.write_bit((value >> i) & 1)
+  self.bitbuf = self.bitbuf | ((value & ((1 << n) - 1)) << self.bit_count)
+  self.bit_count = self.bit_count + n
+  while self.bit_count >= 8 {
+    self.out.push((self.bitbuf & 0xFF).to_byte())
+    self.bitbuf = self.bitbuf >> 8
+    self.bit_count = self.bit_count - 8
   }
 }
 
 ///|
 /// Write an `n`-bit Huffman code, MSB-first.
 fn BitWriter::write_code(self : BitWriter, code : Int, n : Int) -> Unit {
-  for i = n - 1; i >= 0; i = i - 1 {
-    self.write_bit((code >> i) & 1)
-  }
+  self.write_bits(reverse_bits(code.reinterpret_as_uint(), n).reinterpret_as_int(), n)
 }
 
 ///|

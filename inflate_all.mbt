@@ -129,25 +129,19 @@ fn MemDecoder::decode_block(
     } else if v == 256 {
       return
     } else if v < 286 {
-      let length_info = length_code_info_table[v - 257]
-      let base = length_info >> 3
-      let nextra = length_info & 0x7
+      let base = length_code_base(v)
+      let nextra = length_code_extra(v)
       let length = if nextra > 0 { base + self.read_bits(nextra) } else { base }
       let dsym = if hd is Some(h) {
         self.huff_sym(h)
       } else {
-        self.need(5)
-        let low5 = self.bitbuf & 0x1F
-        self.bitbuf = self.bitbuf >> 5
-        self.bit_count = self.bit_count - 5
-        reverse8(((low5 << 3) & 0xFF).reinterpret_as_int().to_byte()).to_int()
+        fixed_distance_symbol(self.read_bits(5))
       }
       if dsym.reinterpret_as_uint() >= max_num_dist.reinterpret_as_uint() {
         raise InflateError(Corrupt, "corrupt: invalid distance code")
       }
-      let distance_info = distance_code_info_table[dsym]
-      let distance_base = distance_info >> 4
-      let distance_extra_bits = distance_info & 0xF
+      let distance_base = distance_code_base(dsym)
+      let distance_extra_bits = distance_code_extra(dsym)
       let dist = if distance_extra_bits == 0 {
         distance_base
       } else {
@@ -193,38 +187,13 @@ fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
 
 ///|
 fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
-  let nlit = dynamic_literal_count(self.read_bits(5))
-  let ndist = dynamic_distance_count(self.read_bits(5))
-  let nclen = self.read_bits(4) + 4
-  for i in 0..<nclen {
-    self.codebits[code_order[i]] = self.read_bits(3)
-  }
-  for i in nclen..<code_order.length() {
-    self.codebits[code_order[i]] = 0
-  }
-  if !self.dyn_litlen.initialize(self.codebits[:]) {
-    raise InflateError(Corrupt, "corrupt: bad code-length tree")
-  }
-  let n = nlit + ndist
-  let mut i = 0
-  while i < n {
-    let x = self.huff_sym(self.dyn_litlen)
-    if x < 16 {
-      self.clbits[i] = x
-      i = i + 1
-    } else {
-      let previous = if i == 0 { None } else { Some(self.clbits[i - 1]) }
-      let repeat = interpret_code_length_repeat(x, previous)
-      let rep = repeat.base + self.read_bits(repeat.extra_bits)
-      if i + rep > n {
-        raise InflateError(Corrupt, "corrupt: code-length repeat overflow")
-      }
-      for _j in 0..<rep {
-        self.clbits[i] = repeat.value
-        i = i + 1
-      }
-    }
-  }
+  let (nlit, ndist) = decode_dynamic_header(
+    n => self.read_bits(n),
+    () => self.huff_sym(self.dyn_litlen),
+    self.dyn_litlen,
+    self.codebits,
+    self.clbits,
+  )
   if !self.dyn_litlen.initialize(self.clbits[0:nlit]) {
     raise InflateError(Corrupt, "corrupt: bad literal/length tree")
   }

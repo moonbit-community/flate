@@ -88,6 +88,38 @@ fn Deflater::emit_one(self : Deflater) -> Unit {
 }
 
 ///|
+/// Tokenize everything currently un-tokenized in `pending` (from `window_carry`
+/// to the end) into one block and emit it. Shared by the final block and the
+/// sync-flush trailing block so both drain the remainder identically. Returns
+/// the position one past the last byte consumed.
+fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
+  let data = Bytes::from_array(self.pending)
+  let tokens : Array[Int] = []
+  let ll_freq = Array::make(286, 0)
+  let d_freq = Array::make(30, 0)
+  let processed = tokenize(
+    data,
+    self.window_carry,
+    data.length(),
+    self.cfg,
+    tokens,
+    ll_freq,
+    d_freq,
+  )
+  emit_block(
+    self.w,
+    data,
+    self.window_carry,
+    processed,
+    tokens[:],
+    ll_freq,
+    d_freq,
+    is_final~,
+  )
+  processed
+}
+
+///|
 /// Tokenize all remaining input into final block(s) — capped non-final blocks
 /// while more than one block's worth remains — and flush to a byte boundary.
 fn Deflater::emit_final(self : Deflater) -> Unit {
@@ -97,29 +129,7 @@ fn Deflater::emit_final(self : Deflater) -> Unit {
     while self.pending.length() - self.window_carry > deflate_block_size {
       self.emit_capped()
     }
-    let data = Bytes::from_array(self.pending)
-    let tokens : Array[Int] = []
-    let ll_freq = Array::make(286, 0)
-    let d_freq = Array::make(30, 0)
-    let processed = tokenize(
-      data,
-      self.window_carry,
-      data.length(),
-      self.cfg,
-      tokens,
-      ll_freq,
-      d_freq,
-    )
-    emit_block(
-      self.w,
-      data,
-      self.window_carry,
-      processed,
-      tokens[:],
-      ll_freq,
-      d_freq,
-      is_final=true,
-    )
+    ignore(self.emit_trailing_block(is_final=true))
   }
   self.w.flush()
   self.emitted_final = true
@@ -143,29 +153,7 @@ fn Deflater::emit_flush(self : Deflater) -> Unit {
     // Capped blocks may have consumed everything (match overhang); only emit
     // a trailing block if un-tokenized input actually remains.
     if self.pending.length() > self.window_carry {
-      let data = Bytes::from_array(self.pending)
-      let tokens : Array[Int] = []
-      let ll_freq = Array::make(286, 0)
-      let d_freq = Array::make(30, 0)
-      let processed = tokenize(
-        data,
-        self.window_carry,
-        data.length(),
-        self.cfg,
-        tokens,
-        ll_freq,
-        d_freq,
-      )
-      emit_block(
-        self.w,
-        data,
-        self.window_carry,
-        processed,
-        tokens[:],
-        ll_freq,
-        d_freq,
-        is_final=false,
-      )
+      let processed = self.emit_trailing_block(is_final=false)
       self.trim_window(processed)
     }
   }

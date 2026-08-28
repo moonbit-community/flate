@@ -228,6 +228,108 @@ fn grouping_cost(
 }
 
 ///|
+/// Byte offset where each token starts, with `positions[tokens.length()]`
+/// pinned to `end`. A literal advances one byte; a match advances its length.
+fn token_positions(tokens : Array[Int], start : Int, end : Int) -> Array[Int] {
+  let positions = Array::make(tokens.length() + 1, 0)
+  let mut p = start
+  for k in 0..<tokens.length() {
+    positions[k] = p
+    let tok = tokens[k]
+    p = p + (if tok < 256 { 1 } else { tok >> 16 })
+  }
+  positions[tokens.length()] = end
+  positions
+}
+
+///|
+/// Phase 1 for one master chunk: a cheap greedy reference parse (level-9
+/// tuning), its split points, and an optimal parse of each segment,
+/// concatenated into `tokens` with `joins` recording the phase-1 boundaries as
+/// token indices. `chunk_end` may overhang `target` when a boundary match
+/// straddled it.
+priv struct OptimalChunk {
+  tokens : Array[Int]
+  joins : Array[Int]
+  chunk_end : Int
+}
+
+///|
+fn optimal_parse_chunk(
+  input : Bytes,
+  pos : Int,
+  target : Int,
+  iterations : Int,
+) -> OptimalChunk {
+  let gtoks : Array[Int] = []
+  let greedy_ll_freq = Array::make(286, 0)
+  let greedy_d_freq = Array::make(30, 0)
+  let processed = tokenize(
+    input,
+    pos,
+    target,
+    level_configs[9],
+    gtoks,
+    greedy_ll_freq,
+    greedy_d_freq,
+  )
+  let chunk_end = processed // a boundary match may overhang `target`
+  let gtok_pos = token_positions(gtoks, pos, chunk_end)
+  let bounds1 = plan_split_points(gtoks, gtok_pos)
+  let tokens : Array[Int] = []
+  let joins : Array[Int] = [0] // phase-1 boundaries, as optimal-token indices
+  for s in 0..<(bounds1.length() - 1) {
+    let a = gtok_pos[bounds1[s]]
+    let b = gtok_pos[bounds1[s + 1]]
+    let toks = tokenize_optimal(input, a, b, iterations)
+    for t in toks {
+      tokens.push(t)
+    }
+    joins.push(tokens.length())
+  }
+  { tokens, joins, chunk_end, }
+}
+
+///|
+/// Phase 2 for one master chunk (zopfli's blocksplittinglast): re-split the
+/// optimal tokens, then emit whichever grouping is cheaper by exact cost
+/// through the ordinary `emit_block`.
+fn emit_optimal_chunk(
+  w : BitWriter,
+  input : Bytes,
+  chunk : OptimalChunk,
+  pos : Int,
+  n : Int,
+) -> Unit {
+  let all = chunk.tokens
+  let all_pos = token_positions(all, pos, chunk.chunk_end)
+  let bounds2 = plan_split_points(all, all_pos)
+  let bounds = if grouping_cost(all, all_pos, bounds2) <
+    grouping_cost(all, all_pos, chunk.joins) {
+    bounds2
+  } else {
+    chunk.joins
+  }
+  for s in 0..<(bounds.length() - 1) {
+    let lo = bounds[s]
+    let hi = bounds[s + 1]
+    let ll_freq = Array::make(286, 0)
+    let d_freq = Array::make(30, 0)
+    range_freqs(all, lo, hi, ll_freq, d_freq)
+    emit_block(
+      w,
+      input,
+      all_pos[lo],
+      all_pos[hi],
+      all[lo:hi],
+      ll_freq,
+      d_freq,
+      is_final=all_pos[hi] == n,
+    )
+  }
+}
+
+///|
 /// Compress with zopfli-style effort: content-driven block splitting plus
 /// iterated optimal parsing, with a second splitting pass over the optimal
 /// tokens (blocksplittinglast). Tens to hundreds of times slower than
@@ -252,76 +354,9 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
     } else {
       n
     }
-    // Phase 1: cheap greedy reference parse (level-9 tuning), split it, and
-    // optimal-parse each segment, concatenating the optimal tokens.
-    let gtoks : Array[Int] = []
-    let greedy_ll_freq = Array::make(286, 0)
-    let greedy_d_freq = Array::make(30, 0)
-    let processed = tokenize(
-      input,
-      pos,
-      target,
-      level_configs[9],
-      gtoks,
-      greedy_ll_freq,
-      greedy_d_freq,
-    )
-    let chunk_end = processed // a boundary match may overhang `target`
-    let gtok_pos = Array::make(gtoks.length() + 1, 0)
-    let mut p = pos
-    for k in 0..<gtoks.length() {
-      gtok_pos[k] = p
-      let tok = gtoks[k]
-      p = p + (if tok < 256 { 1 } else { tok >> 16 })
-    }
-    gtok_pos[gtoks.length()] = chunk_end
-    let bounds1 = plan_split_points(gtoks, gtok_pos)
-    let all : Array[Int] = []
-    let joins : Array[Int] = [0] // phase-1 boundaries, as optimal-token indices
-    for s in 0..<(bounds1.length() - 1) {
-      let a = gtok_pos[bounds1[s]]
-      let b = gtok_pos[bounds1[s + 1]]
-      let toks = tokenize_optimal(input, a, b, iters)
-      for t in toks {
-        all.push(t)
-      }
-      joins.push(all.length())
-    }
-    let all_pos = Array::make(all.length() + 1, 0)
-    let mut q = pos
-    for k in 0..<all.length() {
-      all_pos[k] = q
-      let tok = all[k]
-      q = q + (if tok < 256 { 1 } else { tok >> 16 })
-    }
-    all_pos[all.length()] = chunk_end
-    // Phase 2 (blocksplittinglast): re-split over the optimal tokens, then
-    // emit whichever grouping is cheaper by exact cost.
-    let bounds2 = plan_split_points(all, all_pos)
-    let bounds = if grouping_cost(all, all_pos, bounds2) <
-      grouping_cost(all, all_pos, joins) {
-      bounds2
-    } else {
-      joins
-    }
-    for s in 0..<(bounds.length() - 1) {
-      let lo = bounds[s]
-      let hi = bounds[s + 1]
-      let ll_freq = Array::make(286, 0)
-      let d_freq = Array::make(30, 0)
-      range_freqs(all, lo, hi, ll_freq, d_freq)
-      emit_block(
-        w,
-        input,
-        all_pos[lo],
-        all_pos[hi],
-        all[lo:hi],
-        ll_freq,
-        d_freq,
-        is_final=all_pos[hi] == n,
-      )
-    }
-    pos = chunk_end
+    let chunk = optimal_parse_chunk(input, pos, target, iters)
+    emit_optimal_chunk(w, input, chunk, pos, n)
+    pos = chunk.chunk_end
     if pos >= n {
       break
     }

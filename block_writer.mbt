@@ -213,6 +213,88 @@ fn estimate_block_cost(
 }
 
 ///|
+/// Write the length extra bits for one match token (RFC 1951 §3.2.5), shared
+/// by the fixed- and dynamic-Huffman write paths. The distance extras stay at
+/// the call site, after the distance symbol that precedes them.
+fn write_length_extras(w : BitWriter, length : Int) -> Unit {
+  let lidx = len_to_idx[length]
+  if len_extra[lidx] > 0 {
+    w.write_bits(length - len_base[lidx], len_extra[lidx])
+  }
+}
+
+///|
+/// Write one dynamic-Huffman block (BTYPE=10): the HLIT/HDIST/HCLEN fields, the
+/// code-length code lengths, the RLE-coded code lengths, the token stream, and
+/// the end-of-block symbol.
+fn write_dynamic_block(
+  w : BitWriter,
+  codes : DynamicCodes,
+  tokens : ArrayView[Int],
+) -> Unit {
+  w.write_bits(2, 2) // BTYPE = 10 (dynamic)
+  w.write_bits(codes.hlit - 257, 5)
+  w.write_bits(codes.hdist - 1, 5)
+  w.write_bits(codes.hclen - 4, 4)
+  for k in 0..<codes.hclen {
+    w.write_bits(codes.codelen_code_len[code_order[k]], 3)
+  }
+  for it in codes.codelen_syms {
+    w.write_rcode(
+      codes.codelen_code_val[it.sym],
+      codes.codelen_code_len[it.sym],
+    )
+    if it.nextra > 0 {
+      w.write_bits(it.extra, it.nextra)
+    }
+  }
+  for tok in tokens {
+    if tok < 256 {
+      w.write_rcode(codes.dll_val[tok], codes.dll_len[tok])
+    } else {
+      let length = tok >> 16
+      let dist = tok & 0xFFFF
+      let lsym = 257 + len_to_idx[length]
+      w.write_rcode(codes.dll_val[lsym], codes.dll_len[lsym])
+      write_length_extras(w, length)
+      let didx = dist_index(dist)
+      w.write_rcode(codes.dd_val[didx], codes.dd_len[didx])
+      if dist_extra[didx] > 0 {
+        w.write_bits(dist - dist_base[didx], dist_extra[didx])
+      }
+    }
+  }
+  w.write_rcode(codes.dll_val[256], codes.dll_len[256]) // EOB
+}
+
+///|
+/// Write one fixed-Huffman block (BTYPE=01): the token stream with the fixed
+/// literal/length and distance tables, then the end-of-block symbol.
+fn write_fixed_block(w : BitWriter, tokens : ArrayView[Int]) -> Unit {
+  w.write_bits(1, 2) // BTYPE = 01 (fixed)
+  for tok in tokens {
+    if tok < 256 {
+      let info = fixed_litlen_info[tok]
+      w.write_code(info >> 4, info & 0xF)
+    } else {
+      let length = tok >> 16
+      let dist = tok & 0xFFFF
+      let lsym = 257 + len_to_idx[length]
+      let info = fixed_litlen_info[lsym]
+      w.write_code(info >> 4, info & 0xF)
+      write_length_extras(w, length)
+      let didx = dist_index(dist)
+      w.write_code(didx, 5)
+      if dist_extra[didx] > 0 {
+        w.write_bits(dist - dist_base[didx], dist_extra[didx])
+      }
+    }
+  }
+  let eob = fixed_litlen_info[256]
+  w.write_code(eob >> 4, eob & 0xF)
+}
+
+///|
 /// Write one DEFLATE block for `tokens` into `w`, choosing stored, fixed- or
 /// dynamic-Huffman by estimated size. `data[start:end)` is the raw input the
 /// tokens cover, copied verbatim when the stored encoding wins (incompressible
@@ -239,70 +321,11 @@ fn emit_block(
     write_stored(w, data, start, end, is_final~)
     return
   }
-  let use_dynamic = cost.dynamic < cost.fixed
   w.write_bit(if is_final { 1 } else { 0 }) // BFINAL
-  if use_dynamic {
-    w.write_bits(2, 2) // BTYPE = 10 (dynamic)
-    w.write_bits(codes.hlit - 257, 5)
-    w.write_bits(codes.hdist - 1, 5)
-    w.write_bits(codes.hclen - 4, 4)
-    for k in 0..<codes.hclen {
-      w.write_bits(codes.codelen_code_len[code_order[k]], 3)
-    }
-    for it in codes.codelen_syms {
-      w.write_rcode(
-        codes.codelen_code_val[it.sym],
-        codes.codelen_code_len[it.sym],
-      )
-      if it.nextra > 0 {
-        w.write_bits(it.extra, it.nextra)
-      }
-    }
-    for tok in tokens {
-      if tok < 256 {
-        w.write_rcode(codes.dll_val[tok], codes.dll_len[tok])
-      } else {
-        let length = tok >> 16
-        let dist = tok & 0xFFFF
-        let lidx = len_to_idx[length]
-        let lsym = 257 + lidx
-        w.write_rcode(codes.dll_val[lsym], codes.dll_len[lsym])
-        if len_extra[lidx] > 0 {
-          w.write_bits(length - len_base[lidx], len_extra[lidx])
-        }
-        let didx = dist_index(dist)
-        w.write_rcode(codes.dd_val[didx], codes.dd_len[didx])
-        if dist_extra[didx] > 0 {
-          w.write_bits(dist - dist_base[didx], dist_extra[didx])
-        }
-      }
-    }
-    w.write_rcode(codes.dll_val[256], codes.dll_len[256]) // EOB
+  if cost.dynamic < cost.fixed {
+    write_dynamic_block(w, codes, tokens)
   } else {
-    w.write_bits(1, 2) // BTYPE = 01 (fixed)
-    for tok in tokens {
-      if tok < 256 {
-        let info = fixed_litlen_info[tok]
-        w.write_code(info >> 4, info & 0xF)
-      } else {
-        let length = tok >> 16
-        let dist = tok & 0xFFFF
-        let lidx = len_to_idx[length]
-        let lsym = 257 + lidx
-        let info = fixed_litlen_info[lsym]
-        w.write_code(info >> 4, info & 0xF)
-        if len_extra[lidx] > 0 {
-          w.write_bits(length - len_base[lidx], len_extra[lidx])
-        }
-        let didx = dist_index(dist)
-        w.write_code(didx, 5)
-        if dist_extra[didx] > 0 {
-          w.write_bits(dist - dist_base[didx], dist_extra[didx])
-        }
-      }
-    }
-    let eob = fixed_litlen_info[256]
-    w.write_code(eob >> 4, eob & 0xF)
+    write_fixed_block(w, tokens)
   }
 }
 
