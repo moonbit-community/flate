@@ -150,7 +150,7 @@ fn inflate_entry(
   catch {
     err =>
       match err {
-        @flate.InflateError(@flate.InflateErrorKind::OutputLimitExceeded, _) =>
+        InflateError(OutputLimitExceeded, _) =>
           raise ZipError(
             LimitExceeded(limit_kind, reported_limit, max_output),
             "zip: decompressed size limit exceeded",
