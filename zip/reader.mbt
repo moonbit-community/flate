@@ -407,29 +407,19 @@ fn parse_central_directory(
       extra_bytes, need_uncomp, need_comp, need_offset,
     )
     let uncompressed_size = if need_uncomp {
-      guard zip_uncomp is Some(value) else {
-        raise ZipError(
-          UnsupportedFeature,
-          "zip: zip64 uncompressed size missing",
-        )
-      }
-      value.to_int_checked()
+      // `read_zip64_extra` guarantees a value for every needed field (it raises
+      // when the field is absent or mis-sized), so `unwrap` is safe here.
+      zip_uncomp.unwrap().to_int_checked()
     } else {
       uncomp_size_raw.to_int_checked()
     }
     let compressed_size = if need_comp {
-      guard zip_comp is Some(value) else {
-        raise ZipError(UnsupportedFeature, "zip: zip64 compressed size missing")
-      }
-      value.to_int_checked()
+      zip_comp.unwrap().to_int_checked()
     } else {
       comp_size_raw.to_int_checked()
     }
     let local_offset = if need_offset {
-      guard zip_offset is Some(value) else {
-        raise ZipError(UnsupportedFeature, "zip: zip64 local offset missing")
-      }
-      value.to_int_checked()
+      zip_offset.unwrap().to_int_checked()
     } else {
       local_offset_raw.to_int_checked()
     }

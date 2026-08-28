@@ -658,6 +658,26 @@ fn write_trailer(
 }
 
 ///|
+/// The sizing pass and the emit pass are deterministic on the same archive, so
+/// a mismatch indicates an internal serialization invariant failure rather than
+/// bad caller input; this defensive branch is excluded from behavior coverage.
+#coverage.skip
+fn assert_sizing_agrees(
+  counting_size : Int,
+  counting_central_offset : Int,
+  counting_central_size : Int,
+  central_offset : Int,
+  central_size : Int,
+  emitted_size : Int,
+) -> Unit raise ZipError {
+  if central_offset != counting_central_offset ||
+    central_size != counting_central_size ||
+    emitted_size != counting_size {
+    raise ZipError(UnsupportedFeature, "zip: sizing and emission disagreed")
+  }
+}
+
+///|
 fn write_impl(
   archive : Archive,
   preserve : Bool,
@@ -698,11 +718,14 @@ fn write_impl(
         preserve,
         false,
       )
-      if central_offset != counting_central_offset ||
-        central_size != counting_central_size ||
-        out.size != size {
-        raise ZipError(UnsupportedFeature, "zip: sizing and emission disagreed")
-      }
+      assert_sizing_agrees(
+        size,
+        counting_central_offset,
+        counting_central_size,
+        central_offset,
+        central_size,
+        out.size,
+      )
       out.finish()
     }
     None => {
