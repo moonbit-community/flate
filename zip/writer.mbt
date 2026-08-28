@@ -64,7 +64,7 @@ fn Output::write_u16(self : Output, value : Int) -> Unit raise ZipError {
   if value < 0 || value > 0xffff {
     raise ZipError(UnsupportedFeature, "zip: u16 overflow")
   }
-  let raw = value.reinterpret_as_uint()
+  let raw = value.to_uint_checked()
   self.write_byte((raw & 0xff).to_byte())
   self.write_byte(((raw >> 8) & 0xff).to_byte())
 }
@@ -94,8 +94,8 @@ fn Output::finish(self : Output) -> Bytes {
 }
 
 ///|
-fn write_u16_buf(buf : Buffer, value : Int) -> Unit {
-  let raw = value.reinterpret_as_uint()
+fn write_u16_buf(buf : Buffer, value : Int) -> Unit raise ZipError {
+  let raw = value.to_uint_checked()
   buf.write_byte((raw & 0xff).to_byte())
   buf.write_byte(((raw >> 8) & 0xff).to_byte())
 }
@@ -108,7 +108,11 @@ fn write_u64_buf(buf : Buffer, value : UInt64) -> Unit {
 }
 
 ///|
-fn build_zip64_extra(uncomp~ : Int?, comp~ : Int?, offset~ : Int?) -> Bytes {
+fn build_zip64_extra(
+  uncomp~ : Int?,
+  comp~ : Int?,
+  offset~ : Int?,
+) -> Bytes raise ZipError {
   let mut count = 0
   if uncomp is Some(_) {
     count = count + 1
@@ -126,15 +130,15 @@ fn build_zip64_extra(uncomp~ : Int?, comp~ : Int?, offset~ : Int?) -> Bytes {
   write_u16_buf(buf, zip64_extra_id)
   write_u16_buf(buf, 8 * count)
   match uncomp {
-    Some(value) => write_u64_buf(buf, value.to_uint64())
+    Some(value) => write_u64_buf(buf, value.to_uint64_checked())
     None => ()
   }
   match comp {
-    Some(value) => write_u64_buf(buf, value.to_uint64())
+    Some(value) => write_u64_buf(buf, value.to_uint64_checked())
     None => ()
   }
   match offset {
-    Some(value) => write_u64_buf(buf, value.to_uint64())
+    Some(value) => write_u64_buf(buf, value.to_uint64_checked())
     None => ()
   }
   buf.to_bytes()
@@ -200,8 +204,8 @@ fn write_local_record(
   let compressed_size = payload.compressed_size
   let crc = entry.crc32
   let needs_zip64_sizes = force_zip64 ||
-    data_len.reinterpret_as_uint() > max_u32 ||
-    compressed_size.reinterpret_as_uint() > max_u32
+    data_len.to_uint_checked() > max_u32 ||
+    compressed_size.to_uint_checked() > max_u32
   let version = if needs_zip64_sizes { 45 } else { 20 }
   let flags = flag_utf8 |
     (if use_descriptor { flag_data_descriptor } else { 0 })
@@ -230,12 +234,12 @@ fn write_local_record(
     let comp_field = if needs_zip64_sizes {
       max_u32
     } else {
-      compressed_size.reinterpret_as_uint()
+      compressed_size.to_uint_checked()
     }
     let uncomp_field = if needs_zip64_sizes {
       max_u32
     } else {
-      data_len.reinterpret_as_uint()
+      data_len.to_uint_checked()
     }
     out.write_u32(comp_field)
     out.write_u32(uncomp_field)
@@ -256,11 +260,11 @@ fn write_local_record(
     out.write_u32(data_descriptor_sig)
     out.write_u32(crc)
     if needs_zip64_sizes {
-      out.write_u64(compressed_size.to_uint64())
-      out.write_u64(data_len.to_uint64())
+      out.write_u64(compressed_size.to_uint64_checked())
+      out.write_u64(data_len.to_uint64_checked())
     } else {
-      out.write_u32(compressed_size.reinterpret_as_uint())
-      out.write_u32(data_len.reinterpret_as_uint())
+      out.write_u32(compressed_size.to_uint_checked())
+      out.write_u32(data_len.to_uint_checked())
     }
   }
 }
@@ -278,10 +282,10 @@ fn write_central_record(
   let method_id = method_code(entry)
   let data_len = entry.data.length()
   let needs_zip64_sizes = force_zip64 ||
-    data_len.reinterpret_as_uint() > max_u32 ||
-    compressed_size.reinterpret_as_uint() > max_u32
+    data_len.to_uint_checked() > max_u32 ||
+    compressed_size.to_uint_checked() > max_u32
   let needs_zip64_offset = force_zip64 ||
-    local_offset.reinterpret_as_uint() > max_u32
+    local_offset.to_uint_checked() > max_u32
   let needs_zip64_entry = needs_zip64_sizes || needs_zip64_offset
   let version = if needs_zip64_entry { 45 } else { 20 }
   let flags = flag_utf8 |
@@ -302,12 +306,12 @@ fn write_central_record(
   let comp_field = if needs_zip64_sizes {
     max_u32
   } else {
-    compressed_size.reinterpret_as_uint()
+    compressed_size.to_uint_checked()
   }
   let uncomp_field = if needs_zip64_sizes {
     max_u32
   } else {
-    data_len.reinterpret_as_uint()
+    data_len.to_uint_checked()
   }
   out.write_u32(comp_field)
   out.write_u32(uncomp_field)
@@ -320,7 +324,7 @@ fn write_central_record(
   let offset_field = if needs_zip64_offset {
     max_u32
   } else {
-    local_offset.reinterpret_as_uint()
+    local_offset.to_uint_checked()
   }
   out.write_u32(offset_field)
   out.write_bytes(name_bytes)
@@ -344,12 +348,12 @@ fn write_preserved_central_record(
   match source.central_zip64_offset_position {
     Some(position) => {
       out.write_bytes(template[0:position])
-      out.write_u64(local_offset.to_uint64())
+      out.write_u64(local_offset.to_uint64_checked())
       out.write_bytes(template[position + 8:])
     }
     None => {
       out.write_bytes(template[0:42])
-      out.write_u32(local_offset.reinterpret_as_uint())
+      out.write_u32(local_offset.to_uint_checked())
       out.write_bytes(template[46:])
     }
   }
@@ -381,8 +385,8 @@ fn write_generated_classic_end_record(
     }
     out.write_u16(total_entries)
     out.write_u16(total_entries)
-    out.write_u32(central_size.reinterpret_as_uint())
-    out.write_u32(central_offset.reinterpret_as_uint())
+    out.write_u32(central_size.to_uint_checked())
+    out.write_u32(central_offset.to_uint_checked())
   }
   if comment.length() > 0xffff {
     raise ZipError(UnsupportedFeature, "zip: archive comment too long")
@@ -401,19 +405,19 @@ fn write_generated_zip64_trailer(
 ) -> Unit raise ZipError {
   let zip64_offset = out.size
   out.write_u32(zip64_eocd_sig)
-  out.write_u64((44).to_uint64())
+  out.write_u64((44).to_uint64_checked())
   out.write_u16(45)
   out.write_u16(45)
   out.write_u32(0)
   out.write_u32(0)
-  let entry_count = total_entries.to_uint64()
+  let entry_count = total_entries.to_uint64_checked()
   out.write_u64(entry_count)
   out.write_u64(entry_count)
-  out.write_u64(central_size.to_uint64())
-  out.write_u64(central_offset.to_uint64())
+  out.write_u64(central_size.to_uint64_checked())
+  out.write_u64(central_offset.to_uint64_checked())
   out.write_u32(zip64_locator_sig)
   out.write_u32(0)
-  out.write_u64(zip64_offset.to_uint64())
+  out.write_u64(zip64_offset.to_uint64_checked())
   out.write_u32(1)
   write_generated_classic_end_record(
     out, true, total_entries, central_size, central_offset, comment,
@@ -446,10 +450,10 @@ fn write_preserved_trailer(
       // Patch the two entry-count fields, central size, and central offset
       // (offsets 24/32/40/48 within the record) over the verbatim template.
       out.write_bytes(end_record[0:24])
-      out.write_u64(total_entries.to_uint64())
-      out.write_u64(total_entries.to_uint64())
-      out.write_u64(central_size.to_uint64())
-      out.write_u64(central_offset.to_uint64())
+      out.write_u64(total_entries.to_uint64_checked())
+      out.write_u64(total_entries.to_uint64_checked())
+      out.write_u64(central_size.to_uint64_checked())
+      out.write_u64(central_offset.to_uint64_checked())
       out.write_bytes(end_record[56:])
       guard trailer.zip64_locator is Some(locator) else {
         raise ZipError(
@@ -465,7 +469,7 @@ fn write_preserved_trailer(
         )
       }
       out.write_bytes(locator[0:8])
-      out.write_u64(zip64_offset.to_uint64())
+      out.write_u64(zip64_offset.to_uint64_checked())
       out.write_bytes(locator[16:])
       // The classic record of a preserved ZIP64 archive carries sentinels;
       // re-emit it verbatim.
@@ -510,13 +514,13 @@ fn write_preserved_classic_end_record(
   let size_field = read_u32_le_at_raw(classic, 12)
   if size_field != max_u32 {
     out.write_bytes(classic[cursor:12])
-    out.write_u32(central_size.reinterpret_as_uint())
+    out.write_u32(central_size.to_uint_checked())
     cursor = 16
   }
   let offset_field = read_u32_le_at_raw(classic, 16)
   if offset_field != max_u32 {
     out.write_bytes(classic[cursor:16])
-    out.write_u32(central_offset.reinterpret_as_uint())
+    out.write_u32(central_offset.to_uint_checked())
     cursor = 20
   }
   out.write_bytes(classic[cursor:])
@@ -623,8 +627,8 @@ fn write_trailer(
 ) -> Unit raise ZipError {
   let needs_zip64 = force_zip64 ||
     total_entries > 0xffff ||
-    central_size.reinterpret_as_uint() > max_u32 ||
-    central_offset.reinterpret_as_uint() > max_u32
+    central_size.to_uint_checked() > max_u32 ||
+    central_offset.to_uint_checked() > max_u32
   match (preserve, archive.trailer) {
     (true, Some(trailer)) if !needs_zip64 || trailer.zip64_end_record is Some(_) =>
       write_preserved_trailer(

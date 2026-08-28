@@ -219,28 +219,3 @@ fn copy_cancellable(
 fn initialized_zip_byte_buffer_to_bytes(
   buffer : UninitializedArray[Byte],
 ) -> Bytes = "%identity"
-
-///|
-fn u32_to_int(value : UInt) -> Int raise ZipError {
-  let result = value.reinterpret_as_int()
-  if result < 0 {
-    raise ZipError(
-      UnsupportedFeature,
-      "zip: size exceeds the platform Int range",
-    )
-  }
-  result
-}
-
-///|
-fn u64_to_int(value : UInt64) -> Int raise ZipError {
-  // `to_int` truncates silently for out-of-range values; guard explicitly so a
-  // lying ZIP64 size (e.g. 2^32) cannot wrap into a small valid-looking Int.
-  if value > 0x7fff_ffff {
-    raise ZipError(
-      UnsupportedFeature,
-      "zip: size exceeds the platform Int range",
-    )
-  }
-  value.to_int()
-}

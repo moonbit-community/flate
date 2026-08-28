@@ -91,7 +91,7 @@ fn read_zip64_eocd(
       "zip: multi-disk archives are not supported",
     )
   }
-  let zip64_offset = u64_to_int(zip64_offset_u64)
+  let zip64_offset = zip64_offset_u64.to_int_checked()
   if zip64_offset > locator_offset || 12 > locator_offset - zip64_offset {
     raise ZipError(Truncated, "zip: zip64 end record out of bounds")
   }

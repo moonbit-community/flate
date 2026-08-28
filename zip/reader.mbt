@@ -270,27 +270,21 @@ fn read_impl(
       )
     }
     (
-      u64_to_int(
-        if total_entries == 0xFFFF {
-          zip_entries
-        } else {
-          total_entries.to_uint64()
-        },
-      ),
-      u64_to_int(
-        if central_size_raw == max_u32 {
-          zip_size
-        } else {
-          UInt64::extend_uint(central_size_raw)
-        },
-      ),
-      u64_to_int(
-        if central_offset_raw == max_u32 {
-          zip_offset
-        } else {
-          UInt64::extend_uint(central_offset_raw)
-        },
-      ),
+      (if total_entries == 0xFFFF {
+        zip_entries
+      } else {
+        total_entries.to_uint64()
+      }).to_int_checked(),
+      (if central_size_raw == max_u32 {
+        zip_size
+      } else {
+        UInt64::extend_uint(central_size_raw)
+      }).to_int_checked(),
+      (if central_offset_raw == max_u32 {
+        zip_offset
+      } else {
+        UInt64::extend_uint(central_offset_raw)
+      }).to_int_checked(),
       zip64_offset,
     )
   } else {
@@ -302,8 +296,8 @@ fn read_impl(
     }
     (
       total_entries,
-      u32_to_int(central_size_raw),
-      u32_to_int(central_offset_raw),
+      central_size_raw.to_int_checked(),
+      central_offset_raw.to_int_checked(),
       eocd_offset,
     )
   }
@@ -382,25 +376,25 @@ fn read_impl(
           "zip: zip64 uncompressed size missing",
         )
       }
-      u64_to_int(value)
+      value.to_int_checked()
     } else {
-      u32_to_int(uncomp_size_raw)
+      uncomp_size_raw.to_int_checked()
     }
     let compressed_size = if need_comp {
       guard zip_comp is Some(value) else {
         raise ZipError(UnsupportedFeature, "zip: zip64 compressed size missing")
       }
-      u64_to_int(value)
+      value.to_int_checked()
     } else {
-      u32_to_int(comp_size_raw)
+      comp_size_raw.to_int_checked()
     }
     let local_offset = if need_offset {
       guard zip_offset is Some(value) else {
         raise ZipError(UnsupportedFeature, "zip: zip64 local offset missing")
       }
-      u64_to_int(value)
+      value.to_int_checked()
     } else {
-      u32_to_int(local_offset_raw)
+      local_offset_raw.to_int_checked()
     }
     let central_zip64_offset_position = offset_position.map(position => {
       46 + name_len + position
