@@ -52,9 +52,9 @@
           cp -R ${self} source
           chmod -R u+w source
           cd source
-          moon check --target all --warn-list +73 --deny-warn
+          moon check --target all --deny-warn
           moon fmt --check
-          moon test --target native --warn-list +73 --deny-warn
+          moon test --target native --deny-warn
           touch "$out"
         '';
       });

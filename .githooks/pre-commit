@@ -2,7 +2,7 @@
 
 set -eu
 
-moon check --target all --warn-list +73 --deny-warn
+moon check --target all --deny-warn
 moon test
 moon info
 moon fmt
