@@ -8,11 +8,11 @@
 /// tokenizes directly over `input`, advancing a single offset, with none of the
 /// streaming `Deflater`'s per-block buffering.
 pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
-  let lv = if level < 0 { 0 } else if level > 9 { 9 } else { level }
+  let lv = clamp_level(level)
   let w = BitWriter()
   let n = input.length()
   // Level 0 (and the empty input it subsumes): one stored pass, no parsing.
-  if lv == 0 {
+  guard lv != 0 else {
     write_stored(w, input, 0, n, is_final=true)
     w.flush()
     return Bytes::from_array(w.out)
@@ -23,11 +23,7 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
   // start.
   let mut pos = 0
   for ;; {
-    let target = if pos + DEFLATE_BLOCK_SIZE < n {
-      pos + DEFLATE_BLOCK_SIZE
-    } else {
-      n
-    }
+    let target = (pos + DEFLATE_BLOCK_SIZE).min(n)
     let tokens : Array[Int] = []
     let ll_freq = Array::make(286, 0)
     let d_freq = Array::make(30, 0)
@@ -43,9 +39,7 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
       is_final=processed >= n,
     )
     pos = processed
-    if pos >= n {
-      break
-    }
+    guard pos < n else { break }
   }
   w.flush()
   Bytes::from_array(w.out)

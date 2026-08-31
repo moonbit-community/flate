@@ -94,7 +94,7 @@ fn split_end_block_check(
   for i in 0..<SPLIT_NUM_CLASSES {
     let a = new[i] * old_tot
     let b = old[i] * new_tot
-    delta = delta + (if a >= b { a - b } else { b - a })
+    delta = delta + (a - b).abs()
   }
   let cutoff = new_tot * SPLIT_CUTOFF_NUM / SPLIT_CUTOFF_DEN * old_tot
   delta + block_bytes / SPLIT_BIAS_BYTES * old_tot >= cutoff
@@ -128,31 +128,34 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
     let tb = split_token_bytes(tok)
     block_bytes = block_bytes + tb
     done_bytes = done_bytes + tb
-    if block_bytes >= SPLIT_MIN_BLOCK_BYTES &&
-      total_bytes - done_bytes >= SPLIT_MIN_BLOCK_BYTES {
-      let cut = block_bytes >= SPLIT_SOFT_MAX_BLOCK_BYTES ||
-        (
-          new_tot >= SPLIT_CHECK_TOKENS &&
-          old_tot > 0 &&
-          split_end_block_check(old, old_tot, new, new_tot, block_bytes)
-        )
-      if cut {
-        cuts.push(i + 1)
-        for j in 0..<SPLIT_NUM_CLASSES {
-          old[j] = 0
-          new[j] = 0
-        }
-        old_tot = 0
-        new_tot = 0
-        block_bytes = 0
-      } else if new_tot >= SPLIT_CHECK_TOKENS {
-        for j in 0..<SPLIT_NUM_CLASSES {
-          old[j] = old[j] + new[j]
-          new[j] = 0
-        }
-        old_tot = old_tot + new_tot
-        new_tot = 0
+    guard block_bytes >= SPLIT_MIN_BLOCK_BYTES &&
+      total_bytes - done_bytes >= SPLIT_MIN_BLOCK_BYTES else {
+      continue
+    }
+    let cut = block_bytes >= SPLIT_SOFT_MAX_BLOCK_BYTES ||
+      (
+        new_tot >= SPLIT_CHECK_TOKENS &&
+        old_tot > 0 &&
+        split_end_block_check(old, old_tot, new, new_tot, block_bytes)
+      )
+    guard !cut else {
+      cuts.push(i + 1)
+      for j in 0..<SPLIT_NUM_CLASSES {
+        old[j] = 0
+        new[j] = 0
       }
+      old_tot = 0
+      new_tot = 0
+      block_bytes = 0
+      continue
+    }
+    if new_tot >= SPLIT_CHECK_TOKENS {
+      for j in 0..<SPLIT_NUM_CLASSES {
+        old[j] = old[j] + new[j]
+        new[j] = 0
+      }
+      old_tot = old_tot + new_tot
+      new_tot = 0
     }
   }
   cuts
@@ -265,30 +268,23 @@ fn emit_split_blocks(
 /// A mid-tier between the fixed-cadence `deflate_all` and the offline zopfli
 /// `deflate_all_optimal`.
 pub fn deflate_all_split(input : Bytes, level? : Int = 6) -> Bytes {
-  let lv = if level < 0 { 0 } else if level > 9 { 9 } else { level }
+  let lv = clamp_level(level)
   let w = BitWriter()
   let n = input.length()
-  if lv == 0 {
+  guard lv != 0 else {
     write_stored(w, input, 0, n, is_final=true)
     w.flush()
     return Bytes::from_array(w.out)
   }
-  if n == 0 {
-    let ll_freq = Array::make(MAX_NUM_LIT, 0)
-    let d_freq = Array::make(MAX_NUM_DIST, 0)
-    let none : Array[Int] = []
-    emit_block(w, input, 0, 0, none[:], ll_freq, d_freq, is_final=true)
+  guard n != 0 else {
+    emit_empty_block(w, input)
     w.flush()
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
   let mut pos = 0
   for ;; {
-    let target = if pos + SPLIT_MASTER_CHUNK < n {
-      pos + SPLIT_MASTER_CHUNK
-    } else {
-      n
-    }
+    let target = (pos + SPLIT_MASTER_CHUNK).min(n)
     let tokens : Array[Int] = []
     let ll_freq = Array::make(MAX_NUM_LIT, 0)
     let d_freq = Array::make(MAX_NUM_DIST, 0)
@@ -308,9 +304,7 @@ pub fn deflate_all_split(input : Bytes, level? : Int = 6) -> Bytes {
     }
     emit_split_blocks(w, input, tokens, all_pos, cuts, n)
     pos = processed
-    if pos >= n {
-      break
-    }
+    guard pos < n else { break }
   }
   w.flush()
   Bytes::from_array(w.out)

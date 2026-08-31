@@ -54,9 +54,7 @@ fn HuffmanDecoder::initialize(
     }
     count[n] = count[n] + 1
   }
-  if max == 0 {
-    return true
-  }
+  guard max != 0 else { return true }
   let mut code = 0
   let nextcode = Array::make(MAX_CODE_LEN, 0)
   for i in min..<=max {
@@ -64,9 +62,7 @@ fn HuffmanDecoder::initialize(
     nextcode[i] = code
     code = code + count[i]
   }
-  if code != 1 << max && !(code == 1 && max == 1) {
-    return false
-  }
+  guard code == 1 << max || (code == 1 && max == 1) else { return false }
   self.min = min
   if max > HUFFMAN_CHUNK_BITS {
     let num_links = 1 << (max - HUFFMAN_CHUNK_BITS)

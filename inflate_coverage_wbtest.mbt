@@ -257,8 +257,7 @@ test "both inflaters reject a reserved fixed literal-length symbol" {
   let w = BitWriter()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
-  let reserved = fixed_litlen_info[286]
-  w.write_code(reserved >> 4, reserved & 0xF)
+  w.write_rcode(fixed_ll_val[286], fixed_ll_len[286]) // symbol 286, 8 bits
   coverage_expect_both_errors(
     coverage_finish_bits(w),
     "corrupt: invalid literal/length code",
@@ -271,9 +270,8 @@ test "both inflaters reject a reserved fixed distance symbol" {
   let w = BitWriter()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
-  let length3 = fixed_litlen_info[257]
-  w.write_code(length3 >> 4, length3 & 0xF) // length 3
-  w.write_code(30, 5)
+  w.write_rcode(fixed_ll_val[257], fixed_ll_len[257]) // length 3
+  w.write_rcode(reverse_bits((30).reinterpret_as_uint(), 5), 5) // reserved code 30
   coverage_expect_both_errors(
     coverage_finish_bits(w),
     "corrupt: invalid distance code",
@@ -286,9 +284,8 @@ test "both inflaters reject a back-reference before the window" {
   let w = BitWriter()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
-  let length3 = fixed_litlen_info[257]
-  w.write_code(length3 >> 4, length3 & 0xF) // length 3
-  w.write_code(0, 5) // distance 1
+  w.write_rcode(fixed_ll_val[257], fixed_ll_len[257]) // length 3
+  w.write_rcode(fixed_dist_val[0], fixed_dist_len[0]) // distance 1
   coverage_expect_both_errors(
     coverage_finish_bits(w),
     "corrupt: distance too far back",

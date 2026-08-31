@@ -41,12 +41,11 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
 
 ///|
 fn MemDecoder::check_cancel(self : MemDecoder) -> Unit raise InflateError {
-  if self.out.length() >= self.next_cancel {
-    if (self.cancelled)() {
-      raise InflateError(Cancelled, "cancelled by caller")
-    }
-    self.next_cancel = self.out.length() + CANCEL_GRANULARITY
+  guard self.out.length() >= self.next_cancel else { return }
+  if (self.cancelled)() {
+    raise InflateError(Cancelled, "cancelled by caller")
   }
+  self.next_cancel = self.out.length() + CANCEL_GRANULARITY
 }
 
 ///|
@@ -124,40 +123,36 @@ fn MemDecoder::decode_block(
 ) -> Unit raise InflateError {
   for ;; {
     let v = self.huff_sym(hl)
-    if v < 256 {
+    guard v >= 256 else {
       self.push(v.to_byte())
-    } else if v == 256 {
-      return
-    } else if v < 286 {
-      let base = length_code_base(v)
-      let nextra = length_code_extra(v)
-      let length = if nextra > 0 { base + self.read_bits(nextra) } else { base }
-      let dsym = if hd is Some(h) {
-        self.huff_sym(h)
-      } else {
-        fixed_distance_symbol(self.read_bits(5))
-      }
-      if dsym.reinterpret_as_uint() >= MAX_NUM_DIST.reinterpret_as_uint() {
-        raise InflateError(Corrupt, "corrupt: invalid distance code")
-      }
-      let distance_base = distance_code_base(dsym)
-      let distance_extra_bits = distance_code_extra(dsym)
-      let dist = if distance_extra_bits == 0 {
-        distance_base
-      } else {
-        distance_base + self.read_bits(distance_extra_bits)
-      }
-      let available_history = self.out.length()
-      if available_history < WINDOW_SIZE &&
-        !back_reference_distance_is_valid(dist, available_history) {
-        raise InflateError(Corrupt, "corrupt: distance too far back")
-      }
-      let start = available_history - dist
-      for k in 0..<length {
-        self.push(self.out[start + k])
-      }
-    } else {
+      continue
+    }
+    guard v != 256 else { return }
+    guard v < 286 else {
       raise InflateError(Corrupt, "corrupt: invalid literal/length code")
+    }
+    let base = length_code_base(v)
+    let length = base + self.read_bits(length_code_extra(v))
+    let dsym = if hd is Some(h) {
+      self.huff_sym(h)
+    } else {
+      fixed_distance_symbol(self.read_bits(5))
+    }
+    guard dsym.reinterpret_as_uint() < MAX_NUM_DIST.reinterpret_as_uint() else {
+      raise InflateError(Corrupt, "corrupt: invalid distance code")
+    }
+    // `read_bits(0)` reads nothing and returns 0, so the base serves as the
+    // distance when the code carries no extra bits.
+    let dist = distance_code_base(dsym) +
+      self.read_bits(distance_code_extra(dsym))
+    let available_history = self.out.length()
+    guard available_history >= WINDOW_SIZE ||
+      back_reference_distance_is_valid(dist, available_history) else {
+      raise InflateError(Corrupt, "corrupt: distance too far back")
+    }
+    let start = available_history - dist
+    for k in 0..<length {
+      self.push(self.out[start + k])
     }
   }
 }
@@ -194,10 +189,10 @@ fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
     self.codebits,
     self.clbits,
   )
-  if !self.dyn_litlen.initialize(self.clbits[0:nlit]) {
+  guard self.dyn_litlen.initialize(self.clbits[0:nlit]) else {
     raise InflateError(Corrupt, "corrupt: bad literal/length tree")
   }
-  if !self.dyn_dist.initialize(self.clbits[nlit:nlit + ndist]) {
+  guard self.dyn_dist.initialize(self.clbits[nlit:nlit + ndist]) else {
     raise InflateError(Corrupt, "corrupt: bad distance tree")
   }
 }
@@ -211,15 +206,14 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
     let btype = ((self.bitbuf >> 1) & 3).reinterpret_as_int()
     self.bitbuf = self.bitbuf >> 3
     self.bit_count = self.bit_count - 3
-    if btype == 0 {
-      self.stored_block()
-    } else if btype == 1 {
-      self.decode_block(fixed_huffman_decoder, None)
-    } else if btype == 2 {
-      self.read_dynamic()
-      self.decode_block(self.dyn_litlen, Some(self.dyn_dist))
-    } else {
-      raise InflateError(Corrupt, "corrupt: reserved block type")
+    match btype {
+      0 => self.stored_block()
+      1 => self.decode_block(fixed_huffman_decoder, None)
+      2 => {
+        self.read_dynamic()
+        self.decode_block(self.dyn_litlen, Some(self.dyn_dist))
+      }
+      _ => raise InflateError(Corrupt, "corrupt: reserved block type")
     }
     if bfinal {
       break
@@ -314,11 +308,12 @@ pub fn inflate_exact(
   cancelled? : () -> Bool = () => false,
   preallocated? : Bool = false,
 ) -> Bytes raise InflateError {
-  let limit = match max_output {
-    Some(limit) if limit < 0 =>
+  let limit = max_output.map_or(max_output, limit => {
+    guard limit >= 0 else {
       raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
-    _ => max_output
-  }
+    }
+    max_output
+  })
   if preallocated {
     inflate_preallocated(input, limit, cancelled)
   } else {
@@ -378,7 +373,7 @@ fn validate_preallocation_size(
   size : Int,
   filled : Int,
 ) -> Unit raise InflateError {
-  if filled != size {
+  guard filled == size else {
     raise InflateError(Corrupt, "corrupt: preallocation size mismatch")
   }
 }

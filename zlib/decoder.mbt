@@ -83,10 +83,8 @@ pub fn Decoder::last_produced(self : Decoder) -> Int {
 /// after `Done`, this method returns the read-ahead suffix instead of losing
 /// it. It is empty before completion and when no suffix was buffered.
 pub fn Decoder::unused_input(self : Decoder) -> Bytes {
-  match self.mode {
-    ZFinished => self.unused
-    _ => b""
-  }
+  guard self.mode is ZFinished else { return b"" }
+  self.unused
 }
 
 ///|
@@ -117,26 +115,26 @@ fn Decoder::finish_stream(self : Decoder) -> Unit {
 /// or removes at least half a non-trivial buffer. This makes prefix removal
 /// amortized linear rather than copying the remaining suffix on every step.
 fn Decoder::compact_pending(self : Decoder) -> Unit {
-  if self.pending_pos == self.pending.length() {
+  guard self.pending_pos != self.pending.length() else {
     self.pending.clear()
     self.pending_pos = 0
-  } else if self.pending_pos >= 4096 &&
-    self.pending_pos * 2 >= self.pending.length() {
-    let kept : Array[Byte] = []
-    for j in self.pending_pos..<self.pending.length() {
-      kept.push(self.pending[j])
-    }
-    self.pending = kept
-    self.pending_pos = 0
+    return
   }
+  let worth_compacting = self.pending_pos >= 4096 &&
+    self.pending_pos * 2 >= self.pending.length()
+  guard worth_compacting else { return }
+  let kept : Array[Byte] = []
+  for j in self.pending_pos..<self.pending.length() {
+    kept.push(self.pending[j])
+  }
+  self.pending = kept
+  self.pending_pos = 0
 }
 
 ///|
 /// Force prefix reclamation before admitting another bounded input window.
 fn Decoder::compact_for_input(self : Decoder) -> Unit {
-  if self.pending_pos == 0 {
-    return
-  }
+  guard self.pending_pos != 0 else { return }
   let kept : Array[Byte] = []
   for i in self.pending_pos..<self.pending.length() {
     kept.push(self.pending[i])
@@ -173,6 +171,111 @@ fn Decoder::u32_be(self : Decoder, off : Int) -> UInt {
   (self.pending[pos + 1].to_uint() << 16) |
   (self.pending[pos + 2].to_uint() << 8) |
   self.pending[pos + 3].to_uint()
+}
+
+///|
+/// Parse the zlib header (CMF/FLG, FDICT verification) from `pending`,
+/// advancing to `ZBody` when the two header bytes and any DICTID are complete.
+/// Returns true when the step must suspend for more input.
+fn Decoder::read_zheader(self : Decoder) -> Bool raise ZlibError {
+  guard self.pending_length() >= 2 else {
+    guard !self.ending else {
+      raise ZlibError(Truncated, "zlib: truncated header")
+    }
+    return true
+  }
+  let cmf = self.pending[self.pending_pos].to_int()
+  let flg = self.pending[self.pending_pos + 1].to_int()
+  guard (cmf & 0x0F) == 8 else {
+    raise ZlibError(InvalidHeader, "zlib: unsupported compression method")
+  }
+  guard cmf >> 4 <= 7 else {
+    raise ZlibError(InvalidHeader, "zlib: invalid window size")
+  }
+  guard (cmf * 256 + flg) % 31 == 0 else {
+    raise ZlibError(InvalidHeader, "zlib: bad header check")
+  }
+  // FDICT: a 4-byte DICTID follows; verify it against the supplied dictionary
+  // and preload the inflater's window.
+  guard (flg & 0x20) == 0 else {
+    guard self.pending_length() >= 6 else {
+      guard !self.ending else {
+        raise ZlibError(Truncated, "zlib: truncated dictionary id")
+      }
+      return true
+    }
+    let dictid = self.u32_be(2)
+    guard self.dict is Some(dict) else {
+      raise ZlibError(DictionaryRequired, "zlib: preset dictionary required")
+    }
+    guard @checksum.adler32(dict) == dictid else {
+      raise ZlibError(DictionaryMismatch, "zlib: dictionary id mismatch")
+    }
+    // Configure the raw inflater only after FDICT and DICTID have been
+    // validated. Preloading it in `new` would incorrectly let a stream
+    // without FDICT refer to caller-supplied history.
+    self.inf.reset(dictionary=dict[:])
+    self.consume_pending(6)
+    self.mode = ZBody
+    return false
+  }
+  self.consume_pending(2)
+  self.mode = ZBody
+  false
+}
+
+///|
+/// React to the inner inflater's status after one `ZBody` step, folding newly
+/// available input into a fresh snapshot when needed. Returns `None` when the
+/// decoder can keep going, or the status the step must suspend with.
+fn Decoder::after_inflate_step(
+  self : Decoder,
+  st : @flate.Status,
+) -> @flate.Status? raise ZlibError {
+  match st {
+    Done => {
+      // The unconsumed part of the body snapshot starts with the zlib
+      // trailer and remains in `pending` at `pending_pos`.
+      self.body_input = b""
+      self.body_pos = 0
+      self.compact_pending()
+      self.mode = ZTrailer
+      None
+    }
+    NeedMoreInput => {
+      let cached = self.body_input.length() - self.body_pos
+      guard self.pending_length() <= cached else {
+        // Input appended while an older snapshot was being drained is now
+        // needed to complete an atomic Inflater unit. Rebuild once with the
+        // unconsumed suffix plus all newly available bytes.
+        self.stage_body_input()
+        return None
+      }
+      guard !self.ending else {
+        raise ZlibError(Truncated, "zlib: truncated DEFLATE stream")
+      }
+      Some(NeedMoreInput)
+    }
+    NeedMoreOutput => Some(NeedMoreOutput)
+  }
+}
+
+///|
+/// Verify the Adler-32 trailer and enter the terminal state. Returns true when
+/// the step must suspend for more input.
+fn Decoder::read_ztrailer(self : Decoder) -> Bool raise ZlibError {
+  guard self.pending_length() >= 4 else {
+    guard !self.ending else {
+      raise ZlibError(Truncated, "zlib: truncated trailer")
+    }
+    return true
+  }
+  guard self.adler.finish() == self.u32_be(0) else {
+    raise ZlibError(ChecksumMismatch, "zlib: Adler-32 mismatch")
+  }
+  self.consume_pending(4)
+  self.finish_stream()
+  false
 }
 
 ///|
@@ -235,10 +338,8 @@ fn Decoder::step_active(
   let capacity = DECODER_INPUT_LIMIT - self.pending.length()
   let consumed = if self.ending || capacity <= 0 {
     0
-  } else if input.length() < capacity {
-    input.length()
   } else {
-    capacity
+    input.length().min(capacity)
   }
   for i in 0..<consumed {
     self.pending.push(input[i])
@@ -250,53 +351,12 @@ fn Decoder::step_active(
   for ;; {
     match self.mode {
       ZHeader => {
-        if self.pending_length() < 2 {
-          if self.ending {
-            raise ZlibError(Truncated, "zlib: truncated header")
-          }
+        guard !self.read_zheader() else {
           return self.finish_step(NeedMoreInput, consumed, op)
         }
-        let cmf = self.pending[self.pending_pos].to_int()
-        let flg = self.pending[self.pending_pos + 1].to_int()
-        if (cmf & 0x0F) != 8 {
-          raise ZlibError(InvalidHeader, "zlib: unsupported compression method")
-        }
-        if cmf >> 4 > 7 {
-          raise ZlibError(InvalidHeader, "zlib: invalid window size")
-        }
-        if (cmf * 256 + flg) % 31 != 0 {
-          raise ZlibError(InvalidHeader, "zlib: bad header check")
-        }
-        if (flg & 0x20) != 0 {
-          // FDICT: a 4-byte DICTID follows; verify it against the supplied
-          // dictionary and preload the inflater's window.
-          if self.pending_length() < 6 {
-            if self.ending {
-              raise ZlibError(Truncated, "zlib: truncated dictionary id")
-            }
-            return self.finish_step(NeedMoreInput, consumed, op)
-          }
-          let dictid = self.u32_be(2)
-          guard self.dict is Some(dict) else {
-            raise ZlibError(
-              DictionaryRequired,
-              "zlib: preset dictionary required",
-            )
-          }
-          if @checksum.adler32(dict) != dictid {
-            raise ZlibError(DictionaryMismatch, "zlib: dictionary id mismatch")
-          }
-          // Configure the raw inflater only after FDICT and DICTID have
-          // been validated. Preloading it in `new` would incorrectly let
-          // a stream without FDICT refer to caller-supplied history.
-          self.inf.reset(dictionary=dict[:])
-          self.consume_pending(6)
-        } else {
-          self.consume_pending(2)
-        }
-        self.mode = ZBody
       }
       ZBody => {
+        // Refresh the body snapshot once the current one has been drained.
         if self.body_pos == self.body_input.length() {
           self.body_input = b""
           self.body_pos = 0
@@ -326,42 +386,13 @@ fn Decoder::step_active(
         op = op + produced
         self.pending_pos = self.pending_pos + used
         self.body_pos = self.body_pos + used
-        if st is Done {
-          // The unconsumed part of the body snapshot starts with the zlib
-          // trailer and remains in `pending` at `pending_pos`.
-          self.body_input = b""
-          self.body_pos = 0
-          self.compact_pending()
-          self.mode = ZTrailer
-        } else if st is NeedMoreInput {
-          let cached = self.body_input.length() - self.body_pos
-          if self.pending_length() > cached {
-            // Input appended while an older snapshot was being drained is now
-            // needed to complete an atomic Inflater unit. Rebuild once with
-            // the unconsumed suffix plus all newly available bytes.
-            self.stage_body_input()
-          } else {
-            if self.ending {
-              raise ZlibError(Truncated, "zlib: truncated DEFLATE stream")
-            }
-            return self.finish_step(NeedMoreInput, consumed, op)
-          }
-        } else {
-          return self.finish_step(NeedMoreOutput, consumed, op)
-        }
+        guard self.after_inflate_step(st) is Some(status) else { continue }
+        return self.finish_step(status, consumed, op)
       }
       ZTrailer => {
-        if self.pending_length() < 4 {
-          if self.ending {
-            raise ZlibError(Truncated, "zlib: truncated trailer")
-          }
+        guard !self.read_ztrailer() else {
           return self.finish_step(NeedMoreInput, consumed, op)
         }
-        if self.adler.finish() != self.u32_be(0) {
-          raise ZlibError(ChecksumMismatch, "zlib: Adler-32 mismatch")
-        }
-        self.consume_pending(4)
-        self.finish_stream()
       }
       ZFinished => return self.finish_step(Done, consumed, op)
     }

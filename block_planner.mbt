@@ -17,11 +17,7 @@ pub const MIN_LOOKAHEAD : Int = 258
 /// Trim `pending` so at most a 32 KB window of already-processed bytes remains
 /// as history, and reset `window_carry`.
 fn Deflater::trim_window(self : Deflater, processed : Int) -> Unit {
-  let newstart = if processed > WINDOW_SIZE {
-    processed - WINDOW_SIZE
-  } else {
-    0
-  }
+  let newstart = (processed - WINDOW_SIZE).max(0)
   if newstart > 0 {
     let kept : Array[Byte] = []
     for j in newstart..<self.pending.length() {
@@ -40,7 +36,7 @@ fn Deflater::trim_window(self : Deflater, processed : Int) -> Unit {
 fn Deflater::emit_capped(self : Deflater) -> Unit {
   let data = Bytes::from_array(self.pending)
   let cap = self.window_carry + DEFLATE_BLOCK_SIZE
-  let tok_end = if cap < data.length() { cap } else { data.length() }
+  let tok_end = cap.min(data.length())
   let tokens : Array[Int] = []
   let ll_freq = Array::make(286, 0)
   let d_freq = Array::make(30, 0)
@@ -80,11 +76,11 @@ fn Deflater::emit_stored_all(self : Deflater, is_final~ : Bool) -> Unit {
 /// Emit one non-final block for the accrued input (level 0: all of it, as
 /// stored blocks).
 fn Deflater::emit_one(self : Deflater) -> Unit {
-  if self.level == 0 {
+  guard self.level != 0 else {
     self.emit_stored_all(is_final=false)
-  } else {
-    self.emit_capped()
+    return
   }
+  self.emit_capped()
 }
 
 ///|
@@ -136,6 +132,29 @@ fn Deflater::emit_final(self : Deflater) -> Unit {
 }
 
 ///|
+/// Level 0 sync flush: emit whatever remains as stored blocks.
+fn Deflater::flush_stored(self : Deflater) -> Unit {
+  if self.pending.length() > self.window_carry {
+    self.emit_stored_all(is_final=false)
+  }
+}
+
+///|
+/// Levels >= 1 sync flush: emit capped non-final blocks for a full token
+/// window, then a trailing block for whatever remains, trimming the window.
+fn Deflater::flush_capped(self : Deflater) -> Unit {
+  while self.pending.length() - self.window_carry > DEFLATE_BLOCK_SIZE {
+    self.emit_capped()
+  }
+  // Capped blocks may have consumed everything (match overhang); only emit
+  // a trailing block if un-tokenized input actually remains.
+  if self.pending.length() > self.window_carry {
+    let processed = self.emit_trailing_block(is_final=false)
+    self.trim_window(processed)
+  }
+}
+
+///|
 /// Sync flush (zlib `Z_SYNC_FLUSH`): compress everything buffered into
 /// block(s), then append an empty stored block whose mandatory byte alignment
 /// pads the bit stream — after draining, every produced byte is final and
@@ -143,19 +162,9 @@ fn Deflater::emit_final(self : Deflater) -> Unit {
 /// so post-flush data may still back-reference pre-flush data.
 fn Deflater::emit_flush(self : Deflater) -> Unit {
   if self.level == 0 {
-    if self.pending.length() > self.window_carry {
-      self.emit_stored_all(is_final=false)
-    }
+    self.flush_stored()
   } else {
-    while self.pending.length() - self.window_carry > DEFLATE_BLOCK_SIZE {
-      self.emit_capped()
-    }
-    // Capped blocks may have consumed everything (match overhang); only emit
-    // a trailing block if un-tokenized input actually remains.
-    if self.pending.length() > self.window_carry {
-      let processed = self.emit_trailing_block(is_final=false)
-      self.trim_window(processed)
-    }
+    self.flush_capped()
   }
   write_stored(self.w, b"", 0, 0, is_final=false) // the 00 00 FF FF marker
 }

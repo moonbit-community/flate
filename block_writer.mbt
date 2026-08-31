@@ -181,8 +181,7 @@ fn estimate_block_cost(
   for s in 0..<286 {
     if ll_freq[s] != 0 {
       dyn_sym_bits = dyn_sym_bits + ll_freq[s] * codes.dll_len[s]
-      fixed_sym_bits = fixed_sym_bits +
-        ll_freq[s] * (fixed_litlen_info[s] & 0xF)
+      fixed_sym_bits = fixed_sym_bits + ll_freq[s] * fixed_ll_len[s]
     }
   }
   for d in 0..<30 {
@@ -224,6 +223,51 @@ fn write_length_extras(w : BitWriter, length : Int) -> Unit {
 }
 
 ///|
+/// Write one match token (length symbol, length extras, distance symbol,
+/// distance extras) through the given code tables, shared by the fixed- and
+/// dynamic-Huffman write paths.
+#inline
+fn write_match_token(
+  w : BitWriter,
+  tok : Int,
+  ll_val : Array[UInt],
+  ll_len : Array[Int],
+  dd_val : Array[UInt],
+  dd_len : Array[Int],
+) -> Unit {
+  let length = tok >> 16
+  let dist = tok & 0xFFFF
+  let lsym = 257 + len_to_idx[length]
+  w.write_rcode(ll_val[lsym], ll_len[lsym])
+  write_length_extras(w, length)
+  let didx = dist_index(dist)
+  w.write_rcode(dd_val[didx], dd_len[didx])
+  if dist_extra[didx] > 0 {
+    w.write_bits(dist - dist_base[didx], dist_extra[didx])
+  }
+}
+
+///|
+/// Write a token stream (literals and length/distance matches) through the
+/// given literal/length and distance tables, then the end-of-block symbol.
+fn write_tokens(
+  w : BitWriter,
+  tokens : ArrayView[Int],
+  ll_val : Array[UInt],
+  ll_len : Array[Int],
+  dd_val : Array[UInt],
+  dd_len : Array[Int],
+) -> Unit {
+  for tok in tokens {
+    if tok < 256 {
+      w.write_rcode(ll_val[tok], ll_len[tok])
+    } else {
+      write_match_token(w, tok, ll_val, ll_len, dd_val, dd_len)
+    }
+  }
+}
+
+///|
 /// Write one dynamic-Huffman block (BTYPE=10): the HLIT/HDIST/HCLEN fields, the
 /// code-length code lengths, the RLE-coded code lengths, the token stream, and
 /// the end-of-block symbol.
@@ -248,22 +292,14 @@ fn write_dynamic_block(
       w.write_bits(it.extra, it.nextra)
     }
   }
-  for tok in tokens {
-    if tok < 256 {
-      w.write_rcode(codes.dll_val[tok], codes.dll_len[tok])
-    } else {
-      let length = tok >> 16
-      let dist = tok & 0xFFFF
-      let lsym = 257 + len_to_idx[length]
-      w.write_rcode(codes.dll_val[lsym], codes.dll_len[lsym])
-      write_length_extras(w, length)
-      let didx = dist_index(dist)
-      w.write_rcode(codes.dd_val[didx], codes.dd_len[didx])
-      if dist_extra[didx] > 0 {
-        w.write_bits(dist - dist_base[didx], dist_extra[didx])
-      }
-    }
-  }
+  write_tokens(
+    w,
+    tokens,
+    codes.dll_val,
+    codes.dll_len,
+    codes.dd_val,
+    codes.dd_len,
+  )
   w.write_rcode(codes.dll_val[256], codes.dll_len[256]) // EOB
 }
 
@@ -272,26 +308,20 @@ fn write_dynamic_block(
 /// literal/length and distance tables, then the end-of-block symbol.
 fn write_fixed_block(w : BitWriter, tokens : ArrayView[Int]) -> Unit {
   w.write_bits(1, 2) // BTYPE = 01 (fixed)
-  for tok in tokens {
-    if tok < 256 {
-      let info = fixed_litlen_info[tok]
-      w.write_code(info >> 4, info & 0xF)
-    } else {
-      let length = tok >> 16
-      let dist = tok & 0xFFFF
-      let lsym = 257 + len_to_idx[length]
-      let info = fixed_litlen_info[lsym]
-      w.write_code(info >> 4, info & 0xF)
-      write_length_extras(w, length)
-      let didx = dist_index(dist)
-      w.write_code(didx, 5)
-      if dist_extra[didx] > 0 {
-        w.write_bits(dist - dist_base[didx], dist_extra[didx])
-      }
-    }
-  }
-  let eob = fixed_litlen_info[256]
-  w.write_code(eob >> 4, eob & 0xF)
+  write_tokens(
+    w, tokens, fixed_ll_val, fixed_ll_len, fixed_dist_val, fixed_dist_len,
+  )
+  w.write_rcode(fixed_ll_val[256], fixed_ll_len[256]) // EOB
+}
+
+///|
+/// Write one empty final block (no tokens) — the one-shot drivers' encoding of
+/// an empty input.
+fn emit_empty_block(w : BitWriter, input : Bytes) -> Unit {
+  let ll_freq = Array::make(MAX_NUM_LIT, 0)
+  let d_freq = Array::make(MAX_NUM_DIST, 0)
+  let none : Array[Int] = []
+  emit_block(w, input, 0, 0, none[:], ll_freq, d_freq, is_final=true)
 }
 
 ///|
@@ -317,7 +347,9 @@ fn emit_block(
   // encoding and the write path reuse the same tables.
   let codes = build_dynamic_codes(ll_freq, d_freq)
   let cost = estimate_block_cost(codes, end - start, ll_freq, d_freq)
-  if cost.stored < cost.fixed && cost.stored < cost.dynamic {
+  // Stored is the fallback that caps worst-case expansion on incompressible
+  // data: verbatim bytes at ~5 bytes of framing per 65535-byte chunk.
+  guard cost.stored >= cost.fixed || cost.stored >= cost.dynamic else {
     write_stored(w, data, start, end, is_final~)
     return
   }

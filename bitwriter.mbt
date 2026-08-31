@@ -39,15 +39,6 @@ fn BitWriter::write_bits(self : BitWriter, value : Int, n : Int) -> Unit {
 }
 
 ///|
-/// Write an `n`-bit Huffman code, MSB-first.
-fn BitWriter::write_code(self : BitWriter, code : Int, n : Int) -> Unit {
-  self.write_bits(
-    reverse_bits(code.reinterpret_as_uint(), n).reinterpret_as_int(),
-    n,
-  )
-}
-
-///|
 /// Write an already-bit-reversed Huffman code, LSB-first.
 fn BitWriter::write_rcode(self : BitWriter, code : UInt, n : Int) -> Unit {
   self.write_bits(code.reinterpret_as_int(), n)

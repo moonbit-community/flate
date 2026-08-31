@@ -291,51 +291,50 @@ fn tokenize(
     let cur_len = match_info >> 16
     let cur_dist = match_info & 0xFFFF
     insert_pos(data, head, prev, i, n, seed_from)
-    if have_prev {
-      if cur_dist > 0 {
-        // A longer match starts at i: emit a literal for i-1, keep deferring.
-        let b = data[i - 1].to_int()
-        tokens.push(b)
-        ll_freq[b] += 1
-        prev_len = cur_len
-        prev_dist = cur_dist
-        i = i + 1
-      } else {
-        // The deferred match (starting at i-1) wins: emit it.
-        i = commit_match(
-          data,
-          head,
-          prev,
-          n,
-          seed_from,
-          i - 1,
-          prev_len,
-          prev_dist,
-          tokens,
-          ll_freq,
-          d_freq,
-        )
-        have_prev = false
-      }
-    } else if cur_dist > 0 && cur_len >= 3 {
-      if cfg.max_lazy == 0 {
-        // Greedy levels (1-3): commit the match immediately.
-        i = commit_match(
-          data, head, prev, n, seed_from, i, cur_len, cur_dist, tokens, ll_freq,
-          d_freq,
-        )
-      } else {
-        prev_len = cur_len
-        prev_dist = cur_dist
-        have_prev = true
-        i = i + 1
-      }
-    } else {
-      let b = data[i].to_int()
-      tokens.push(b)
-      ll_freq[b] += 1
-      i = i + 1
+    // The deferred match (starting at i-1) wins: emit it.
+    guard !have_prev || cur_dist > 0 else {
+      i = commit_match(
+        data,
+        head,
+        prev,
+        n,
+        seed_from,
+        i - 1,
+        prev_len,
+        prev_dist,
+        tokens,
+        ll_freq,
+        d_freq,
+      )
+      have_prev = false
+      continue
     }
+    // A longer match starts at i: emit a literal for i-1, keep deferring.
+    guard !have_prev else {
+      emit_literal(tokens, ll_freq, data[i - 1].to_int())
+      prev_len = cur_len
+      prev_dist = cur_dist
+      i = i + 1
+      continue
+    }
+    // No match at i: literal.
+    guard cur_dist > 0 && cur_len >= 3 else {
+      emit_literal(tokens, ll_freq, data[i].to_int())
+      i = i + 1
+      continue
+    }
+    // Greedy levels (1-3): commit the match immediately.
+    guard cfg.max_lazy > 0 else {
+      i = commit_match(
+        data, head, prev, n, seed_from, i, cur_len, cur_dist, tokens, ll_freq, d_freq,
+      )
+      continue
+    }
+    // Lazy levels: hold this match back to see if i+1 starts a longer one.
+    prev_len = cur_len
+    prev_dist = cur_dist
+    have_prev = true
+    i = i + 1
   }
   if have_prev {
     // A still-pending match at the boundary commits here.

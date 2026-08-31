@@ -27,6 +27,12 @@
 pub const DEFLATE_BLOCK_SIZE : Int = 16384
 
 ///|
+/// Clamp a compression level to 0-9.
+fn clamp_level(level : Int) -> Int {
+  level.max(0).min(9)
+}
+
+///|
 /// Streaming DEFLATE compressor : a push-based, suspendable state
 /// machine. It emits the stream block-by-block as input arrives, and chooses fixed- or dynamic-Huffman per block.
 pub struct Deflater {
@@ -54,7 +60,7 @@ pub fn Deflater::Deflater(
   level? : Int = 6,
   dictionary? : BytesView,
 ) -> Deflater {
-  let lv = if level < 0 { 0 } else if level > 9 { 9 } else { level }
+  let lv = clamp_level(level)
   let deflater = {
     pending: [],
     window_carry: 0,
@@ -83,11 +89,7 @@ fn Deflater::preload_dictionary(
   self : Deflater,
   dictionary : BytesView,
 ) -> Unit {
-  let start = if dictionary.length() > WINDOW_SIZE {
-    dictionary.length() - WINDOW_SIZE
-  } else {
-    0
-  }
+  let start = (dictionary.length() - WINDOW_SIZE).max(0)
   for i in start..<dictionary.length() {
     self.pending.push(dictionary[i])
   }
@@ -157,12 +159,58 @@ fn Deflater::finish_step(
 /// accepted. `Finish` is sticky until the final block is emitted; `SyncFlush`
 /// is sticky until the flush is produced. Later input is left unconsumed.
 fn Deflater::latch_action(self : Deflater, action : DeflateAction) -> Unit {
-  if action is Finish {
-    self.end_requested = true
-    self.flush_requested = false
-  } else if action is SyncFlush && !self.flush_done {
-    self.flush_requested = true
+  match action {
+    Finish => {
+      self.end_requested = true
+      self.flush_requested = false
+    }
+    SyncFlush if !self.flush_done => self.flush_requested = true
+    Continue | SyncFlush => ()
   }
+}
+
+///|
+/// Copy compressed bytes already produced into the caller's buffer, returning
+/// the new write position.
+fn Deflater::drain_output(
+  self : Deflater,
+  output : MutArrayView[Byte],
+  write_pos : Int,
+  out_end : Int,
+) -> Int {
+  let mut write_pos = write_pos
+  while self.out_pos < self.w.out.length() && write_pos < out_end {
+    output.set(write_pos, self.w.out[self.out_pos])
+    write_pos = write_pos + 1
+    self.out_pos = self.out_pos + 1
+  }
+  write_pos
+}
+
+///|
+/// Accept up to `capacity` bytes of `input` into `pending` and latch `action`
+/// the instant its complete view is accepted — before emitting that block can
+/// return through output backpressure — returning the new consumed count.
+fn Deflater::accept_input(
+  self : Deflater,
+  input : BytesView,
+  consumed : Int,
+  input_end : Int,
+  capacity : Int,
+  action : DeflateAction,
+) -> Int {
+  let take = (input_end - consumed).min(capacity)
+  for i in consumed..<(consumed + take) {
+    self.pending.push(input[i])
+  }
+  let consumed = consumed + take
+  if take > 0 {
+    self.flush_done = false
+  }
+  if consumed == input_end {
+    self.latch_action(action)
+  }
+  consumed
 }
 
 ///|
@@ -199,9 +247,7 @@ pub fn Deflater::step(
   // Completion is a stable terminal state. In particular, input presented by
   // a generic driver after it observes EOF remains unconsumed instead of
   // disappearing into a stream that can no longer encode it.
-  if self.done {
-    return self.finish_step(Done, 0, 0)
-  }
+  guard !self.done else { return self.finish_step(Done, 0, 0) }
   // An empty view is already fully accepted, so its control request can be
   // latched even while older compressed output is still backpressured.
   if input.length() == 0 && !self.end_requested && !self.emitted_final {
@@ -214,12 +260,8 @@ pub fn Deflater::step(
   let mut write_pos = 0
   for ;; {
     // Drain compressed bytes already produced into the caller's buffer.
-    while self.out_pos < self.w.out.length() && write_pos < out_end {
-      output.set(write_pos, self.w.out[self.out_pos])
-      write_pos = write_pos + 1
-      self.out_pos = self.out_pos + 1
-    }
-    if self.out_pos < self.w.out.length() {
+    write_pos = self.drain_output(output, write_pos, out_end)
+    guard self.out_pos >= self.w.out.length() else {
       return self.finish_step(NeedMoreOutput, consumed, write_pos)
     }
     // The current block buffer is fully drained; reclaim it.
@@ -227,17 +269,17 @@ pub fn Deflater::step(
       self.w.out.clear()
       self.out_pos = 0
     }
-    if self.emitted_final {
+    guard !self.emitted_final else {
       self.done = true
       return self.finish_step(Done, consumed, write_pos)
     }
     // Produce already-requested control blocks before accepting later input.
-    if self.end_requested {
+    guard !self.end_requested else {
       self.flush_requested = false
       self.emit_final()
       continue
     }
-    if self.flush_requested {
+    guard !self.flush_requested else {
       self.emit_flush()
       self.flush_done = true
       self.flush_requested = false
@@ -247,28 +289,19 @@ pub fn Deflater::step(
     // input is accepted. This is the high-water mark that propagates output
     // backpressure through `consumed`.
     let buffered = self.pending.length() - self.window_carry
-    if buffered >= input_limit {
+    guard buffered < input_limit else {
       self.emit_one()
       continue
     }
-    if consumed < input_end {
-      let remaining = input_end - consumed
-      let capacity = input_limit - buffered
-      let take = if remaining < capacity { remaining } else { capacity }
-      for i in consumed..<(consumed + take) {
-        self.pending.push(input[i])
-      }
-      consumed = consumed + take
-      if take > 0 {
-        self.flush_done = false
-      }
-      // Latch control the instant its complete input view is accepted, before
-      // emitting that block can return through output backpressure.
-      if consumed == input_end {
-        self.latch_action(action)
-      }
-      continue
+    guard consumed < input_end else {
+      return self.finish_step(NeedMoreInput, consumed, write_pos)
     }
-    return self.finish_step(NeedMoreInput, consumed, write_pos)
+    consumed = self.accept_input(
+      input,
+      consumed,
+      input_end,
+      input_limit - buffered,
+      action,
+    )
   }
 }

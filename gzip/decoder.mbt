@@ -107,10 +107,8 @@ pub fn Decoder::last_produced(self : Decoder) -> Int {
 /// this method returns that read-ahead suffix. It is empty before completion
 /// and when the gzip stream ended exactly at the input boundary.
 pub fn Decoder::unused_input(self : Decoder) -> Bytes {
-  match self.mode {
-    GzFinished => self.unused
-    _ => b""
-  }
+  guard self.mode is GzFinished else { return b"" }
+  self.unused
 }
 
 ///|
@@ -147,9 +145,7 @@ fn Decoder::pending_at(self : Decoder, off : Int) -> Byte {
 /// usable: the appended suffix is incorporated only if the inflater actually
 /// reaches `NeedMoreInput`, never merely because output is backpressured.
 fn Decoder::buffer_input(self : Decoder, input : BytesView) -> Unit {
-  if input.length() == 0 {
-    return
-  }
+  guard input.length() != 0 else { return }
   for i in 0..<input.length() {
     self.pending.push(input[i])
   }
@@ -159,9 +155,7 @@ fn Decoder::buffer_input(self : Decoder, input : BytesView) -> Unit {
 /// Reclaim a consumed prefix before admitting more caller-owned input. This is
 /// safe between steps because the raw inflater releases its call-local view.
 fn Decoder::compact_for_input(self : Decoder) -> Unit {
-  if self.pending_pos == 0 {
-    return
-  }
+  guard self.pending_pos != 0 else { return }
   let kept : Array[Byte] = []
   for i in self.pending_pos..<self.pending.length() {
     kept.push(self.pending[i])
@@ -177,25 +171,26 @@ fn Decoder::compact_for_input(self : Decoder) -> Unit {
 /// compact a partial buffer only after a sizeable prefix becomes at least half
 /// of the allocation, making total compaction work amortized linear.
 fn Decoder::advance(self : Decoder, k : Int) -> Unit {
-  if k <= 0 {
-    return
-  }
+  guard k > 0 else { return }
   self.pending_pos = self.pending_pos + k
-  if self.pending_pos == self.pending.length() {
+  guard self.pending_pos < self.pending.length() else {
     self.pending.clear()
     self.pending_pos = 0
     self.pending_bytes = b""
     self.pending_snapshot_end = 0
-  } else if self.pending_pos >= 4096 && self.pending_pos >= self.available() {
-    let kept : Array[Byte] = []
-    for j in self.pending_pos..<self.pending.length() {
-      kept.push(self.pending[j])
-    }
-    self.pending = kept
-    self.pending_pos = 0
-    self.pending_bytes = b""
-    self.pending_snapshot_end = 0
+    return
   }
+  let worth_compacting = self.pending_pos >= 4096 &&
+    self.pending_pos >= self.available()
+  guard worth_compacting else { return }
+  let kept : Array[Byte] = []
+  for j in self.pending_pos..<self.pending.length() {
+    kept.push(self.pending[j])
+  }
+  self.pending = kept
+  self.pending_pos = 0
+  self.pending_bytes = b""
+  self.pending_snapshot_end = 0
 }
 
 ///|
@@ -243,6 +238,146 @@ fn Decoder::next_header_mode(self : Decoder, done : Int) -> DecMode {
   } else {
     GzBody
   }
+}
+
+///|
+/// Parse the fixed 10-byte header (magic, method, FLG, reserved flags) — and,
+/// for a concatenated stream, the member boundary before it. Returns true when
+/// the step must suspend for more input.
+fn Decoder::read_gzheader(self : Decoder) -> Bool raise GzipError {
+  let available = self.available()
+  if self.members > 0 {
+    guard available != 0 else {
+      guard !self.ending else {
+        self.finish_stream()
+        return false
+      }
+      return true
+    }
+    guard self.pending_at(0).to_int() == 0x1F else {
+      // A non-member byte ends the concatenated gzip stream. Preserve it and
+      // the rest of the transport read for the caller.
+      self.finish_stream()
+      return false
+    }
+    guard available >= 2 else {
+      guard !self.ending else { raise GzipError(Truncated, "gzip: truncated") }
+      return true
+    }
+    guard self.pending_at(1).to_int() == 0x8B else {
+      self.finish_stream()
+      return false
+    }
+  }
+  guard available >= 10 else {
+    guard !self.ending else { raise GzipError(Truncated, "gzip: truncated") }
+    return true
+  }
+  guard self.pending_at(0).to_int() == 0x1F &&
+    self.pending_at(1).to_int() == 0x8B else {
+    raise GzipError(InvalidHeader, "gzip: bad magic")
+  }
+  guard self.pending_at(2).to_int() == 0x08 else {
+    raise GzipError(InvalidHeader, "gzip: unsupported compression method")
+  }
+  self.flg = self.pending_at(3).to_int()
+  guard (self.flg & 0xE0) == 0 else {
+    raise GzipError(InvalidHeader, "gzip: reserved flags are set")
+  }
+  self.advance(10)
+  self.mode = self.next_header_mode(0)
+  false
+}
+
+///|
+/// Discard the NUL-terminated field at the head of `pending`, advancing to the
+/// next header mode on completion. Returns true when the step must suspend for
+/// more input.
+fn Decoder::skip_nul_field(self : Decoder, done : Int) -> Bool raise GzipError {
+  guard self.skip_nul_terminated() else {
+    guard !self.ending else { raise GzipError(Truncated, "gzip: truncated") }
+    return true
+  }
+  self.mode = self.next_header_mode(done)
+  false
+}
+
+///|
+/// React to the inner inflater's status after one `GzBody` step, folding newly
+/// appended input into a fresh snapshot when needed. Returns `None` when the
+/// decoder can keep going, or the status the step must suspend with.
+fn Decoder::after_body_step(
+  self : Decoder,
+  st : @flate.Status,
+) -> @flate.Status? raise GzipError {
+  match st {
+    Done => {
+      self.mode = GzTrailer
+      None
+    }
+    NeedMoreInput => {
+      guard self.pending_snapshot_end < self.pending.length() else {
+        guard !self.ending else {
+          raise GzipError(Truncated, "gzip: truncated")
+        }
+        return Some(NeedMoreInput)
+      }
+      // Input accepted while output was backpressured was deliberately left
+      // outside the active snapshot. The inflater has now reached that
+      // boundary, so fold the unread atomic tail and appended bytes into one
+      // new view and retry without exposing a false suspension.
+      self.refresh_pending_snapshot()
+      None
+    }
+    NeedMoreOutput => Some(NeedMoreOutput)
+  }
+}
+
+///|
+/// Verify the CRC-32/ISIZE trailer of a completed member and cross the member
+/// boundary (reset per-member state, then next member or terminal state).
+/// Returns true when the step must suspend for more input.
+fn Decoder::finish_member_trailer(self : Decoder) -> Bool raise GzipError {
+  guard self.available() >= 8 else {
+    guard !self.ending else { raise GzipError(Truncated, "gzip: truncated") }
+    return true
+  }
+  guard self.crc.finish() == self.u32_le(0) else {
+    raise GzipError(ChecksumMismatch, "gzip: CRC-32 mismatch")
+  }
+  guard self.osize == self.u32_le(4) else {
+    raise GzipError(LengthMismatch, "gzip: length mismatch")
+  }
+  self.advance(8)
+  // Member boundary. Reset the per-member state; the next member, if any,
+  // starts fresh (RFC 1952 §2.2 — members are independent, no cross-member
+  // back-references).
+  self.inf.reset()
+  self.crc = @checksum.Crc32()
+  self.osize = 0
+  self.flg = 0
+  self.members = self.members + 1
+  guard self.multistream else {
+    // A protocol-framed caller chose one-member mode. The trailer is the
+    // exact boundary, even if the next frame itself begins with the gzip
+    // magic bytes.
+    self.finish_stream()
+    return false
+  }
+  guard self.available() == 0 else {
+    // Buffered bytes begin the next member; parse it now.
+    self.mode = GzHeader
+    return false
+  }
+  guard !self.ending else {
+    // The caller has signalled end-of-input at a clean boundary: done.
+    self.finish_stream()
+    return false
+  }
+  // No more buffered, but the caller has not signalled end: another member
+  // may still arrive. Wait in GzHeader for it (or for `end`).
+  self.mode = GzHeader
+  true
 }
 
 ///|
@@ -339,10 +474,8 @@ fn Decoder::step_active(
   let capacity = DECODER_INPUT_LIMIT - self.pending.length()
   let consumed = if self.ending || capacity <= 0 {
     0
-  } else if input.length() < capacity {
-    input.length()
   } else {
-    capacity
+    input.length().min(capacity)
   }
   if consumed > 0 {
     self.buffer_input(input[:consumed])
@@ -354,55 +487,13 @@ fn Decoder::step_active(
   for ;; {
     match self.mode {
       GzHeader => {
-        let available = self.available()
-        if self.members > 0 {
-          if available == 0 {
-            if self.ending {
-              self.finish_stream()
-              continue
-            }
-            return self.finish_step(NeedMoreInput, consumed, op)
-          }
-          if self.pending_at(0).to_int() != 0x1F {
-            // A non-member byte ends the concatenated gzip stream. Preserve
-            // it and the rest of the transport read for the caller.
-            self.finish_stream()
-            continue
-          }
-          if available < 2 {
-            if self.ending {
-              raise GzipError(Truncated, "gzip: truncated")
-            }
-            return self.finish_step(NeedMoreInput, consumed, op)
-          }
-          if self.pending_at(1).to_int() != 0x8B {
-            self.finish_stream()
-            continue
-          }
-        }
-        if available < 10 {
-          if self.ending {
-            raise GzipError(Truncated, "gzip: truncated")
-          }
+        guard !self.read_gzheader() else {
           return self.finish_step(NeedMoreInput, consumed, op)
         }
-        if self.pending_at(0).to_int() != 0x1F ||
-          self.pending_at(1).to_int() != 0x8B {
-          raise GzipError(InvalidHeader, "gzip: bad magic")
-        }
-        if self.pending_at(2).to_int() != 0x08 {
-          raise GzipError(InvalidHeader, "gzip: unsupported compression method")
-        }
-        self.flg = self.pending_at(3).to_int()
-        if (self.flg & 0xE0) != 0 {
-          raise GzipError(InvalidHeader, "gzip: reserved flags are set")
-        }
-        self.advance(10)
-        self.mode = self.next_header_mode(0)
       }
       GzExtraLen => {
-        if self.available() < 2 {
-          if self.ending {
+        guard self.available() >= 2 else {
+          guard !self.ending else {
             raise GzipError(Truncated, "gzip: truncated")
           }
           return self.finish_step(NeedMoreInput, consumed, op)
@@ -413,43 +504,30 @@ fn Decoder::step_active(
         self.mode = GzExtra(xlen)
       }
       GzExtra(remaining) => {
-        let k = if remaining < self.available() {
-          remaining
-        } else {
-          self.available()
-        }
+        let k = remaining.min(self.available())
         self.advance(k)
-        if k == remaining {
-          self.mode = self.next_header_mode(1)
-        } else {
+        guard k == remaining else {
           self.mode = GzExtra(remaining - k)
-          if self.ending {
+          guard !self.ending else {
             raise GzipError(Truncated, "gzip: truncated")
           }
+          return self.finish_step(NeedMoreInput, consumed, op)
+        }
+        self.mode = self.next_header_mode(1)
+      }
+      GzName => {
+        guard !self.skip_nul_field(2) else {
           return self.finish_step(NeedMoreInput, consumed, op)
         }
       }
-      GzName =>
-        if self.skip_nul_terminated() {
-          self.mode = self.next_header_mode(2)
-        } else {
-          if self.ending {
-            raise GzipError(Truncated, "gzip: truncated")
-          }
+      GzComment => {
+        guard !self.skip_nul_field(3) else {
           return self.finish_step(NeedMoreInput, consumed, op)
         }
-      GzComment =>
-        if self.skip_nul_terminated() {
-          self.mode = self.next_header_mode(3)
-        } else {
-          if self.ending {
-            raise GzipError(Truncated, "gzip: truncated")
-          }
-          return self.finish_step(NeedMoreInput, consumed, op)
-        }
+      }
       GzHcrc => {
-        if self.available() < 2 {
-          if self.ending {
+        guard self.available() >= 2 else {
+          guard !self.ending else {
             raise GzipError(Truncated, "gzip: truncated")
           }
           return self.finish_step(NeedMoreInput, consumed, op)
@@ -473,62 +551,11 @@ fn Decoder::step_active(
         }
         op = op + produced
         self.advance(used)
-        if st is Done {
-          self.mode = GzTrailer
-        } else if st is NeedMoreInput {
-          if self.pending_snapshot_end < self.pending.length() {
-            // Input accepted while output was backpressured was deliberately
-            // left outside the active snapshot. The inflater has now reached
-            // that boundary, so fold the unread atomic tail and appended bytes
-            // into one new view and retry without exposing a false suspension.
-            self.refresh_pending_snapshot()
-            continue
-          }
-          if self.ending {
-            raise GzipError(Truncated, "gzip: truncated")
-          }
-          return self.finish_step(NeedMoreInput, consumed, op)
-        } else {
-          return self.finish_step(NeedMoreOutput, consumed, op)
-        }
+        guard self.after_body_step(st) is Some(status) else { continue }
+        return self.finish_step(status, consumed, op)
       }
       GzTrailer => {
-        if self.available() < 8 {
-          if self.ending {
-            raise GzipError(Truncated, "gzip: truncated")
-          }
-          return self.finish_step(NeedMoreInput, consumed, op)
-        }
-        if self.crc.finish() != self.u32_le(0) {
-          raise GzipError(ChecksumMismatch, "gzip: CRC-32 mismatch")
-        }
-        if self.osize != self.u32_le(4) {
-          raise GzipError(LengthMismatch, "gzip: length mismatch")
-        }
-        self.advance(8)
-        // Member boundary. Reset the per-member state; the next member, if any,
-        // starts fresh (RFC 1952 §2.2 — members are independent, no cross-member
-        // back-references).
-        self.inf.reset()
-        self.crc = Crc32()
-        self.osize = 0
-        self.flg = 0
-        self.members = self.members + 1
-        if !self.multistream {
-          // A protocol-framed caller chose one-member mode. The trailer is
-          // the exact boundary, even if the next frame itself begins with the
-          // gzip magic bytes.
-          self.finish_stream()
-        } else if self.available() > 0 {
-          // Buffered bytes begin the next member; parse it now.
-          self.mode = GzHeader
-        } else if self.ending {
-          // The caller has signalled end-of-input at a clean boundary: done.
-          self.finish_stream()
-        } else {
-          // No more buffered, but the caller has not signalled end: another
-          // member may still arrive. Wait in GzHeader for it (or for `end`).
-          self.mode = GzHeader
+        guard !self.finish_member_trailer() else {
           return self.finish_step(NeedMoreInput, consumed, op)
         }
       }

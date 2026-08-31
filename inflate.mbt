@@ -185,11 +185,7 @@ pub fn Inflater::last_produced(self : Inflater) -> Int {
 ///|
 /// Preload the history window with the final 32 KiB of a preset dictionary.
 fn Inflater::preload_dictionary(self : Inflater, dict : BytesView) -> Unit {
-  let start = if dict.length() > WINDOW_SIZE {
-    dict.length() - WINDOW_SIZE
-  } else {
-    0
-  }
+  let start = (dict.length() - WINDOW_SIZE).max(0)
   for i in start..<dict.length() {
     self.window[self.wpos & (WINDOW_SIZE - 1)] = dict[i]
     self.wpos = self.wpos + 1
@@ -238,19 +234,25 @@ pub fn Inflater::reset(self : Inflater, dictionary? : BytesView) -> Unit {
 // ---- bit reader (raises NeedInput when the current view is exhausted) ----
 
 ///|
+/// Take the next byte from the staged atomic tail or the external view.
+fn Inflater::next_fill_byte(self : Inflater) -> Byte? {
+  if self.staged_pos < self.staged_input.length() {
+    let byte = self.staged_input[self.staged_pos]
+    self.staged_pos = self.staged_pos + 1
+    Some(byte)
+  } else if self.in_pos < self.view.length() {
+    let byte = self.view[self.in_pos]
+    self.in_pos = self.in_pos + 1
+    Some(byte)
+  } else {
+    None
+  }
+}
+
+///|
 fn Inflater::fill(self : Inflater, n : Int) -> Unit raise NeedInput {
   while self.bit_count < n {
-    let b = if self.staged_pos < self.staged_input.length() {
-      let byte = self.staged_input[self.staged_pos]
-      self.staged_pos = self.staged_pos + 1
-      byte
-    } else if self.in_pos < self.view.length() {
-      let byte = self.view[self.in_pos]
-      self.in_pos = self.in_pos + 1
-      byte
-    } else {
-      raise NeedInput
-    }
+    guard self.next_fill_byte() is Some(b) else { raise NeedInput }
     self.bitbuf = self.bitbuf | (b.to_int() << self.bit_count)
     self.bit_count = self.bit_count + 8
   }
@@ -342,12 +344,26 @@ fn Inflater::read_dynamic(self : Inflater) -> Unit raise {
     InflateError(Truncated, _) => raise NeedInput
     InflateError(kind, message) => raise InflateError(kind, message)
   }
-  if !self.dyn_litlen.initialize(self.clbits[0:nlit]) {
+  guard self.dyn_litlen.initialize(self.clbits[0:nlit]) else {
     raise InflateError(Corrupt, "corrupt: bad literal/length tree")
   }
-  if !self.dyn_dist.initialize(self.clbits[nlit:nlit + ndist]) {
+  guard self.dyn_dist.initialize(self.clbits[nlit:nlit + ndist]) else {
     raise InflateError(Corrupt, "corrupt: bad distance tree")
   }
+}
+
+///|
+/// Install the Huffman tables for a fixed or dynamic block.
+fn Inflater::enter_huffman_mode(
+  self : Inflater,
+  hl : HuffmanDecoder,
+  hd : HuffmanDecoder?,
+  fixed : Bool,
+) -> Unit {
+  self.hl = Some(hl)
+  self.hd = hd
+  self.hd_fixed = fixed
+  self.mode = InHuffman
 }
 
 ///|
@@ -359,50 +375,38 @@ fn Inflater::parse_block_header(self : Inflater) -> Unit raise {
   let btype = (self.bitbuf >> 1) & 3
   self.bitbuf = self.bitbuf >> 3
   self.bit_count = self.bit_count - 3
-  if btype == 0 {
-    let drop = self.bit_count & 7
-    self.bitbuf = self.bitbuf >> drop
-    self.bit_count = self.bit_count - drop
-    let len = self.read_bits(16)
-    let nlen = self.read_bits(16)
-    validate_stored_length(len, nlen)
-    self.stored_remaining = len
-    self.mode = InStored
-  } else if btype == 1 {
-    self.hl = Some(fixed_huffman_decoder)
-    self.hd = None
-    self.hd_fixed = true
-    self.mode = InHuffman
-  } else if btype == 2 {
-    self.read_dynamic()
-    self.hl = Some(self.dyn_litlen)
-    self.hd = Some(self.dyn_dist)
-    self.hd_fixed = false
-    self.mode = InHuffman
-  } else {
-    raise InflateError(Corrupt, "corrupt: reserved block type")
+  match btype {
+    0 => {
+      let drop = self.bit_count & 7
+      self.bitbuf = self.bitbuf >> drop
+      self.bit_count = self.bit_count - drop
+      let len = self.read_bits(16)
+      let nlen = self.read_bits(16)
+      validate_stored_length(len, nlen)
+      self.stored_remaining = len
+      self.mode = InStored
+    }
+    1 => self.enter_huffman_mode(fixed_huffman_decoder, None, true)
+    2 => {
+      self.read_dynamic()
+      self.enter_huffman_mode(self.dyn_litlen, Some(self.dyn_dist), false)
+    }
+    _ => raise InflateError(Corrupt, "corrupt: reserved block type")
   }
 }
 
 ///|
 /// Take the next stored-block byte once byte-aligned: drain the accumulator
-/// first, then the input view. Returns None when input is exhausted.
+/// first, then the staged tail or input view. Returns None when input is
+/// exhausted.
 fn Inflater::next_stored_byte(self : Inflater) -> Byte? {
   if self.bit_count >= 8 {
     let b = (self.bitbuf & 0xFF).to_byte()
     self.bitbuf = self.bitbuf >> 8
     self.bit_count = self.bit_count - 8
     Some(b)
-  } else if self.staged_pos < self.staged_input.length() {
-    let b = self.staged_input[self.staged_pos]
-    self.staged_pos = self.staged_pos + 1
-    Some(b)
-  } else if self.in_pos < self.view.length() {
-    let b = self.view[self.in_pos]
-    self.in_pos = self.in_pos + 1
-    Some(b)
   } else {
-    None
+    self.next_fill_byte()
   }
 }
 
@@ -426,18 +430,17 @@ fn Inflater::stage_incomplete_input(self : Inflater) -> Unit {
 /// Drop bytes permanently consumed from the staged atomic tail while retaining
 /// an unconsumed suffix across output backpressure.
 fn Inflater::compact_staged_input(self : Inflater) -> Unit {
-  if self.staged_pos == 0 {
+  guard self.staged_pos != 0 else { return }
+  guard self.staged_pos < self.staged_input.length() else {
+    self.staged_input.clear()
+    self.staged_pos = 0
     return
   }
-  if self.staged_pos == self.staged_input.length() {
-    self.staged_input.clear()
-  } else {
-    let kept : Array[Byte] = []
-    for i in self.staged_pos..<self.staged_input.length() {
-      kept.push(self.staged_input[i])
-    }
-    self.staged_input = kept
+  let kept : Array[Byte] = []
+  for i in self.staged_pos..<self.staged_input.length() {
+    kept.push(self.staged_input[i])
   }
+  self.staged_input = kept
   self.staged_pos = 0
 }
 
@@ -472,35 +475,29 @@ fn Inflater::drain_match(self : Inflater) -> Unit {
 /// `copy_remaining` set (drained by `drain_match` on the next `step`).
 fn Inflater::decode_unit(self : Inflater) -> Bool raise {
   let v = self.huff_sym(self.hl.unwrap())
-  if v < 256 {
+  guard v >= 256 else {
     self.emit(v.to_byte())
     return false
   }
-  if v == 256 {
-    return true
-  }
-  if v >= 286 {
+  guard v != 256 else { return true }
+  guard v < 286 else {
     raise InflateError(Corrupt, "corrupt: invalid literal/length code")
   }
   let base = length_code_base(v)
-  let nextra = length_code_extra(v)
-  let length = if nextra > 0 { base + self.read_bits(nextra) } else { base }
+  let length = base + self.read_bits(length_code_extra(v))
   let dsym = if self.hd_fixed {
     fixed_distance_symbol(self.read_bits(5))
   } else {
     self.huff_sym(self.hd.unwrap())
   }
-  if dsym.reinterpret_as_uint() >= MAX_NUM_DIST.reinterpret_as_uint() {
+  guard dsym.reinterpret_as_uint() < MAX_NUM_DIST.reinterpret_as_uint() else {
     raise InflateError(Corrupt, "corrupt: invalid distance code")
   }
-  let distance_base = distance_code_base(dsym)
-  let distance_extra_bits = distance_code_extra(dsym)
-  let dist = if distance_extra_bits == 0 {
-    distance_base
-  } else {
-    distance_base + self.read_bits(distance_extra_bits)
-  }
-  if !self.filled && !back_reference_distance_is_valid(dist, self.wpos) {
+  // `read_bits(0)` reads nothing and returns 0, so the base serves as the
+  // distance when the code carries no extra bits.
+  let dist = distance_code_base(dsym) +
+    self.read_bits(distance_code_extra(dsym))
+  guard self.filled || back_reference_distance_is_valid(dist, self.wpos) else {
     raise InflateError(Corrupt, "corrupt: distance too far back")
   }
   // All input reads are done; set up the (possibly suspendable) copy. Because
@@ -544,6 +541,24 @@ fn Inflater::rewind_cursor(self : Inflater, mark : CursorMark) -> Unit {
 }
 
 ///|
+/// Translate an error raised by the streaming decoder's bit reader inside one
+/// atomic unit. An exhausted view rewinds to `mark` and suspends; any other
+/// failure becomes the stable `InflateError` it already is.
+fn Inflater::retry_or_raise(
+  self : Inflater,
+  mark : CursorMark,
+  err : Error,
+) -> Status raise InflateError {
+  match classify_decoder_error(err) {
+    DecoderInputExhausted => {
+      self.rewind_cursor(mark)
+      NeedMoreInput
+    }
+    DecoderFailure(kind, message) => raise InflateError(kind, message)
+  }
+}
+
+///|
 /// Drive the decoder over the currently installed step-local views.
 /// The step-local input/output cursors already live on `self`, so returning
 /// only `Status` avoids allocating an internal three-tuple that `step` would
@@ -555,21 +570,12 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
       AtBlock => {
         let mark = self.mark_cursor()
         self.parse_block_header() catch {
-          err =>
-            match classify_decoder_error(err) {
-              DecoderInputExhausted => {
-                self.rewind_cursor(mark)
-                return NeedMoreInput
-              }
-              DecoderFailure(kind, message) => raise InflateError(kind, message)
-            }
+          err => return self.retry_or_raise(mark, err)
         }
       }
       InStored => {
         while self.stored_remaining > 0 {
-          if self.out_pos >= self.out_end {
-            return NeedMoreOutput
-          }
+          guard self.out_pos < self.out_end else { return NeedMoreOutput }
           guard self.next_stored_byte() is Some(b) else { return NeedMoreInput }
           self.emit(b)
           self.stored_remaining = self.stored_remaining - 1
@@ -580,25 +586,14 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
         // Finish any match copy suspended by a full output buffer last step.
         if self.copy_remaining > 0 {
           self.drain_match()
-          if self.copy_remaining > 0 {
-            return NeedMoreOutput
-          }
+          guard self.copy_remaining == 0 else { return NeedMoreOutput }
         }
         // A unit needs room for at least its first byte; the rest of a match
         // suspends via `copy_remaining` rather than requiring 258 bytes upfront.
-        if self.out_pos >= self.out_end {
-          return NeedMoreOutput
-        }
+        guard self.out_pos < self.out_end else { return NeedMoreOutput }
         let mark = self.mark_cursor()
         let eob = self.decode_unit() catch {
-          err =>
-            match classify_decoder_error(err) {
-              DecoderInputExhausted => {
-                self.rewind_cursor(mark)
-                return NeedMoreInput
-              }
-              DecoderFailure(kind, message) => raise InflateError(kind, message)
-            }
+          err => return self.retry_or_raise(mark, err)
         }
         if eob {
           self.mode = if self.final_block { Done } else { AtBlock }
@@ -671,7 +666,7 @@ pub fn Inflater::step(
   let produced = self.out_pos
   let consumed = if status is NeedMoreInput {
     self.stage_incomplete_input()
-    if self.ending {
+    guard !self.ending else {
       let message = "unexpected end of input"
       self.failure_kind = Some(Truncated)
       self.failure_message = message

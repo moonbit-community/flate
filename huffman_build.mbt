@@ -153,10 +153,8 @@ fn gen_huffman(
     }
   }
   let count = nodes.length()
-  if count == 0 {
-    return
-  }
-  if count <= 2 {
+  guard count != 0 else { return }
+  guard count > 2 else {
     for k in 0..<count {
       code_len[nodes[k].lit] = 1
       if code_val is Some(values) {

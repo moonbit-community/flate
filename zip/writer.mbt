@@ -24,14 +24,16 @@ fn Output::is_counting(self : Output) -> Bool {
 
 ///|
 fn Output::grow(self : Output, additional : Int) -> Unit raise ZipError {
-  if additional < 0 {
+  guard additional >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: negative output size")
   }
-  if self.limit is Some(limit) && additional > limit - self.size {
-    raise ZipError(
-      LimitExceeded(OutputBytes, limit, self.size + additional),
-      "zip: output exceeds its byte limit",
-    )
+  if self.limit is Some(limit) {
+    guard additional <= limit - self.size else {
+      raise ZipError(
+        LimitExceeded(OutputBytes, limit, self.size + additional),
+        "zip: output exceeds its byte limit",
+      )
+    }
   }
   self.size = self.size + additional
 }
@@ -86,11 +88,8 @@ fn Output::write_u64(self : Output, value : UInt64) -> Unit raise ZipError {
 
 ///|
 fn Output::finish(self : Output) -> Bytes {
-  if self.buf is Some(buf) {
-    buf.to_bytes()
-  } else {
-    b""
-  }
+  guard self.buf is Some(buf) else { return b"" }
+  buf.to_bytes()
 }
 
 ///|
@@ -339,25 +338,22 @@ fn write_preserved_central_record(
   local_offset : Int,
 ) -> Unit raise ZipError {
   let template = source.central_record
-  if template.length() < 46 ||
-    read_u32_le_at_raw(template, 0) != CENTRAL_HEADER_SIG {
+  guard template.length() >= 46 &&
+    read_u32_le_at_raw(template, 0) == CENTRAL_HEADER_SIG else {
     raise ZipError(
       UnsupportedFeature,
       "zip: preserved central record is malformed",
     )
   }
-  match source.central_zip64_offset_position {
-    Some(position) => {
-      out.write_bytes(template[0:position])
-      out.write_u64(local_offset.to_uint64_checked())
-      out.write_bytes(template[position + 8:])
-    }
-    None => {
-      out.write_bytes(template[0:42])
-      out.write_u32(local_offset.to_uint_checked())
-      out.write_bytes(template[46:])
-    }
+  guard source.central_zip64_offset_position is Some(position) else {
+    out.write_bytes(template[0:42])
+    out.write_u32(local_offset.to_uint_checked())
+    out.write_bytes(template[46:])
+    return
   }
+  out.write_bytes(template[0:position])
+  out.write_u64(local_offset.to_uint64_checked())
+  out.write_bytes(template[position + 8:])
 }
 
 ///|
@@ -434,53 +430,51 @@ fn write_preserved_trailer(
   central_offset : Int,
 ) -> Unit raise ZipError {
   let classic = trailer.classic_end_record
-  if classic.length() < 22 ||
-    read_u32_le_at_raw(classic, 0) != END_OF_CENTRAL_SIG {
+  guard classic.length() >= 22 &&
+    read_u32_le_at_raw(classic, 0) == END_OF_CENTRAL_SIG else {
     raise ZipError(UnsupportedFeature, "zip: preserved end record is malformed")
   }
-  match trailer.zip64_end_record {
-    Some(end_record) => {
-      if end_record.length() < 56 ||
-        read_u32_le_at_raw(end_record, 0) != ZIP64_EOCD_SIG {
-        raise ZipError(
-          UnsupportedFeature,
-          "zip: preserved zip64 end record is malformed",
-        )
-      }
-      let zip64_offset = out.size
-      // Patch the two entry-count fields, central size, and central offset
-      // (offsets 24/32/40/48 within the record) over the verbatim template.
-      out.write_bytes(end_record[0:24])
-      out.write_u64(total_entries.to_uint64_checked())
-      out.write_u64(total_entries.to_uint64_checked())
-      out.write_u64(central_size.to_uint64_checked())
-      out.write_u64(central_offset.to_uint64_checked())
-      out.write_bytes(end_record[56:])
-      guard trailer.zip64_locator is Some(locator) else {
-        raise ZipError(
-          UnsupportedFeature,
-          "zip: preserved zip64 locator is missing",
-        )
-      }
-      if locator.length() != 20 ||
-        read_u32_le_at_raw(locator, 0) != ZIP64_LOCATOR_SIG {
-        raise ZipError(
-          UnsupportedFeature,
-          "zip: preserved zip64 locator is malformed",
-        )
-      }
-      out.write_bytes(locator[0:8])
-      out.write_u64(zip64_offset.to_uint64_checked())
-      out.write_bytes(locator[16:])
-      // The classic record of a preserved ZIP64 archive carries sentinels;
-      // re-emit it verbatim.
-      out.write_bytes(classic)
-    }
-    None =>
-      write_preserved_classic_end_record(
-        out, classic, total_entries, central_size, central_offset,
-      )
+  guard trailer.zip64_end_record is Some(end_record) else {
+    write_preserved_classic_end_record(
+      out, classic, total_entries, central_size, central_offset,
+    )
+    return
   }
+  guard end_record.length() >= 56 &&
+    read_u32_le_at_raw(end_record, 0) == ZIP64_EOCD_SIG else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: preserved zip64 end record is malformed",
+    )
+  }
+  let zip64_offset = out.size
+  // Patch the two entry-count fields, central size, and central offset
+  // (offsets 24/32/40/48 within the record) over the verbatim template.
+  out.write_bytes(end_record[0:24])
+  out.write_u64(total_entries.to_uint64_checked())
+  out.write_u64(total_entries.to_uint64_checked())
+  out.write_u64(central_size.to_uint64_checked())
+  out.write_u64(central_offset.to_uint64_checked())
+  out.write_bytes(end_record[56:])
+  guard trailer.zip64_locator is Some(locator) else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: preserved zip64 locator is missing",
+    )
+  }
+  guard locator.length() == 20 &&
+    read_u32_le_at_raw(locator, 0) == ZIP64_LOCATOR_SIG else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: preserved zip64 locator is malformed",
+    )
+  }
+  out.write_bytes(locator[0:8])
+  out.write_u64(zip64_offset.to_uint64_checked())
+  out.write_bytes(locator[16:])
+  // The classic record of a preserved ZIP64 archive carries sentinels;
+  // re-emit it verbatim.
+  out.write_bytes(classic)
 }
 
 ///|
@@ -689,62 +683,58 @@ fn write_impl(
     local_offset: 0,
     compressed_size: 0,
   })
-  match max_output {
-    Some(limit) => {
-      let counting = Output::counting(Some(limit))
-      let (counting_central_offset, counting_central_size) = emit_archive(
-        counting, archive, order, plans, preserve, level, false,
-      )
-      write_trailer(
-        counting,
-        archive,
-        archive.entries.length(),
-        counting_central_size,
-        counting_central_offset,
-        preserve,
-        false,
-      )
-      let size = counting.size
-      let out = Output::writing(Some(limit))
-      let (central_offset, central_size) = emit_archive(
-        out, archive, order, plans, preserve, level, false,
-      )
-      write_trailer(
-        out,
-        archive,
-        archive.entries.length(),
-        central_size,
-        central_offset,
-        preserve,
-        false,
-      )
-      assert_sizing_agrees(
-        size,
-        counting_central_offset,
-        counting_central_size,
-        central_offset,
-        central_size,
-        out.size,
-      )
-      out.finish()
-    }
-    None => {
-      let out = Output::writing(None)
-      let (central_offset, central_size) = emit_archive(
-        out, archive, order, plans, preserve, level, false,
-      )
-      write_trailer(
-        out,
-        archive,
-        archive.entries.length(),
-        central_size,
-        central_offset,
-        preserve,
-        false,
-      )
-      out.finish()
-    }
+  guard max_output is Some(limit) else {
+    let out = Output::writing(None)
+    let (central_offset, central_size) = emit_archive(
+      out, archive, order, plans, preserve, level, false,
+    )
+    write_trailer(
+      out,
+      archive,
+      archive.entries.length(),
+      central_size,
+      central_offset,
+      preserve,
+      false,
+    )
+    return out.finish()
   }
+  let counting = Output::counting(Some(limit))
+  let (counting_central_offset, counting_central_size) = emit_archive(
+    counting, archive, order, plans, preserve, level, false,
+  )
+  write_trailer(
+    counting,
+    archive,
+    archive.entries.length(),
+    counting_central_size,
+    counting_central_offset,
+    preserve,
+    false,
+  )
+  let size = counting.size
+  let out = Output::writing(Some(limit))
+  let (central_offset, central_size) = emit_archive(
+    out, archive, order, plans, preserve, level, false,
+  )
+  write_trailer(
+    out,
+    archive,
+    archive.entries.length(),
+    central_size,
+    central_offset,
+    preserve,
+    false,
+  )
+  assert_sizing_agrees(
+    size,
+    counting_central_offset,
+    counting_central_size,
+    central_offset,
+    central_size,
+    out.size,
+  )
+  out.finish()
 }
 
 ///|
@@ -776,7 +766,7 @@ pub fn write_limited(
   max_output_bytes~ : Int,
   level? : Int = 6,
 ) -> Bytes raise ZipError {
-  if max_output_bytes < 0 {
+  guard max_output_bytes >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: output limit must be non-negative")
   }
   write_impl(archive, false, level, Some(max_output_bytes))
@@ -791,7 +781,7 @@ pub fn write_preserving_limited(
   max_output_bytes~ : Int,
   level? : Int = 6,
 ) -> Bytes raise ZipError {
-  if max_output_bytes < 0 {
+  guard max_output_bytes >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: output limit must be non-negative")
   }
   write_impl(archive, true, level, Some(max_output_bytes))

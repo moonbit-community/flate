@@ -31,21 +31,21 @@ fn read_local_record(
   meta : EntryMeta,
   central_offset : Int,
 ) -> LocalRecord raise ZipError {
-  if meta.local_offset < 0 || meta.local_offset >= central_offset {
+  guard meta.local_offset >= 0 && meta.local_offset < central_offset else {
     raise ZipError(Truncated, "zip: local header offset out of bounds")
   }
   let reader = Cursor(bytes, meta.local_offset)
-  if reader.read_u32_raw() != LOCAL_HEADER_SIG {
+  guard reader.read_u32_raw() == LOCAL_HEADER_SIG else {
     raise ZipError(InvalidSignature, "zip: invalid local header signature")
   }
   ignore(reader.read_u16())
   let flags = reader.read_u16()
   ensure_flags_supported(flags)
-  if flags != meta.flags {
+  guard flags == meta.flags else {
     raise ZipError(UnsupportedFeature, "zip: local and central flags differ")
   }
   let method_id = reader.read_u16()
-  if method_id != meta.method_id {
+  guard method_id == meta.method_id else {
     raise ZipError(UnsupportedFeature, "zip: local and central methods differ")
   }
   ignore(reader.read_u16())
@@ -57,7 +57,7 @@ fn read_local_record(
   let extra_len = reader.read_u16()
   let local_name = reader.read_bytes(name_len)
   let local_extra = reader.read_bytes(extra_len)
-  if decode_name(local_name) != meta.name {
+  guard decode_name(local_name) == meta.name else {
     raise ZipError(UnsupportedFeature, "zip: local and central names differ")
   }
   let has_descriptor = (flags & FLAG_DATA_DESCRIPTOR) != 0
@@ -66,29 +66,25 @@ fn read_local_record(
   let (local_zip_uncomp, local_zip_comp, _, _) = read_zip64_extra(
     local_extra, need_local_uncomp, need_local_comp, false,
   )
-  if has_descriptor {
-    if local_crc != 0 && local_crc != meta.crc {
-      raise ZipError(UnsupportedFeature, "zip: local and central CRC-32 differ")
-    }
-  } else if local_crc != meta.crc {
+  guard local_crc == meta.crc || (has_descriptor && local_crc == 0) else {
     raise ZipError(UnsupportedFeature, "zip: local and central CRC-32 differ")
   }
-  if !local_size_matches(
+  guard local_size_matches(
       comp_size_raw,
       local_zip_comp,
       meta.compressed_size,
       has_descriptor,
-    ) ||
-    !local_size_matches(
+    ) &&
+    local_size_matches(
       uncomp_size_raw,
       local_zip_uncomp,
       meta.uncompressed_size,
       has_descriptor,
-    ) {
+    ) else {
     raise ZipError(UnsupportedFeature, "zip: local and central sizes differ")
   }
-  if reader.pos > central_offset ||
-    meta.compressed_size > central_offset - reader.pos {
+  guard reader.pos <= central_offset &&
+    meta.compressed_size <= central_offset - reader.pos else {
     raise ZipError(Truncated, "zip: compressed payload out of bounds")
   }
   let compressed = reader.read_bytes(meta.compressed_size)
@@ -97,7 +93,7 @@ fn read_local_record(
     // sizes through the ZIP64 extra field (0xffffffff placeholders).
     let zip64 = need_local_uncomp || need_local_comp
     let end = reader.pos + data_descriptor_size(bytes, reader.pos, meta, zip64)
-    if end > central_offset {
+    guard end <= central_offset else {
       raise ZipError(Truncated, "zip: data descriptor out of bounds")
     }
     end
@@ -114,13 +110,13 @@ fn check_sizes(
   total_limit : Int,
   used_total : Int,
 ) -> Unit raise ZipError {
-  if uncompressed_size > entry_limit {
+  guard uncompressed_size <= entry_limit else {
     raise ZipError(
       LimitExceeded(EntryUncompressedBytes, entry_limit, uncompressed_size),
       "zip: entry exceeds the per-entry uncompressed limit",
     )
   }
-  if used_total < 0 || uncompressed_size > total_limit - used_total {
+  guard used_total >= 0 && uncompressed_size <= total_limit - used_total else {
     raise ZipError(
       LimitExceeded(
         TotalUncompressedBytes,
@@ -148,15 +144,12 @@ fn inflate_entry(
       preallocated=true,
     )
   catch {
-    err =>
-      match err {
-        InflateError(OutputLimitExceeded, _) =>
-          raise ZipError(
-            LimitExceeded(limit_kind, reported_limit, max_output),
-            "zip: decompressed size limit exceeded",
-          )
-        _ => raise wrap_inflate_error(err)
-      }
+    InflateError(OutputLimitExceeded, _) =>
+      raise ZipError(
+        LimitExceeded(limit_kind, reported_limit, max_output),
+        "zip: decompressed size limit exceeded",
+      )
+    err => raise wrap_inflate_error(err)
   } noraise {
     decoded => decoded
   }
@@ -181,10 +174,10 @@ fn SourceBudget::charge(
   self : SourceBudget,
   amount : Int,
 ) -> Unit raise ZipError {
-  if amount < 0 {
+  guard amount >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: negative preserved source size")
   }
-  if amount > self.limit - self.used {
+  guard amount <= self.limit - self.used else {
     raise ZipError(
       LimitExceeded(
         PreservedSourceBytes,
@@ -212,6 +205,104 @@ priv struct EndOfCentral {
 }
 
 ///|
+/// Resolve the ZIP64 end-of-central-directory fields for a classic EOCD whose
+/// entry count or central size/offset spilled into the ZIP64 sentinels.
+/// Returns (entry_count, central_size, central_offset, zip64_eocd_offset).
+fn zip64_central_bounds(
+  bytes : BytesView,
+  eocd_offset : Int,
+  disk_entries : Int,
+  total_entries : Int,
+  central_size_raw : UInt,
+  central_offset_raw : UInt,
+) -> (Int, Int, Int, Int) raise ZipError {
+  let (zip_entries, zip_size, zip_offset, zip64_offset) = read_zip64_eocd(
+    bytes, eocd_offset,
+  )
+  guard disk_entries == 0xFFFF || disk_entries.to_uint64() == zip_entries else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: classic and zip64 entry counts differ",
+    )
+  }
+  guard total_entries == 0xFFFF || total_entries.to_uint64() == zip_entries else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: classic and zip64 entry counts differ",
+    )
+  }
+  guard central_size_raw == MAX_U32 ||
+    UInt64::extend_uint(central_size_raw) == zip_size else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: classic and zip64 central sizes differ",
+    )
+  }
+  guard central_offset_raw == MAX_U32 ||
+    UInt64::extend_uint(central_offset_raw) == zip_offset else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: classic and zip64 central offsets differ",
+    )
+  }
+  let entry_count = (if total_entries == 0xFFFF {
+    zip_entries
+  } else {
+    total_entries.to_uint64()
+  }).to_int_checked()
+  let central_size = (if central_size_raw == MAX_U32 {
+    zip_size
+  } else {
+    UInt64::extend_uint(central_size_raw)
+  }).to_int_checked()
+  let central_offset = (if central_offset_raw == MAX_U32 {
+    zip_offset
+  } else {
+    UInt64::extend_uint(central_offset_raw)
+  }).to_int_checked()
+  (entry_count, central_size, central_offset, zip64_offset)
+}
+
+///|
+/// Enforce the entry-count and central-bounds limits and assemble the parsed
+/// end-of-central-directory record.
+fn validate_central_bounds(
+  bytes : BytesView,
+  limits : ReadLimits,
+  eocd_offset : Int,
+  entry_count : Int,
+  central_size : Int,
+  central_offset : Int,
+  central_boundary : Int,
+  zip64_eocd_offset : Int?,
+  comment : Bytes,
+) -> EndOfCentral raise ZipError {
+  guard entry_count >= 0 else {
+    raise ZipError(Truncated, "zip: central directory out of bounds")
+  }
+  guard entry_count <= limits.max_entries else {
+    raise ZipError(
+      LimitExceeded(Entries, limits.max_entries, entry_count),
+      "zip: entry count exceeds its limit",
+    )
+  }
+  guard central_offset <= central_boundary &&
+    central_boundary <= bytes.length() &&
+    central_size == central_boundary - central_offset else {
+    raise ZipError(Truncated, "zip: central directory out of bounds")
+  }
+  {
+    eocd_offset,
+    entry_count,
+    central_size,
+    central_offset,
+    central_boundary,
+    zip64_eocd_offset,
+    comment,
+  }
+}
+
+///|
 /// Locate and validate the end-of-central-directory record (and the ZIP64 EOCD
 /// it points at), enforcing the package size, entry count, and central-bounds
 /// limits. Returns the parsed bounds for the central-directory phase.
@@ -221,7 +312,7 @@ fn parse_end_of_central(
   cancelled : () -> Bool,
 ) -> EndOfCentral raise ZipError {
   check_cancelled(cancelled)
-  if bytes.length() > limits.max_package_bytes {
+  guard bytes.length() <= limits.max_package_bytes else {
     raise ZipError(
       LimitExceeded(PackageBytes, limits.max_package_bytes, bytes.length()),
       "zip: package exceeds the input size limit",
@@ -242,7 +333,7 @@ fn parse_end_of_central(
   let central_size_raw = reader.read_u32_raw()
   let central_offset_raw = reader.read_u32_raw()
   let comment_len = reader.read_u16()
-  if disk_no != 0 || disk_start != 0 {
+  guard disk_no == 0 && disk_start == 0 else {
     raise ZipError(
       UnsupportedFeature,
       "zip: multi-disk archives are not supported",
@@ -253,94 +344,40 @@ fn parse_end_of_central(
     total_entries == 0xFFFF ||
     central_size_raw == MAX_U32 ||
     central_offset_raw == MAX_U32
-  let mut zip64_eocd_offset : Int? = None
-  let (entry_count, central_size, central_offset, central_boundary) = if needs_zip64 {
-    let (zip_entries, zip_size, zip_offset, zip64_offset) = read_zip64_eocd(
-      bytes, eocd_offset,
+  guard !needs_zip64 else {
+    let (entry_count, central_size, central_offset, zip64_offset) = zip64_central_bounds(
+      bytes, eocd_offset, disk_entries, total_entries, central_size_raw, central_offset_raw,
     )
-    zip64_eocd_offset = Some(zip64_offset)
-    if disk_entries != 0xFFFF && disk_entries.to_uint64() != zip_entries {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: classic and zip64 entry counts differ",
-      )
-    }
-    if total_entries != 0xFFFF && total_entries.to_uint64() != zip_entries {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: classic and zip64 entry counts differ",
-      )
-    }
-    if central_size_raw != MAX_U32 &&
-      UInt64::extend_uint(central_size_raw) != zip_size {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: classic and zip64 central sizes differ",
-      )
-    }
-    if central_offset_raw != MAX_U32 &&
-      UInt64::extend_uint(central_offset_raw) != zip_offset {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: classic and zip64 central offsets differ",
-      )
-    }
-    let entry_count = (if total_entries == 0xFFFF {
-      zip_entries
-    } else {
-      total_entries.to_uint64()
-    }).to_int_checked()
-    let central_size = (if central_size_raw == MAX_U32 {
-      zip_size
-    } else {
-      UInt64::extend_uint(central_size_raw)
-    }).to_int_checked()
-    let central_offset = (if central_offset_raw == MAX_U32 {
-      zip_offset
-    } else {
-      UInt64::extend_uint(central_offset_raw)
-    }).to_int_checked()
-    (entry_count, central_size, central_offset, zip64_offset)
-  } else {
-    if disk_entries != total_entries {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: multi-disk archives are not supported",
-      )
-    }
-    (
-      total_entries,
-      central_size_raw.to_int_checked(),
-      central_offset_raw.to_int_checked(),
+    return validate_central_bounds(
+      bytes,
+      limits,
       eocd_offset,
+      entry_count,
+      central_size,
+      central_offset,
+      zip64_offset,
+      Some(zip64_offset),
+      comment,
     )
   }
-  if entry_count > limits.max_entries {
+  guard disk_entries == total_entries else {
     raise ZipError(
-      LimitExceeded(Entries, limits.max_entries, entry_count),
-      "zip: entry count exceeds its limit",
+      UnsupportedFeature,
+      "zip: multi-disk archives are not supported",
     )
   }
-  if entry_count < 0 ||
-    central_offset > central_boundary ||
-    central_boundary > bytes.length() ||
-    central_size != central_boundary - central_offset {
-    raise ZipError(Truncated, "zip: central directory out of bounds")
-  }
-  {
+  validate_central_bounds(
+    bytes,
+    limits,
     eocd_offset,
-    entry_count,
-    central_size,
-    central_offset,
-    central_boundary,
-    zip64_eocd_offset,
+    total_entries,
+    central_size_raw.to_int_checked(),
+    central_offset_raw.to_int_checked(),
+    eocd_offset,
+    None,
     comment,
-  }
+  )
 }
-
-///|
-/// Parse every central-directory record into `EntryMeta`, enforcing the entry
-/// count and preserved-source ceilings.
 
 ///|
 /// Resolve a central-directory 32-bit field that may spill into a ZIP64 extra
@@ -357,6 +394,83 @@ fn resolve_zip64_field(
 }
 
 ///|
+/// Parse one central-directory record into `EntryMeta`, enforcing the
+/// preserved-source ceiling.
+fn parse_central_record(
+  central_bytes : BytesView,
+  central_reader : Cursor,
+  source_budget : SourceBudget,
+  cancelled : () -> Bool,
+) -> EntryMeta raise ZipError {
+  let central_record_start = central_reader.pos
+  guard central_reader.read_u32_raw() == CENTRAL_HEADER_SIG else {
+    raise ZipError(InvalidSignature, "zip: invalid central directory signature")
+  }
+  ignore(central_reader.read_u16())
+  ignore(central_reader.read_u16())
+  let flags = central_reader.read_u16()
+  ensure_flags_supported(flags)
+  let method_id = central_reader.read_u16()
+  ignore(central_reader.read_u16())
+  ignore(central_reader.read_u16())
+  let crc = central_reader.read_u32_raw()
+  let comp_size_raw = central_reader.read_u32_raw()
+  let uncomp_size_raw = central_reader.read_u32_raw()
+  let name_len = central_reader.read_u16()
+  let extra_len = central_reader.read_u16()
+  let comment_len = central_reader.read_u16()
+  let disk = central_reader.read_u16()
+  ignore(central_reader.read_u16())
+  ignore(central_reader.read_u32_raw())
+  let local_offset_raw = central_reader.read_u32_raw()
+  let name_bytes = central_reader.read_bytes(name_len)
+  let extra_bytes = central_reader.read_bytes(extra_len)
+  let name = decode_name(name_bytes)
+  central_reader.skip(comment_len)
+  guard disk == 0 else {
+    raise ZipError(
+      UnsupportedFeature,
+      "zip: multi-disk archives are not supported",
+    )
+  }
+  source_budget.charge(central_reader.pos - central_record_start)
+  let central_record = copy_cancellable(
+    central_bytes[central_record_start:central_reader.pos],
+    cancelled,
+  )
+  let need_uncomp = uncomp_size_raw == MAX_U32
+  let need_comp = comp_size_raw == MAX_U32
+  let need_offset = local_offset_raw == MAX_U32
+  let (zip_uncomp, zip_comp, zip_offset, offset_position) = read_zip64_extra(
+    extra_bytes, need_uncomp, need_comp, need_offset,
+  )
+  let uncompressed_size = resolve_zip64_field(
+    need_uncomp, zip_uncomp, uncomp_size_raw,
+  )
+  let compressed_size = resolve_zip64_field(need_comp, zip_comp, comp_size_raw)
+  let local_offset = resolve_zip64_field(
+    need_offset, zip_offset, local_offset_raw,
+  )
+  let central_zip64_offset_position = offset_position.map(position => {
+    46 + name_len + position
+  })
+  {
+    name,
+    flags,
+    method_id,
+    crc,
+    compressed_size,
+    uncompressed_size,
+    local_offset,
+    central_record,
+    central_zip64_offset_position,
+    data_descriptor: (flags & FLAG_DATA_DESCRIPTOR) != 0,
+  }
+}
+
+///|
+/// Parse every central-directory record into `EntryMeta`, enforcing the entry
+/// count and preserved-source ceilings.
 fn parse_central_directory(
   bytes : BytesView,
   eocd : EndOfCentral,
@@ -375,84 +489,19 @@ fn parse_central_directory(
     if entry_index % 64 == 0 {
       check_cancelled(cancelled)
     }
-    let central_record_start = central_reader.pos
-    if central_reader.read_u32_raw() != CENTRAL_HEADER_SIG {
-      raise ZipError(
-        InvalidSignature,
-        "zip: invalid central directory signature",
-      )
-    }
-    ignore(central_reader.read_u16())
-    ignore(central_reader.read_u16())
-    let flags = central_reader.read_u16()
-    ensure_flags_supported(flags)
-    let method_id = central_reader.read_u16()
-    ignore(central_reader.read_u16())
-    ignore(central_reader.read_u16())
-    let crc = central_reader.read_u32_raw()
-    let comp_size_raw = central_reader.read_u32_raw()
-    let uncomp_size_raw = central_reader.read_u32_raw()
-    let name_len = central_reader.read_u16()
-    let extra_len = central_reader.read_u16()
-    let comment_len = central_reader.read_u16()
-    let disk = central_reader.read_u16()
-    ignore(central_reader.read_u16())
-    ignore(central_reader.read_u32_raw())
-    let local_offset_raw = central_reader.read_u32_raw()
-    let name_bytes = central_reader.read_bytes(name_len)
-    let extra_bytes = central_reader.read_bytes(extra_len)
-    let name = decode_name(name_bytes)
-    central_reader.skip(comment_len)
-    if disk != 0 {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: multi-disk archives are not supported",
-      )
-    }
-    source_budget.charge(central_reader.pos - central_record_start)
-    let central_record = copy_cancellable(
-      central_bytes[central_record_start:central_reader.pos],
-      cancelled,
+    let meta = parse_central_record(
+      central_bytes, central_reader, source_budget, cancelled,
     )
-    let need_uncomp = uncomp_size_raw == MAX_U32
-    let need_comp = comp_size_raw == MAX_U32
-    let need_offset = local_offset_raw == MAX_U32
-    let (zip_uncomp, zip_comp, zip_offset, offset_position) = read_zip64_extra(
-      extra_bytes, need_uncomp, need_comp, need_offset,
-    )
-    let uncompressed_size = resolve_zip64_field(
-      need_uncomp, zip_uncomp, uncomp_size_raw,
-    )
-    let compressed_size = resolve_zip64_field(
-      need_comp, zip_comp, comp_size_raw,
-    )
-    let local_offset = resolve_zip64_field(
-      need_offset, zip_offset, local_offset_raw,
-    )
-    let central_zip64_offset_position = offset_position.map(position => {
-      46 + name_len + position
-    })
     check_sizes(
-      uncompressed_size,
+      meta.uncompressed_size,
       limits.max_entry_uncompressed_bytes,
       limits.max_total_uncompressed_bytes,
       used_total,
     )
-    used_total = used_total + uncompressed_size
-    metas.push({
-      name,
-      flags,
-      method_id,
-      crc,
-      compressed_size,
-      uncompressed_size,
-      local_offset,
-      central_record,
-      central_zip64_offset_position,
-      data_descriptor: (flags & FLAG_DATA_DESCRIPTOR) != 0,
-    })
+    used_total = used_total + meta.uncompressed_size
+    metas.push(meta)
   }
-  if central_reader.pos != eocd.central_size {
+  guard central_reader.pos == eocd.central_size else {
     raise ZipError(
       UnsupportedFeature,
       "zip: central directory size/count mismatch",
@@ -470,36 +519,26 @@ fn build_trailer(
   source_budget : SourceBudget,
   cancelled : () -> Bool,
 ) -> TrailerTemplate raise ZipError {
-  match eocd.zip64_eocd_offset {
-    Some(zip64_offset) => {
-      let locator_offset = eocd.eocd_offset - 20
-      source_budget.charge(
-        locator_offset - zip64_offset + 20 + (bytes.length() - eocd.eocd_offset),
-      )
-      {
-        classic_end_record: copy_cancellable(
-          bytes[eocd.eocd_offset:],
-          cancelled,
-        ),
-        zip64_end_record: Some(
-          copy_cancellable(bytes[zip64_offset:locator_offset], cancelled),
-        ),
-        zip64_locator: Some(
-          copy_cancellable(bytes[locator_offset:eocd.eocd_offset], cancelled),
-        ),
-      }
+  guard eocd.zip64_eocd_offset is Some(zip64_offset) else {
+    source_budget.charge(bytes.length() - eocd.eocd_offset)
+    return {
+      classic_end_record: copy_cancellable(bytes[eocd.eocd_offset:], cancelled),
+      zip64_end_record: None,
+      zip64_locator: None,
     }
-    None => {
-      source_budget.charge(bytes.length() - eocd.eocd_offset)
-      {
-        classic_end_record: copy_cancellable(
-          bytes[eocd.eocd_offset:],
-          cancelled,
-        ),
-        zip64_end_record: None,
-        zip64_locator: None,
-      }
-    }
+  }
+  let locator_offset = eocd.eocd_offset - 20
+  source_budget.charge(
+    locator_offset - zip64_offset + 20 + (bytes.length() - eocd.eocd_offset),
+  )
+  {
+    classic_end_record: copy_cancellable(bytes[eocd.eocd_offset:], cancelled),
+    zip64_end_record: Some(
+      copy_cancellable(bytes[zip64_offset:locator_offset], cancelled),
+    ),
+    zip64_locator: Some(
+      copy_cancellable(bytes[locator_offset:eocd.eocd_offset], cancelled),
+    ),
   }
 }
 
@@ -528,40 +567,41 @@ fn decode_entry(
     (entry_limit, EntryUncompressedBytes, entry_limit)
   }
   let compression = method_from_code(meta.method_id)
-  let data = match record.compressed.length() {
-    0 if meta.uncompressed_size == 0 => b""
-    _ =>
-      match compression {
-        Store => {
-          if record.compressed.length() > entry_limit {
-            raise ZipError(
-              LimitExceeded(
-                EntryUncompressedBytes,
-                entry_limit,
-                record.compressed.length(),
-              ),
-              "zip: stored entry exceeds its limit",
-            )
-          }
-          copy_cancellable(record.compressed, cancelled)
-        }
-        Deflate =>
-          inflate_entry(
-            record.compressed,
-            effective_cap,
-            limit_kind,
-            reported_limit,
-            cancelled,
+  let data = {
+    guard !(record.compressed.length() == 0 && meta.uncompressed_size == 0) else {
+      b""
+    }
+    match compression {
+      Store => {
+        guard record.compressed.length() <= entry_limit else {
+          raise ZipError(
+            LimitExceeded(
+              EntryUncompressedBytes,
+              entry_limit,
+              record.compressed.length(),
+            ),
+            "zip: stored entry exceeds its limit",
           )
+        }
+        copy_cancellable(record.compressed, cancelled)
       }
+      Deflate =>
+        inflate_entry(
+          record.compressed,
+          effective_cap,
+          limit_kind,
+          reported_limit,
+          cancelled,
+        )
+    }
   }
-  if data.length() != meta.uncompressed_size {
+  guard data.length() == meta.uncompressed_size else {
     raise ZipError(
       UnsupportedFeature,
       "zip: decoded size does not match central directory",
     )
   }
-  if data.length() > total_limit - actual_total {
+  guard data.length() <= total_limit - actual_total else {
     raise ZipError(
       LimitExceeded(
         TotalUncompressedBytes,

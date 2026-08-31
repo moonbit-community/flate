@@ -36,14 +36,7 @@ fn block_cost_bits(
   ll_freq[256] += 1
   let codes = build_dynamic_codes(ll_freq, d_freq)
   let cost = estimate_block_cost(codes, byte_len, ll_freq, d_freq)
-  let mut best = cost.stored
-  if cost.fixed < best {
-    best = cost.fixed
-  }
-  if cost.dynamic < best {
-    best = cost.dynamic
-  }
-  best
+  cost.stored.min(cost.fixed).min(cost.dynamic)
 }
 
 ///|
@@ -336,30 +329,21 @@ fn emit_optimal_chunk(
 /// `deflate_all` — for compress-once, serve-forever artifacts.  `iterations` is the squeeze count
 /// per block (zopfli's default is 15).
 pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
-  let iters = if iterations < 1 { 1 } else { iterations }
+  let iters = iterations.max(1)
   let w = BitWriter()
   let n = input.length()
-  if n == 0 {
-    let ll_freq = Array::make(286, 0)
-    let d_freq = Array::make(30, 0)
-    let none : Array[Int] = []
-    emit_block(w, input, 0, 0, none[:], ll_freq, d_freq, is_final=true)
+  guard n != 0 else {
+    emit_empty_block(w, input)
     w.flush()
     return Bytes::from_array(w.out)
   }
   let mut pos = 0
   for ;; {
-    let target = if pos + OPTIMAL_MASTER_BLOCK < n {
-      pos + OPTIMAL_MASTER_BLOCK
-    } else {
-      n
-    }
+    let target = (pos + OPTIMAL_MASTER_BLOCK).min(n)
     let chunk = optimal_parse_chunk(input, pos, target, iters)
     emit_optimal_chunk(w, input, chunk, pos, n)
     pos = chunk.chunk_end
-    if pos >= n {
-      break
-    }
+    guard pos < n else { break }
   }
   w.flush()
   Bytes::from_array(w.out)

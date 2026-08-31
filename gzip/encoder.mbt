@@ -121,27 +121,22 @@ pub fn Encoder::step(
     return self.finish_step(Done, 0, 0)
   }
   let mut consumed = 0
-  match self.pending_action {
-    Finish => ()
-    Continue | SyncFlush => {
-      // Feed through the bounded inner state machine even while the wrapper
-      // header is backpressured. Its zero-sized sink caps accepted input at one
-      // block window and reports the exact prefix whose checksum we may commit.
-      let scratch = FixedArray::make(0, b'\x00').mut_view()
-      let _status = self.def.step(input, scratch, action~)
-      let accepted = self.def.last_consumed()
-      consumed = accepted
-      if accepted > 0 {
-        self.crc.update(input[:accepted])
-        self.isize = self.isize + accepted.reinterpret_as_uint()
-      }
-      if accepted == input.length() {
-        match action {
-          Continue => ()
-          SyncFlush => self.pending_action = SyncFlush
-          Finish => self.pending_action = Finish
-        }
-      }
+  // A pending Finish leaves later input unconsumed: feed only while the inner
+  // deflater still accepts.
+  if !(self.pending_action is Finish) {
+    // Feed through the bounded inner state machine even while the wrapper
+    // header is backpressured. Its zero-sized sink caps accepted input at one
+    // block window and reports the exact prefix whose checksum we may commit.
+    let scratch = FixedArray::make(0, b'\x00').mut_view()
+    let _status = self.def.step(input, scratch, action~)
+    let accepted = self.def.last_consumed()
+    consumed = accepted
+    if accepted > 0 {
+      self.crc.update(input[:accepted])
+      self.isize = self.isize + accepted.reinterpret_as_uint()
+    }
+    if accepted == input.length() {
+      guard action is Continue else { self.pending_action = action }
     }
   }
   let out_end = output.length()

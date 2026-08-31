@@ -2,7 +2,7 @@
 /// Validate the one's-complement length pair carried by a stored block.
 #inline
 fn validate_stored_length(len : Int, nlen : Int) -> Unit raise InflateError {
-  if len != (nlen ^ 0xFFFF) {
+  guard len == (nlen ^ 0xFFFF) else {
     raise InflateError(Corrupt, "stored block length mismatch")
   }
 }
@@ -13,7 +13,7 @@ fn validate_stored_length(len : Int, nlen : Int) -> Unit raise InflateError {
 #inline
 fn dynamic_literal_count(bits : Int) -> Int raise InflateError {
   let count = bits + 257
-  if count > MAX_NUM_LIT {
+  guard count <= MAX_NUM_LIT else {
     raise InflateError(Corrupt, "corrupt: too many literal codes")
   }
   count
@@ -24,7 +24,7 @@ fn dynamic_literal_count(bits : Int) -> Int raise InflateError {
 #inline
 fn dynamic_distance_count(bits : Int) -> Int raise InflateError {
   let count = bits + 1
-  if count > MAX_NUM_DIST {
+  guard count <= MAX_NUM_DIST else {
     raise InflateError(Corrupt, "corrupt: too many distance codes")
   }
   count
@@ -144,20 +144,20 @@ fn decode_dynamic_header(
   let mut i = 0
   while i < n {
     let x = huff_sym()
-    if x < 16 {
+    guard x >= 16 else {
       clbits[i] = x
       i = i + 1
-    } else {
-      let previous = if i == 0 { None } else { Some(clbits[i - 1]) }
-      let repeat = interpret_code_length_repeat(x, previous)
-      let rep = repeat.base + read_bits(repeat.extra_bits)
-      if i + rep > n {
-        raise InflateError(Corrupt, "corrupt: code-length repeat overflow")
-      }
-      for _j in 0..<rep {
-        clbits[i] = repeat.value
-        i = i + 1
-      }
+      continue
+    }
+    let previous = if i == 0 { None } else { Some(clbits[i - 1]) }
+    let repeat = interpret_code_length_repeat(x, previous)
+    let rep = repeat.base + read_bits(repeat.extra_bits)
+    guard i + rep <= n else {
+      raise InflateError(Corrupt, "corrupt: code-length repeat overflow")
+    }
+    for _j in 0..<rep {
+      clbits[i] = repeat.value
+      i = i + 1
     }
   }
   (nlit, ndist)

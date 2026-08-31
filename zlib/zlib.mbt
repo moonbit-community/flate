@@ -128,28 +128,26 @@ pub fn zlib_compress_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
 /// human-readable diagnostic.
 pub fn zlib_decompress(input : Bytes) -> Bytes raise ZlibError {
   let n = input.length()
-  if n < 6 {
-    raise ZlibError(Truncated, "zlib: input too short")
-  }
+  guard n >= 6 else { raise ZlibError(Truncated, "zlib: input too short") }
   let cmf = input[0].to_int()
   let flg = input[1].to_int()
-  if (cmf & 0x0F) != 8 {
+  guard (cmf & 0x0F) == 8 else {
     raise ZlibError(InvalidHeader, "zlib: unsupported compression method")
   }
-  if cmf >> 4 > 7 {
+  guard cmf >> 4 <= 7 else {
     raise ZlibError(InvalidHeader, "zlib: invalid window size")
   }
-  if (cmf * 256 + flg) % 31 != 0 {
+  guard (cmf * 256 + flg) % 31 == 0 else {
     raise ZlibError(InvalidHeader, "zlib: bad header check")
   }
-  if (flg & 0x20) != 0 {
+  guard (flg & 0x20) == 0 else {
     raise ZlibError(
       DictionaryRequired,
       "zlib: preset dictionary required (use the streaming Decoder)",
     )
   }
   let out = inflate_exact(input[2:n - 4])
-  if @checksum.adler32(out) != u32_be(input, n - 4) {
+  guard @checksum.adler32(out) == u32_be(input, n - 4) else {
     raise ZlibError(ChecksumMismatch, "zlib: Adler-32 mismatch")
   }
   out

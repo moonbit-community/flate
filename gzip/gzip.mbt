@@ -130,6 +130,79 @@ fn inflate_member(
 }
 
 ///|
+/// Whether the bytes at `p` begin a gzip member: the magic pair, with a
+/// truncated second byte treated as a (still-to-be-validated) member start so
+/// the caller reports `Truncated` rather than ending the stream.
+fn gunzip_member_magic(input : Bytes, p : Int, n : Int) -> Bool {
+  input[p].to_int() == 0x1F && (p + 1 >= n || input[p + 1].to_int() == 0x8B)
+}
+
+///|
+/// Skip a NUL-terminated header field, returning the offset one past the NUL.
+/// An unterminated field (bounded by the input end) still consumes its bytes;
+/// the caller's truncated-input check rejects it.
+fn gunzip_skip_nul_terminated(input : Bytes, q : Int) -> Int {
+  let mut q = q
+  while q < input.length() && input[q].to_int() != 0 {
+    q = q + 1
+  }
+  q + 1
+}
+
+///|
+/// Offset one past the optional header fields (FEXTRA, FNAME, FCOMMENT, FHCRC)
+/// gated by the FLG bits.
+fn gunzip_optional_fields_end(input : Bytes, q : Int, flg : Int) -> Int {
+  let mut q = q
+  if (flg & 4) != 0 { // FEXTRA
+    let xlen = input[q].to_int() | (input[q + 1].to_int() << 8)
+    q = q + 2 + xlen
+  }
+  if (flg & 8) != 0 { // FNAME (NUL-terminated)
+    q = gunzip_skip_nul_terminated(input, q)
+  }
+  if (flg & 16) != 0 { // FCOMMENT (NUL-terminated)
+    q = gunzip_skip_nul_terminated(input, q)
+  }
+  if (flg & 2) != 0 { // FHCRC
+    q = q + 2
+  }
+  q
+}
+
+///|
+/// Decode one member at `p`: fixed header, optional fields, DEFLATE payload,
+/// and trailer verification. Returns the payload and the offset of the next
+/// member (one past the trailer).
+fn gunzip_decode_member(
+  input : Bytes,
+  p : Int,
+  n : Int,
+  member_consumed : FixedArray[Int],
+) -> (Bytes, Int) raise GzipError {
+  guard n - p >= 18 else { raise GzipError(Truncated, "gzip: truncated") }
+  guard input[p + 2].to_int() == 0x08 else {
+    raise GzipError(InvalidHeader, "gzip: unsupported compression method")
+  }
+  let flg = input[p + 3].to_int()
+  guard (flg & 0xE0) == 0 else {
+    raise GzipError(InvalidHeader, "gzip: reserved flags are set")
+  }
+  let q = gunzip_optional_fields_end(input, p + 10, flg)
+  guard q <= n - 8 else { raise GzipError(Truncated, "gzip: truncated") }
+  let payload = inflate_member(input, q, member_consumed)
+  let trailer = q + member_consumed[0]
+  guard trailer <= n - 8 else { raise GzipError(Truncated, "gzip: truncated") }
+  guard @checksum.crc32(payload) == u32_le(input, trailer) else {
+    raise GzipError(ChecksumMismatch, "gzip: CRC-32 mismatch")
+  }
+  guard payload.length().reinterpret_as_uint() == u32_le(input, trailer + 4) else {
+    raise GzipError(LengthMismatch, "gzip: length mismatch")
+  }
+  (payload, trailer + 8)
+}
+
+///|
 /// Decompress gzip-format `input`, verifying each member's CRC-32 and length
 /// trailer. Concatenated multi-member streams (RFC 1952 §2.2 — e.g. from `pigz`
 /// or appended `.gz` logs) are decoded in full, their payloads joined; trailing
@@ -140,9 +213,7 @@ fn inflate_member(
 /// handling plus a human-readable diagnostic.
 pub fn gunzip(input : Bytes) -> Bytes raise GzipError {
   let n = input.length()
-  if n < 18 {
-    raise GzipError(Truncated, "gzip: input too short")
-  }
+  guard n >= 18 else { raise GzipError(Truncated, "gzip: input too short") }
   let out = Buffer()
   let member_consumed = FixedArray::make(1, 0)
   let mut p = 0
@@ -150,73 +221,16 @@ pub fn gunzip(input : Bytes) -> Bytes raise GzipError {
     // Stop once no further member begins: clean end or trailing garbage. A
     // complete magic prefix does begin another member, however, so it must be
     // decoded or reported as truncated rather than silently discarded.
-    if p == n {
-      break
+    guard p < n else { break }
+    guard gunzip_member_magic(input, p, n) else {
+      guard p == 0 else { break }
+      raise GzipError(InvalidHeader, "gzip: bad magic")
     }
-    if input[p].to_int() != 0x1F {
-      if p == 0 {
-        raise GzipError(InvalidHeader, "gzip: bad magic")
-      }
-      break
-    }
-    if n - p < 2 {
-      raise GzipError(Truncated, "gzip: truncated")
-    }
-    if input[p + 1].to_int() != 0x8B {
-      if p == 0 {
-        raise GzipError(InvalidHeader, "gzip: bad magic")
-      }
-      break
-    }
-    if n - p < 18 {
-      raise GzipError(Truncated, "gzip: truncated")
-    }
-    if input[p + 2].to_int() != 0x08 {
-      raise GzipError(InvalidHeader, "gzip: unsupported compression method")
-    }
-    let flg = input[p + 3].to_int()
-    if (flg & 0xE0) != 0 {
-      raise GzipError(InvalidHeader, "gzip: reserved flags are set")
-    }
-    let mut q = p + 10
-    if (flg & 4) != 0 { // FEXTRA
-      let xlen = input[q].to_int() | (input[q + 1].to_int() << 8)
-      q = q + 2 + xlen
-    }
-    if (flg & 8) != 0 { // FNAME (NUL-terminated)
-      while q < n && input[q].to_int() != 0 {
-        q = q + 1
-      }
-      q = q + 1
-    }
-    if (flg & 16) != 0 { // FCOMMENT (NUL-terminated)
-      while q < n && input[q].to_int() != 0 {
-        q = q + 1
-      }
-      q = q + 1
-    }
-    if (flg & 2) != 0 { // FHCRC
-      q = q + 2
-    }
-    if q > n - 8 {
-      raise GzipError(Truncated, "gzip: truncated")
-    }
-    let payload = inflate_member(input, q, member_consumed)
-    let deflate_len = member_consumed[0]
-    let trailer = q + deflate_len
-    if trailer > n - 8 {
-      raise GzipError(Truncated, "gzip: truncated")
-    }
-    if @checksum.crc32(payload) != u32_le(input, trailer) {
-      raise GzipError(ChecksumMismatch, "gzip: CRC-32 mismatch")
-    }
-    if payload.length().reinterpret_as_uint() != u32_le(input, trailer + 4) {
-      raise GzipError(LengthMismatch, "gzip: length mismatch")
-    }
+    let (payload, next_p) = gunzip_decode_member(input, p, n, member_consumed)
     for b in payload {
       out.write_byte(b)
     }
-    p = trailer + 8
+    p = next_p
   }
   out.to_bytes()
 }
