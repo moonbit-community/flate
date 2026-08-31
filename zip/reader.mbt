@@ -277,9 +277,6 @@ fn validate_central_bounds(
   zip64_eocd_offset : Int?,
   comment : Bytes,
 ) -> EndOfCentral raise ZipError {
-  guard entry_count >= 0 else {
-    raise ZipError(Truncated, "zip: central directory out of bounds")
-  }
   guard entry_count <= limits.max_entries else {
     raise ZipError(
       LimitExceeded(Entries, limits.max_entries, entry_count),
