@@ -53,11 +53,11 @@ pub fn Encoder::Encoder(level? : Int = 6, dictionary? : Bytes) -> Encoder {
     h[5] = (id & 0xFF).reinterpret_as_int().to_byte()
     (def, h)
   } else {
-    (@flate.Deflater(level~), zlib_header_bytes)
+    (Deflater(level~), zlib_header_bytes)
   }
   {
     def,
-    adler: @checksum.Adler32(),
+    adler: Adler32(),
     mode: Header,
     stage,
     stage_pos: 0,

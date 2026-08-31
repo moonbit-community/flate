@@ -106,9 +106,7 @@ fn match_candidate_can_beat(
   best_len : Int,
   limit : Int,
 ) -> Bool {
-  if best_len >= limit {
-    return false
-  }
+  guard best_len < limit else { return false }
   if best_len < 3 {
     data[candidate] == data[position] &&
     data[candidate + 1] == data[position + 1] &&
@@ -225,6 +223,14 @@ fn commit_match(
     insert_pos(data, head, prev, j, n, seed_from)
   }
   match_end
+}
+
+///|
+/// Record one literal token: push its byte value and tally its symbol.
+#inline
+fn emit_literal(tokens : Array[Int], ll_freq : Array[Int], b : Int) -> Unit {
+  tokens.push(b)
+  ll_freq[b] += 1
 }
 
 ///|

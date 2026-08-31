@@ -38,8 +38,8 @@ pub struct Encoder {
 /// Create a fresh gzip compressor.
 pub fn Encoder::Encoder(level? : Int = 6) -> Encoder {
   {
-    def: @flate.Deflater(level~),
-    crc: @checksum.Crc32(),
+    def: Deflater(level~),
+    crc: Crc32(),
     isize: 0,
     mode: Header,
     stage: gzip_header_bytes,

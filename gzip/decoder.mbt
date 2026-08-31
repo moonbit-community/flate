@@ -59,8 +59,8 @@ pub struct Decoder {
 /// recover every following byte through `unused_input()`.
 pub fn Decoder::Decoder(multistream? : Bool = true) -> Decoder {
   {
-    inf: @flate.Inflater(),
-    crc: @checksum.Crc32(),
+    inf: Inflater(),
+    crc: Crc32(),
     osize: 0,
     pending: [],
     pending_pos: 0,
@@ -510,7 +510,7 @@ fn Decoder::step_active(
         // starts fresh (RFC 1952 §2.2 — members are independent, no cross-member
         // back-references).
         self.inf.reset()
-        self.crc = @checksum.Crc32()
+        self.crc = Crc32()
         self.osize = 0
         self.flg = 0
         self.members = self.members + 1

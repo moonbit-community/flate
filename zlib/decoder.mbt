@@ -37,8 +37,8 @@ pub struct Decoder {
 /// is verified against it before use.
 pub fn Decoder::Decoder(dictionary? : Bytes) -> Decoder {
   {
-    inf: @flate.Inflater(),
-    adler: @checksum.Adler32(),
+    inf: Inflater(),
+    adler: Adler32(),
     pending: [],
     pending_pos: 0,
     body_input: b"",
