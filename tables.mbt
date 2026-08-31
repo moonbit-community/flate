@@ -3,16 +3,16 @@
 /// express, since distance codes top out at 32768 (RFC 1951 §3.2.5, "the
 /// compressor terminates a block ... distances are limited to 32K bytes"; the
 /// distance code table in §3.2.5 maps the largest code to base 24577 + 8192).
-let window_size = 32768
+pub const WINDOW_SIZE : Int = 32768
 
 ///|
-let max_num_lit = 286
+pub const MAX_NUM_LIT : Int = 286
 
 ///|
-let max_num_dist = 30
+pub const MAX_NUM_DIST : Int = 30
 
 ///|
-let num_codes = 19
+pub const NUM_CODES : Int = 19
 
 ///|
 /// Order in which code-length code lengths are stored (RFC 1951 §3.2.7).
@@ -77,8 +77,8 @@ let dist_extra : FixedArray[Int] = [
 
 ///|
 fn build_distance_code_info_table() -> FixedArray[Int] {
-  let info = FixedArray::make(max_num_dist, 0)
-  for symbol in 0..<max_num_dist {
+  let info = FixedArray::make(MAX_NUM_DIST, 0)
+  for symbol in 0..<MAX_NUM_DIST {
     info[symbol] = (dist_base[symbol] << 4) | dist_extra[symbol]
   }
   info

@@ -21,7 +21,7 @@ priv struct MatchRange {
 ///|
 /// Chain candidates examined per position; effectively exhaustive, in keeping
 /// with the offline effort budget.
-let optimal_max_chain = 8192
+const OPTIMAL_MAX_CHAIN : Int = 8192
 
 ///|
 /// The match frontier at every position of `data[start:end)`, computed once
@@ -34,8 +34,8 @@ fn collect_matches(
   start : Int,
   end : Int,
 ) -> Array[Array[MatchRange]] {
-  let seed_from = if start > window_size { start - window_size } else { 0 }
-  let head = Array::make(1 << hash_bits, -1)
+  let seed_from = if start > WINDOW_SIZE { start - WINDOW_SIZE } else { 0 }
+  let head = Array::make(1 << HASH_BITS, -1)
   // `prev` slots are relative to seed_from, so the array is bounded by
   // window + segment, not by the absolute offset into the input.
   let prev = Array::make(if end > seed_from { end - seed_from } else { 1 }, -1)
@@ -52,7 +52,7 @@ fn collect_matches(
       let mut cand = head[h]
       let mut best = 2
       let mut steps = 0
-      while cand >= 0 && steps < optimal_max_chain && i - cand <= 32768 {
+      while cand >= 0 && steps < OPTIMAL_MAX_CHAIN && i - cand <= 32768 {
         let l = if match_candidate_can_beat(data, cand, i, best, limit) {
           match_len_up_to(data, cand, i, limit)
         } else {

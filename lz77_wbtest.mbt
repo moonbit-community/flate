@@ -32,7 +32,9 @@ priv struct MatchLenDifferentialRng {
 }
 
 ///|
-fn MatchLenDifferentialRng::new(seed : UInt) -> MatchLenDifferentialRng {
+fn MatchLenDifferentialRng::MatchLenDifferentialRng(
+  seed : UInt,
+) -> MatchLenDifferentialRng {
   { state: seed, }
 }
 
@@ -107,7 +109,7 @@ test "v128 match length finds the first unequal lane and scalar tail" {
 
 ///|
 test "match length agrees with scalar reference across boundaries and tails" {
-  let rng = MatchLenDifferentialRng::new(0x51DDFEEDU)
+  let rng = MatchLenDifferentialRng(0x51DDFEEDU)
   let limits = [
     0, 1, 2, 7, 15, 16, 17, 18, 31, 32, 33, 47, 48, 49, 63, 64, 65, 127, 128, 129,
     255, 256, 257, 258,

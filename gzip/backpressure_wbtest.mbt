@@ -3,7 +3,7 @@ test "gzip wrappers bound accepted input under output backpressure" {
   let source = Bytes::from_array(Array::make(200000, b'\x5A'))
   let no_output = FixedArray::make(0, b'\x00')
 
-  let encoder = Encoder::new(level=0)
+  let encoder = Encoder(level=0)
   let enc_status = encoder.step(source[:], no_output.mut_view(), action=Finish)
   let enc_consumed = encoder.last_consumed()
   let enc_produced = encoder.last_produced()
@@ -13,22 +13,22 @@ test "gzip wrappers bound accepted input under output backpressure" {
   assert_eq(enc_produced, 0)
 
   let compressed = gzip_compress(source, level=0)
-  let decoder = Decoder::new()
+  let decoder = Decoder()
   assert_eq(decoder.unused_input(), b"")
   let dec_status = decoder.step(compressed[:], no_output.mut_view(), end=true)
   let dec_consumed = decoder.last_consumed()
   let dec_produced = decoder.last_produced()
   assert_true(dec_status is NeedMoreOutput)
-  assert_eq(dec_consumed, decoder_input_limit)
+  assert_eq(dec_consumed, DECODER_INPUT_LIMIT)
   assert_true(dec_consumed < compressed.length())
   assert_eq(dec_produced, 0)
-  assert_true(decoder.pending.length() <= decoder_input_limit)
+  assert_true(decoder.pending.length() <= DECODER_INPUT_LIMIT)
   assert_false(decoder.ending)
   let mut input_pos = dec_consumed
   let mut saw_consumed_prefix = false
   let mut saw_fresh_window = false
   for _ in 0..<8 {
-    if decoder.pending.length() == decoder_input_limit {
+    if decoder.pending.length() == DECODER_INPUT_LIMIT {
       if decoder.pending_pos > 0 {
         saw_consumed_prefix = true
       } else {
@@ -56,7 +56,7 @@ test "gzip decoder waits at an empty boundary after a verified member" {
   // This is the exact valid state reached after a member trailer is consumed
   // at an input boundary. Without a physical end signal, an empty next view
   // must not be mistaken for the end of a concatenated gzip stream.
-  let decoder = Decoder::new()
+  let decoder = Decoder()
   decoder.members = 1
   decoder.mode = GzHeader
   let output = FixedArray::make(1, b'\x00')

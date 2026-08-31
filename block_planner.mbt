@@ -1,6 +1,6 @@
 // Block planning stage of the encode pipeline: decides where block boundaries
 // fall and what state carries across them. Non-final blocks cover at most
-// `deflate_block_size` tokenizable bytes (a cap as well as a floor: one
+// `DEFLATE_BLOCK_SIZE` tokenizable bytes (a cap as well as a floor: one
 // Huffman table should not span heterogeneous megabytes, and the token buffer
 // stays bounded). `emit_one` reserves a lookahead tail so boundary matches
 // see their full extent; `emit_final` settles the remainder block-by-block;
@@ -11,14 +11,14 @@
 ///|
 /// Bytes of unconsumed lookahead reserved beyond a non-final block boundary so
 /// matches there see their full extent.
-let min_lookahead = 258
+pub const MIN_LOOKAHEAD : Int = 258
 
 ///|
 /// Trim `pending` so at most a 32 KB window of already-processed bytes remains
 /// as history, and reset `window_carry`.
 fn Deflater::trim_window(self : Deflater, processed : Int) -> Unit {
-  let newstart = if processed > window_size {
-    processed - window_size
+  let newstart = if processed > WINDOW_SIZE {
+    processed - WINDOW_SIZE
   } else {
     0
   }
@@ -33,13 +33,13 @@ fn Deflater::trim_window(self : Deflater, processed : Int) -> Unit {
 }
 
 ///|
-/// Emit one non-final block covering at most `deflate_block_size` tokenizable
+/// Emit one non-final block covering at most `DEFLATE_BLOCK_SIZE` tokenizable
 /// bytes (plus up to 257 bytes of match overhang), then trim `pending` back to
 /// a 32 KB history window. The caller guarantees enough input is present for
 /// matches at the boundary to see their full extent.
 fn Deflater::emit_capped(self : Deflater) -> Unit {
   let data = Bytes::from_array(self.pending)
-  let cap = self.window_carry + deflate_block_size
+  let cap = self.window_carry + DEFLATE_BLOCK_SIZE
   let tok_end = if cap < data.length() { cap } else { data.length() }
   let tokens : Array[Int] = []
   let ll_freq = Array::make(286, 0)
@@ -126,7 +126,7 @@ fn Deflater::emit_final(self : Deflater) -> Unit {
   if self.level == 0 {
     self.emit_stored_all(is_final=true)
   } else {
-    while self.pending.length() - self.window_carry > deflate_block_size {
+    while self.pending.length() - self.window_carry > DEFLATE_BLOCK_SIZE {
       self.emit_capped()
     }
     ignore(self.emit_trailing_block(is_final=true))
@@ -147,7 +147,7 @@ fn Deflater::emit_flush(self : Deflater) -> Unit {
       self.emit_stored_all(is_final=false)
     }
   } else {
-    while self.pending.length() - self.window_carry > deflate_block_size {
+    while self.pending.length() - self.window_carry > DEFLATE_BLOCK_SIZE {
       self.emit_capped()
     }
     // Capped blocks may have consumed everything (match overhang); only emit

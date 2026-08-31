@@ -10,7 +10,9 @@ priv struct InflateDifferentialRng {
 }
 
 ///|
-fn InflateDifferentialRng::new(seed : UInt) -> InflateDifferentialRng {
+fn InflateDifferentialRng::InflateDifferentialRng(
+  seed : UInt,
+) -> InflateDifferentialRng {
   { state: seed, }
 }
 
@@ -34,7 +36,7 @@ fn inflate_differential_random_bytes(
   length : Int,
   alphabet : Int,
 ) -> Bytes {
-  let rng = InflateDifferentialRng::new(seed)
+  let rng = InflateDifferentialRng(seed)
   let bytes = Array::make(length, b'\x00')
   for i in 0..<length {
     bytes[i] = (rng.size(alphabet) - 1).to_byte()
@@ -80,8 +82,8 @@ fn inflate_differential_stream_bytes(
   schedule_seed : UInt,
   one_byte_only : Bool,
 ) -> Bytes raise {
-  let inflater = Inflater::new()
-  let rng = InflateDifferentialRng::new(schedule_seed)
+  let inflater = Inflater()
+  let rng = InflateDifferentialRng(schedule_seed)
   let output = FixedArray::make(23, b'\x00')
   let decoded = Buffer()
   let mut input_pos = 0
@@ -254,7 +256,7 @@ test "inflate_all and streaming Inflater agree under deterministic fuzz" {
 /// produced by our own compressor may never reach. The seed is part of every
 /// corpus label so a failing case is exactly reproducible.
 test "inflate_all and streaming Inflater agree on deterministic raw noise" {
-  let corpus_rng = InflateDifferentialRng::new(0xBAD5EEDU)
+  let corpus_rng = InflateDifferentialRng(0xBAD5EEDU)
   let mut schedule_seed = 0x51A7E202U
   for case_index in 0..<128 {
     let corpus_seed = corpus_rng.next()

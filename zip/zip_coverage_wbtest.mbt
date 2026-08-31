@@ -33,15 +33,15 @@ test "zip checked conversions reject out-of-range values" {
 
 ///|
 test "zip cursor and field readers reject truncated input" {
-  expect_zip_error(() => ignore(Cursor::new(b"", 0).read_u8()))
-  expect_zip_error(() => ignore(Cursor::new(b"", 0).read_bytes(1)))
+  expect_zip_error(() => ignore(Cursor(b"", 0).read_u8()))
+  expect_zip_error(() => ignore(Cursor(b"", 0).read_bytes(1)))
   expect_zip_error(() => ignore(read_u16_le_at(b"", 0)))
   expect_zip_error(() => ignore(read_u32_le_at_raw(b"", 0)))
   expect_zip_error(() => ignore(read_u64_le_at(b"", 0)))
   assert_eq(find_end_of_central(b"too short"), None)
   expect_zip_kind(() => ignore(decode_name(b"\xff")), InvalidUtf8)
   expect_zip_kind(
-    () => ensure_flags_supported(flag_encrypted),
+    () => ensure_flags_supported(FLAG_ENCRYPTED),
     UnsupportedFeature,
   )
   expect_zip_kind(() => ensure_flags_supported(0x0010), UnsupportedFeature)
@@ -65,7 +65,7 @@ test "zip wrap_inflate_error maps both error surfaces" {
 
 ///|
 test "zip raw source records are exposed on read entries" {
-  let archive = Archive::new()
+  let archive = Archive()
   archive.add("a.txt", b"payload")
   let parsed = read(write(archive))
   let entry = parsed.entries()[0]
@@ -119,7 +119,7 @@ test "zip zip64 end record rejects malformed trailers" {
   // Locator declares a second disk.
   let locator_multi_disk = {
     let buf : Array[Byte] = []
-    push_u32le(buf, zip64_locator_sig)
+    push_u32le(buf, ZIP64_LOCATOR_SIG)
     push_u32le(buf, 0)
     push_u64le(buf, 0)
     push_u32le(buf, 2)
@@ -129,7 +129,7 @@ test "zip zip64 end record rejects malformed trailers" {
   // Locator points at the end record itself (no room for one).
   let out_of_bounds = {
     let buf : Array[Byte] = []
-    push_u32le(buf, zip64_locator_sig)
+    push_u32le(buf, ZIP64_LOCATOR_SIG)
     push_u32le(buf, 0)
     push_u64le(buf, 0)
     push_u32le(buf, 1)
@@ -139,11 +139,11 @@ test "zip zip64 end record rejects malformed trailers" {
   // End record carries the wrong signature.
   let bad_sig = {
     let buf : Array[Byte] = []
-    push_u32le(buf, local_header_sig)
+    push_u32le(buf, LOCAL_HEADER_SIG)
     for _ in 0..<8 {
       buf.push(b'\x00')
     }
-    push_u32le(buf, zip64_locator_sig)
+    push_u32le(buf, ZIP64_LOCATOR_SIG)
     push_u32le(buf, 0)
     push_u64le(buf, 0)
     push_u32le(buf, 1)
@@ -153,9 +153,9 @@ test "zip zip64 end record rejects malformed trailers" {
   // End record size does not reach the locator.
   let size_mismatch = {
     let buf : Array[Byte] = []
-    push_u32le(buf, zip64_eocd_sig)
+    push_u32le(buf, ZIP64_EOCD_SIG)
     push_u64le(buf, 44)
-    push_u32le(buf, zip64_locator_sig)
+    push_u32le(buf, ZIP64_LOCATOR_SIG)
     push_u32le(buf, 0)
     push_u64le(buf, 0)
     push_u32le(buf, 1)
@@ -165,7 +165,7 @@ test "zip zip64 end record rejects malformed trailers" {
   // End record claims a non-zero disk number.
   let multi_disk = {
     let buf : Array[Byte] = []
-    push_u32le(buf, zip64_eocd_sig)
+    push_u32le(buf, ZIP64_EOCD_SIG)
     push_u64le(buf, 44)
     push_u16le(buf, 45)
     push_u16le(buf, 45)
@@ -175,7 +175,7 @@ test "zip zip64 end record rejects malformed trailers" {
     push_u64le(buf, 1)
     push_u64le(buf, 0)
     push_u64le(buf, 0)
-    push_u32le(buf, zip64_locator_sig)
+    push_u32le(buf, ZIP64_LOCATOR_SIG)
     push_u32le(buf, 0)
     push_u64le(buf, 0)
     push_u32le(buf, 1)
@@ -219,7 +219,7 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
   // Signed descriptor.
   let signed = {
     let buf : Array[Byte] = []
-    push_u32le(buf, data_descriptor_sig)
+    push_u32le(buf, DATA_DESCRIPTOR_SIG)
     push_u32le(buf, 0x11223344U)
     push_u32le(buf, 4)
     push_u32le(buf, 4)
@@ -261,12 +261,12 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
     UnsupportedFeature,
   )
   // When CRC, sizes, and signature all share one value, both layouts match.
-  let sig_int = data_descriptor_sig.reinterpret_as_int()
+  let sig_int = DATA_DESCRIPTOR_SIG.reinterpret_as_int()
   let ambiguous_meta : EntryMeta = {
     name: "",
     flags: 0,
     method_id: 0,
-    crc: data_descriptor_sig,
+    crc: DATA_DESCRIPTOR_SIG,
     compressed_size: sig_int,
     uncompressed_size: sig_int,
     local_offset: 0,
@@ -277,7 +277,7 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
   let ambiguous = {
     let buf : Array[Byte] = []
     for _ in 0..<4 {
-      push_u32le(buf, data_descriptor_sig)
+      push_u32le(buf, DATA_DESCRIPTOR_SIG)
     }
     bytes_of(buf)
   }
@@ -300,7 +300,7 @@ fn local_record(
   descriptor : Bytes,
 ) -> Bytes {
   let buf : Array[Byte] = []
-  push_u32le(buf, local_header_sig)
+  push_u32le(buf, LOCAL_HEADER_SIG)
   push_u16le(buf, 20)
   push_u16le(buf, flags)
   push_u16le(buf, method_id)
@@ -453,8 +453,8 @@ test "zip inflate_entry maps output-limit and corrupt-stream failures" {
 
 ///|
 test "zip preserved-source budget rejects oversize charges" {
-  expect_zip_error(() => SourceBudget::new(10).charge(11))
-  expect_zip_error(() => SourceBudget::new(10).charge(-1))
+  expect_zip_error(() => SourceBudget(10).charge(11))
+  expect_zip_error(() => SourceBudget(10).charge(-1))
 }
 
 ///|
@@ -467,7 +467,7 @@ fn classic_eocd(
   central_offset : Int,
 ) -> Bytes {
   let buf : Array[Byte] = []
-  push_u32le(buf, end_of_central_sig)
+  push_u32le(buf, END_OF_CENTRAL_SIG)
   push_u16le(buf, disk_no)
   push_u16le(buf, disk_start)
   push_u16le(buf, disk_entries)
@@ -489,7 +489,7 @@ fn zip64_trailer(
   classic_offset_raw : UInt,
 ) -> Bytes {
   let buf : Array[Byte] = []
-  push_u32le(buf, zip64_eocd_sig)
+  push_u32le(buf, ZIP64_EOCD_SIG)
   push_u64le(buf, 44)
   push_u16le(buf, 45)
   push_u16le(buf, 45)
@@ -499,11 +499,11 @@ fn zip64_trailer(
   push_u64le(buf, zip_entries)
   push_u64le(buf, zip_size)
   push_u64le(buf, zip_offset)
-  push_u32le(buf, zip64_locator_sig)
+  push_u32le(buf, ZIP64_LOCATOR_SIG)
   push_u32le(buf, 0)
   push_u64le(buf, 0)
   push_u32le(buf, 1)
-  push_u32le(buf, end_of_central_sig)
+  push_u32le(buf, END_OF_CENTRAL_SIG)
   push_u16le(buf, 0)
   push_u16le(buf, 0)
   push_u16le(buf, classic_disk_entries)
@@ -615,7 +615,7 @@ fn central_record(
   local_offset : Int,
 ) -> Bytes {
   let buf : Array[Byte] = []
-  push_u32le(buf, central_header_sig)
+  push_u32le(buf, CENTRAL_HEADER_SIG)
   push_u16le(buf, 20)
   push_u16le(buf, 20)
   push_u16le(buf, flags)
@@ -660,7 +660,7 @@ fn eocd_for(
 
 ///|
 test "zip central-directory parsing rejects malformed records" {
-  let budget = SourceBudget::new(1000)
+  let budget = SourceBudget(1000)
   let default_limits = ReadLimits::default()
   // Wrong central record signature.
   expect_zip_error(() => {
@@ -688,7 +688,7 @@ test "zip central-directory parsing rejects malformed records" {
     )
   })
   // ZIP64 size placeholders with no zip64 extra field.
-  let max_int = max_u32.reinterpret_as_int()
+  let max_int = MAX_U32.reinterpret_as_int()
   let missing_uncomp = central_record(
     0, 0, 0, 0x11111111U, 3, max_int, b"a.txt", b"", 0,
   )
@@ -748,7 +748,7 @@ test "zip central-directory parsing rejects malformed records" {
 
 ///|
 test "zip entry decode rejects oversized and mismatched payloads" {
-  let budget = SourceBudget::new(1000)
+  let budget = SourceBudget(1000)
   // Stored entry larger than the per-entry limit.
   let big_store = local_record(
     0, 0, 0x11111111U, 10, 10, b"a.txt", b"", b"0123456789", b"",
@@ -838,7 +838,7 @@ test "zip build_zip64_extra emits each field combination" {
 
 ///|
 test "zip force_zip64 emits zip64 local and central records" {
-  let archive = Archive::new()
+  let archive = Archive()
   archive.add("a.txt", b"payload", compression=Store, data_descriptor=true)
   let entry = archive.entries()[0]
   let name_bytes = entry_name_bytes(entry)
@@ -882,7 +882,7 @@ test "zip force_zip64 emits zip64 local and central records" {
 ///|
 fn zip64_end_record_bytes() -> Bytes {
   let buf : Array[Byte] = []
-  push_u32le(buf, zip64_eocd_sig)
+  push_u32le(buf, ZIP64_EOCD_SIG)
   push_u64le(buf, 44)
   push_u16le(buf, 45)
   push_u16le(buf, 45)
@@ -898,7 +898,7 @@ fn zip64_end_record_bytes() -> Bytes {
 ///|
 fn zip64_locator_bytes() -> Bytes {
   let buf : Array[Byte] = []
-  push_u32le(buf, zip64_locator_sig)
+  push_u32le(buf, ZIP64_LOCATOR_SIG)
   push_u32le(buf, 0)
   push_u64le(buf, 0)
   push_u32le(buf, 1)
@@ -995,10 +995,10 @@ test "zip classic trailer rejects too many entries and long comments" {
 ///|
 test "zip entry names and output limits are checked" {
   let long_name = String::make(70000, 'x')
-  let archive = Archive::new()
+  let archive = Archive()
   archive.add(long_name, b"")
   expect_zip_error(() => ignore(write(archive)))
-  let small = Archive::new()
+  let small = Archive()
   small.add("a.txt", b"x")
   expect_zip_error(() => ignore(write_limited(small, max_output_bytes=-1)))
   expect_zip_error(() => {
@@ -1012,7 +1012,7 @@ test "zip entry names and output limits are checked" {
 
 ///|
 test "zip local-order keeps pristine records before fresh ones" {
-  let src = Archive::new()
+  let src = Archive()
   src.add("a.txt", b"x")
   src.add("b.txt", b"y")
   let archive = read(write(src))

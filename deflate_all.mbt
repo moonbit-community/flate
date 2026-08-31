@@ -9,7 +9,7 @@
 /// streaming `Deflater`'s per-block buffering.
 pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
   let lv = if level < 0 { 0 } else if level > 9 { 9 } else { level }
-  let w = BitWriter::new()
+  let w = BitWriter()
   let n = input.length()
   // Level 0 (and the empty input it subsumes): one stored pass, no parsing.
   if lv == 0 {
@@ -18,13 +18,13 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
-  // Each non-final block covers up to `deflate_block_size` tokenizable bytes; a
+  // Each non-final block covers up to `DEFLATE_BLOCK_SIZE` tokenizable bytes; a
   // boundary match may overhang, so `processed` (not `target`) sets the next
   // start.
   let mut pos = 0
   for ;; {
-    let target = if pos + deflate_block_size < n {
-      pos + deflate_block_size
+    let target = if pos + DEFLATE_BLOCK_SIZE < n {
+      pos + DEFLATE_BLOCK_SIZE
     } else {
       n
     }

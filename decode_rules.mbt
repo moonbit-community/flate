@@ -13,7 +13,7 @@ fn validate_stored_length(len : Int, nlen : Int) -> Unit raise InflateError {
 #inline
 fn dynamic_literal_count(bits : Int) -> Int raise InflateError {
   let count = bits + 257
-  if count > max_num_lit {
+  if count > MAX_NUM_LIT {
     raise InflateError(Corrupt, "corrupt: too many literal codes")
   }
   count
@@ -24,7 +24,7 @@ fn dynamic_literal_count(bits : Int) -> Int raise InflateError {
 #inline
 fn dynamic_distance_count(bits : Int) -> Int raise InflateError {
   let count = bits + 1
-  if count > max_num_dist {
+  if count > MAX_NUM_DIST {
     raise InflateError(Corrupt, "corrupt: too many distance codes")
   }
   count
@@ -119,7 +119,7 @@ fn fixed_distance_symbol(bits5 : Int) -> Int {
 /// streaming decoder's input-suspension signal is converted to `Truncated` at
 /// its call site. `huff_sym` reads from the code-length tree, which this
 /// function has just initialized inside `dyn_litlen`. `codebits` must have
-/// `num_codes` slots and `clbits` room for `nlit + ndist`. Returns the
+/// `NUM_CODES` slots and `clbits` room for `nlit + ndist`. Returns the
 /// literal/length and distance code counts.
 fn decode_dynamic_header(
   read_bits : (Int) -> Int raise InflateError,

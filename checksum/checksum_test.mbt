@@ -48,8 +48,8 @@ test "adler32 matches the zlib reference" {
 /// regardless of how the input is split across `update` calls.
 test "incremental Crc32/Adler32 match the one-shot result across chunk splits" {
   let data = b"The quick brown fox jumps over the lazy dog"
-  let crc = @checksum.Crc32::new()
-  let adler = @checksum.Adler32::new()
+  let crc = @checksum.Crc32()
+  let adler = @checksum.Adler32()
   // Feed one byte at a time — the worst-case chunking.
   for i in 0..<data.length() {
     crc.update(data[i:i + 1])
@@ -58,8 +58,8 @@ test "incremental Crc32/Adler32 match the one-shot result across chunk splits" {
   assert_eq(crc.finish(), @checksum.crc32(data))
   assert_eq(adler.finish(), @checksum.adler32(data))
   // And an uneven multi-chunk split.
-  let crc2 = @checksum.Crc32::new()
-  let adler2 = @checksum.Adler32::new()
+  let crc2 = @checksum.Crc32()
+  let adler2 = @checksum.Adler32()
   crc2.update(data[0:10])
   crc2.update(data[10:11])
   crc2.update(data[11:data.length()])
@@ -69,6 +69,6 @@ test "incremental Crc32/Adler32 match the one-shot result across chunk splits" {
   assert_eq(crc2.finish(), @checksum.crc32(data))
   assert_eq(adler2.finish(), @checksum.adler32(data))
   // An empty stream equals the empty-input one-shot value.
-  assert_eq(@checksum.Crc32::new().finish(), @checksum.crc32(b""))
-  assert_eq(@checksum.Adler32::new().finish(), @checksum.adler32(b""))
+  assert_eq(@checksum.Crc32().finish(), @checksum.crc32(b""))
+  assert_eq(@checksum.Adler32().finish(), @checksum.adler32(b""))
 }

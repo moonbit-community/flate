@@ -4,40 +4,40 @@
 /// cancellation-aware owned copies.
 
 ///|
-let local_header_sig : UInt = 0x04034b50
+pub const LOCAL_HEADER_SIG : UInt = 0x04034b50
 
 ///|
-let central_header_sig : UInt = 0x02014b50
+pub const CENTRAL_HEADER_SIG : UInt = 0x02014b50
 
 ///|
-let end_of_central_sig : UInt = 0x06054b50
+pub const END_OF_CENTRAL_SIG : UInt = 0x06054b50
 
 ///|
-let data_descriptor_sig : UInt = 0x08074b50
+pub const DATA_DESCRIPTOR_SIG : UInt = 0x08074b50
 
 ///|
-let zip64_eocd_sig : UInt = 0x06064b50
+pub const ZIP64_EOCD_SIG : UInt = 0x06064b50
 
 ///|
-let zip64_locator_sig : UInt = 0x07064b50
+pub const ZIP64_LOCATOR_SIG : UInt = 0x07064b50
 
 ///|
-let flag_data_descriptor : Int = 0x0008
+pub const FLAG_DATA_DESCRIPTOR : Int = 0x0008
 
 ///|
-let flag_utf8 : Int = 0x0800
+pub const FLAG_UTF8 : Int = 0x0800
 
 ///|
-let flag_encrypted : Int = 0x0001
+pub const FLAG_ENCRYPTED : Int = 0x0001
 
 ///|
-let flag_deflate_strength : Int = 0x0006
+pub const FLAG_DEFLATE_STRENGTH : Int = 0x0006
 
 ///|
-let zip64_extra_id : Int = 0x0001
+pub const ZIP64_EXTRA_ID : Int = 0x0001
 
 ///|
-let max_u32 : UInt = 0xFFFFFFFF
+pub const MAX_U32 : UInt = 0xFFFFFFFF
 
 ///|
 priv struct Cursor {
@@ -46,7 +46,7 @@ priv struct Cursor {
 }
 
 ///|
-fn Cursor::new(bytes : BytesView, pos : Int) -> Cursor {
+fn Cursor::Cursor(bytes : BytesView, pos : Int) -> Cursor {
   { bytes, pos, }
 }
 
@@ -147,7 +147,7 @@ fn find_end_of_central(bytes : BytesView) -> Int? raise ZipError {
   let max_scan = 22 + 0xFFFF
   let min_offset = (len - max_scan).max(0)
   for i in (len - 22)>=..min_offset {
-    if read_u32_le_at_raw(bytes, i) == end_of_central_sig &&
+    if read_u32_le_at_raw(bytes, i) == END_OF_CENTRAL_SIG &&
       read_u16_le_at(bytes, i + 20) == len - i - 22 {
       return Some(i)
     }
@@ -165,13 +165,13 @@ fn decode_name(bytes : BytesView) -> String raise ZipError {
 
 ///|
 fn ensure_flags_supported(flags : Int) -> Unit raise ZipError {
-  if (flags & flag_encrypted) != 0 {
+  if (flags & FLAG_ENCRYPTED) != 0 {
     raise ZipError(
       UnsupportedFeature,
       "zip: encrypted entries are not supported",
     )
   }
-  let supported = flag_data_descriptor | flag_utf8 | flag_deflate_strength
+  let supported = FLAG_DATA_DESCRIPTOR | FLAG_UTF8 | FLAG_DEFLATE_STRENGTH
   let unsupported = flags & supported.lnot()
   if unsupported != 0 {
     raise ZipError(

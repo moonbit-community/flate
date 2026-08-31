@@ -34,8 +34,8 @@ fn read_local_record(
   if meta.local_offset < 0 || meta.local_offset >= central_offset {
     raise ZipError(Truncated, "zip: local header offset out of bounds")
   }
-  let reader = Cursor::new(bytes, meta.local_offset)
-  if reader.read_u32_raw() != local_header_sig {
+  let reader = Cursor(bytes, meta.local_offset)
+  if reader.read_u32_raw() != LOCAL_HEADER_SIG {
     raise ZipError(InvalidSignature, "zip: invalid local header signature")
   }
   ignore(reader.read_u16())
@@ -60,9 +60,9 @@ fn read_local_record(
   if decode_name(local_name) != meta.name {
     raise ZipError(UnsupportedFeature, "zip: local and central names differ")
   }
-  let has_descriptor = (flags & flag_data_descriptor) != 0
-  let need_local_uncomp = uncomp_size_raw == max_u32
-  let need_local_comp = comp_size_raw == max_u32
+  let has_descriptor = (flags & FLAG_DATA_DESCRIPTOR) != 0
+  let need_local_uncomp = uncomp_size_raw == MAX_U32
+  let need_local_comp = comp_size_raw == MAX_U32
   let (local_zip_uncomp, local_zip_comp, _, _) = read_zip64_extra(
     local_extra, need_local_uncomp, need_local_comp, false,
   )
@@ -172,7 +172,7 @@ priv struct SourceBudget {
 }
 
 ///|
-fn SourceBudget::new(limit : Int) -> SourceBudget {
+fn SourceBudget::SourceBudget(limit : Int) -> SourceBudget {
   { limit, used: 0, }
 }
 
@@ -233,7 +233,7 @@ fn parse_end_of_central(
       "zip: end of central directory not found",
     )
   }
-  let reader = Cursor::new(bytes, eocd_offset)
+  let reader = Cursor(bytes, eocd_offset)
   ignore(reader.read_u32_raw())
   let disk_no = reader.read_u16()
   let disk_start = reader.read_u16()
@@ -251,8 +251,8 @@ fn parse_end_of_central(
   let comment = copy_cancellable(reader.read_bytes(comment_len), cancelled)
   let needs_zip64 = disk_entries == 0xFFFF ||
     total_entries == 0xFFFF ||
-    central_size_raw == max_u32 ||
-    central_offset_raw == max_u32
+    central_size_raw == MAX_U32 ||
+    central_offset_raw == MAX_U32
   let mut zip64_eocd_offset : Int? = None
   let (entry_count, central_size, central_offset, central_boundary) = if needs_zip64 {
     let (zip_entries, zip_size, zip_offset, zip64_offset) = read_zip64_eocd(
@@ -271,38 +271,36 @@ fn parse_end_of_central(
         "zip: classic and zip64 entry counts differ",
       )
     }
-    if central_size_raw != max_u32 &&
+    if central_size_raw != MAX_U32 &&
       UInt64::extend_uint(central_size_raw) != zip_size {
       raise ZipError(
         UnsupportedFeature,
         "zip: classic and zip64 central sizes differ",
       )
     }
-    if central_offset_raw != max_u32 &&
+    if central_offset_raw != MAX_U32 &&
       UInt64::extend_uint(central_offset_raw) != zip_offset {
       raise ZipError(
         UnsupportedFeature,
         "zip: classic and zip64 central offsets differ",
       )
     }
-    (
-      (if total_entries == 0xFFFF {
-        zip_entries
-      } else {
-        total_entries.to_uint64()
-      }).to_int_checked(),
-      (if central_size_raw == max_u32 {
-        zip_size
-      } else {
-        UInt64::extend_uint(central_size_raw)
-      }).to_int_checked(),
-      (if central_offset_raw == max_u32 {
-        zip_offset
-      } else {
-        UInt64::extend_uint(central_offset_raw)
-      }).to_int_checked(),
-      zip64_offset,
-    )
+    let entry_count = (if total_entries == 0xFFFF {
+      zip_entries
+    } else {
+      total_entries.to_uint64()
+    }).to_int_checked()
+    let central_size = (if central_size_raw == MAX_U32 {
+      zip_size
+    } else {
+      UInt64::extend_uint(central_size_raw)
+    }).to_int_checked()
+    let central_offset = (if central_offset_raw == MAX_U32 {
+      zip_offset
+    } else {
+      UInt64::extend_uint(central_offset_raw)
+    }).to_int_checked()
+    (entry_count, central_size, central_offset, zip64_offset)
   } else {
     if disk_entries != total_entries {
       raise ZipError(
@@ -343,6 +341,22 @@ fn parse_end_of_central(
 ///|
 /// Parse every central-directory record into `EntryMeta`, enforcing the entry
 /// count and preserved-source ceilings.
+
+///|
+/// Resolve a central-directory 32-bit field that may spill into a ZIP64 extra
+/// entry: the classic field carries the `MAX_U32` sentinel when ZIP64 is in
+/// use. `read_zip64_extra` guarantees a ZIP64 value whenever `need` is true (it
+/// raises when the field is absent or mis-sized), so `unwrap` is safe there.
+fn resolve_zip64_field(
+  need : Bool,
+  zip64_value : UInt64?,
+  classic_raw : UInt,
+) -> Int raise ZipError {
+  guard need else { return classic_raw.to_int_checked() }
+  zip64_value.unwrap().to_int_checked()
+}
+
+///|
 fn parse_central_directory(
   bytes : BytesView,
   eocd : EndOfCentral,
@@ -351,7 +365,7 @@ fn parse_central_directory(
   cancelled : () -> Bool,
 ) -> Array[EntryMeta] raise ZipError {
   let central_bytes = bytes[eocd.central_offset:eocd.central_boundary]
-  let central_reader = Cursor::new(central_bytes, 0)
+  let central_reader = Cursor(central_bytes, 0)
   let max_plausible = eocd.central_size / 46
   let metas : Array[EntryMeta] = Array::new(
     capacity=eocd.entry_count.min(max_plausible),
@@ -362,7 +376,7 @@ fn parse_central_directory(
       check_cancelled(cancelled)
     }
     let central_record_start = central_reader.pos
-    if central_reader.read_u32_raw() != central_header_sig {
+    if central_reader.read_u32_raw() != CENTRAL_HEADER_SIG {
       raise ZipError(
         InvalidSignature,
         "zip: invalid central directory signature",
@@ -400,29 +414,21 @@ fn parse_central_directory(
       central_bytes[central_record_start:central_reader.pos],
       cancelled,
     )
-    let need_uncomp = uncomp_size_raw == max_u32
-    let need_comp = comp_size_raw == max_u32
-    let need_offset = local_offset_raw == max_u32
+    let need_uncomp = uncomp_size_raw == MAX_U32
+    let need_comp = comp_size_raw == MAX_U32
+    let need_offset = local_offset_raw == MAX_U32
     let (zip_uncomp, zip_comp, zip_offset, offset_position) = read_zip64_extra(
       extra_bytes, need_uncomp, need_comp, need_offset,
     )
-    let uncompressed_size = if need_uncomp {
-      // `read_zip64_extra` guarantees a value for every needed field (it raises
-      // when the field is absent or mis-sized), so `unwrap` is safe here.
-      zip_uncomp.unwrap().to_int_checked()
-    } else {
-      uncomp_size_raw.to_int_checked()
-    }
-    let compressed_size = if need_comp {
-      zip_comp.unwrap().to_int_checked()
-    } else {
-      comp_size_raw.to_int_checked()
-    }
-    let local_offset = if need_offset {
-      zip_offset.unwrap().to_int_checked()
-    } else {
-      local_offset_raw.to_int_checked()
-    }
+    let uncompressed_size = resolve_zip64_field(
+      need_uncomp, zip_uncomp, uncomp_size_raw,
+    )
+    let compressed_size = resolve_zip64_field(
+      need_comp, zip_comp, comp_size_raw,
+    )
+    let local_offset = resolve_zip64_field(
+      need_offset, zip_offset, local_offset_raw,
+    )
     let central_zip64_offset_position = offset_position.map(position => {
       46 + name_len + position
     })
@@ -443,7 +449,7 @@ fn parse_central_directory(
       local_offset,
       central_record,
       central_zip64_offset_position,
-      data_descriptor: (flags & flag_data_descriptor) != 0,
+      data_descriptor: (flags & FLAG_DATA_DESCRIPTOR) != 0,
     })
   }
   if central_reader.pos != eocd.central_size {
@@ -592,7 +598,7 @@ fn read_impl(
   cancelled : () -> Bool,
 ) -> Archive raise ZipError {
   let eocd = parse_end_of_central(bytes, limits, cancelled)
-  let source_budget = SourceBudget::new(limits.max_preserved_source_bytes)
+  let source_budget = SourceBudget(limits.max_preserved_source_bytes)
   let metas = parse_central_directory(
     bytes, eocd, limits, source_budget, cancelled,
   )

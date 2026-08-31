@@ -11,7 +11,7 @@ test "zlib completion releases consumed input and caches read-ahead" {
   for byte in suffix {
     combined.push(byte)
   }
-  let decoder = Decoder::new()
+  let decoder = Decoder()
   let output = FixedArray::make(128, b'\x00')
   let status = decoder.step(Bytes::from_array(combined)[:], output.mut_view())
   let consumed = decoder.last_consumed()
@@ -31,7 +31,7 @@ test "zlib completion releases consumed input and caches read-ahead" {
 /// wrapper cursor or the immutable body snapshot cursor.
 test "zlib failed state freezes decoder cursors" {
   let malformed : Bytes = [0x78, 0x01, 0x07, 0x00, 0x00, 0x00, 0x01]
-  let decoder = Decoder::new()
+  let decoder = Decoder()
   let output = FixedArray::make(1, b'\x00')
   let mut first_kind : ZlibErrorKind = InvalidHeader
   let mut first_error = ""

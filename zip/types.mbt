@@ -200,7 +200,7 @@ pub struct Archive {
 
 ///|
 /// Create an empty archive.
-pub fn Archive::new() -> Archive {
+pub fn Archive::Archive() -> Archive {
   { entries: [], comment: b"", trailer: None, }
 }
 

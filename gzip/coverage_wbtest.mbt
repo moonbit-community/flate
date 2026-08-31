@@ -3,7 +3,7 @@ priv suberror CoverageOnlyError
 
 ///|
 test "gzip buffering helper accepts an empty view as a no-op" {
-  let decoder = Decoder::new()
+  let decoder = Decoder()
   decoder.buffer_input(b""[:])
   assert_eq(decoder.available(), 0)
 }

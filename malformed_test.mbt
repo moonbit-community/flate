@@ -19,7 +19,7 @@ test "inflate_all rejects malformed block structure" {
 
 ///|
 test "streaming Inflater rejects a reserved block immediately" {
-  let inflater = @flate.Inflater::new()
+  let inflater = @flate.Inflater()
   assert_eq(inflater.last_consumed(), 0)
   assert_eq(inflater.last_produced(), 0)
   let output = FixedArray::make(1, b'\x00')
@@ -44,7 +44,7 @@ test "streaming Inflater rejects a reserved block immediately" {
 
 ///|
 test "streaming Inflater turns EOF into a stable truncation error" {
-  let inflater = @flate.Inflater::new()
+  let inflater = @flate.Inflater()
   let output = FixedArray::make(64, b'\x00')
   for input in [([0x01] : Bytes), ([0x07] : Bytes)] {
     try ignore(inflater.step(input[:], output.mut_view(), end=true)) catch {

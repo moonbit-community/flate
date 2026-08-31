@@ -11,7 +11,7 @@
 /// Maximum compressed input retained by one active decoder step. A consumed
 /// prefix may briefly coexist until compaction, but caller-owned input beyond
 /// this window remains unconsumed under output backpressure.
-let decoder_input_limit = 65536
+pub const DECODER_INPUT_LIMIT : Int = 65536
 
 ///|
 priv enum DecMode {
@@ -57,10 +57,10 @@ pub struct Decoder {
 /// adjacent RFC 1952 members are decoded as one logical stream. Set it to
 /// false for a framed transport that must stop after the first member and
 /// recover every following byte through `unused_input()`.
-pub fn Decoder::new(multistream? : Bool = true) -> Decoder {
+pub fn Decoder::Decoder(multistream? : Bool = true) -> Decoder {
   {
-    inf: @flate.Inflater::new(),
-    crc: @checksum.Crc32::new(),
+    inf: @flate.Inflater(),
+    crc: @checksum.Crc32(),
     osize: 0,
     pending: [],
     pending_pos: 0,
@@ -333,10 +333,10 @@ fn Decoder::step_active(
   if self.mode is GzFinished {
     return self.finish_step(Done, 0, 0)
   }
-  if !self.ending && self.pending.length() >= decoder_input_limit {
+  if !self.ending && self.pending.length() >= DECODER_INPUT_LIMIT {
     self.compact_for_input()
   }
-  let capacity = decoder_input_limit - self.pending.length()
+  let capacity = DECODER_INPUT_LIMIT - self.pending.length()
   let consumed = if self.ending || capacity <= 0 {
     0
   } else if input.length() < capacity {
@@ -510,7 +510,7 @@ fn Decoder::step_active(
         // starts fresh (RFC 1952 §2.2 — members are independent, no cross-member
         // back-references).
         self.inf.reset()
-        self.crc = @checksum.Crc32::new()
+        self.crc = @checksum.Crc32()
         self.osize = 0
         self.flg = 0
         self.members = self.members + 1

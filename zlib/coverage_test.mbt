@@ -20,7 +20,7 @@ fn expect_streaming_zlib_error(
   expected_kind : @zlib.ZlibErrorKind,
   expected : String,
 ) -> Unit raise {
-  let decoder = @zlib.Decoder::new()
+  let decoder = @zlib.Decoder()
   let output = FixedArray::make(8, b'\x00')
   try decoder.step(input[:], output.mut_view()) catch {
     ZlibError(kind, message) => {
@@ -76,7 +76,7 @@ test "coverage: one-shot zlib body and trailer errors" {
 ///|
 test "coverage: streaming zlib header and FDICT errors" {
   let output = FixedArray::make(1, b'\x00')
-  let short = @zlib.Decoder::new()
+  let short = @zlib.Decoder()
   let short_status = short.step(b"\x78"[:], output.mut_view())
   let short_consumed = short.last_consumed()
   let short_produced = short.last_produced()
@@ -97,7 +97,7 @@ test "coverage: streaming zlib header and FDICT errors" {
 
   // CMF/FLG 0x7820 announces FDICT. Adler-32(b"") is 1, so the first
   // decoder can validate the split DICTID once all four bytes arrive.
-  let split = @zlib.Decoder::new(dictionary=b"")
+  let split = @zlib.Decoder(dictionary=b"")
   let header_status = split.step(b"\x78\x20"[:], output.mut_view())
   let header_consumed = split.last_consumed()
   let header_produced = split.last_produced()
@@ -116,7 +116,7 @@ test "coverage: streaming zlib header and FDICT errors" {
     DictionaryRequired,
     "zlib: preset dictionary required",
   )
-  let wrong = @zlib.Decoder::new(dictionary=b"wrong dictionary")
+  let wrong = @zlib.Decoder(dictionary=b"wrong dictionary")
   try wrong.step(b"\x78\x20\x00\x00\x00\x01"[:], output.mut_view()) catch {
     ZlibError(kind, message) => {
       assert_true(kind == DictionaryMismatch)
@@ -130,7 +130,7 @@ test "coverage: streaming zlib header and FDICT errors" {
 ///|
 test "coverage: streaming truncated DEFLATE and output backpressure" {
   let output = FixedArray::make(1, b'\x00')
-  let truncated = @zlib.Decoder::new()
+  let truncated = @zlib.Decoder()
   let truncated_status = truncated.step(b"\x78\x01\x03"[:], output.mut_view())
   let truncated_consumed = truncated.last_consumed()
   let truncated_produced = truncated.last_produced()
@@ -140,7 +140,7 @@ test "coverage: streaming truncated DEFLATE and output backpressure" {
 
   let source = b"one-byte output backpressure must preserve every byte"
   let encoded = @zlib.zlib_compress(source)
-  let decoder = @zlib.Decoder::new()
+  let decoder = @zlib.Decoder()
   let no_output = FixedArray::make(0, b'\x00')
   let blocked_status = decoder.step(encoded[:], no_output.mut_view())
   let blocked_consumed = decoder.last_consumed()
@@ -171,7 +171,7 @@ test "coverage: streaming Adler mismatch after backpressure" {
   let damaged = @zlib.zlib_compress(b"streaming Adler coverage").to_array()
   damaged[damaged.length() - 1] = damaged[damaged.length() - 1] ^ b'\x01'
   let input = Bytes::from_array(damaged)
-  let decoder = @zlib.Decoder::new()
+  let decoder = @zlib.Decoder()
   let output = FixedArray::make(1, b'\x00')
   let mut first = true
   try {

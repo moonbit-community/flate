@@ -58,7 +58,7 @@ let py_descriptor : Bytes = [
 
 ///|
 test "zip round-trips store and deflate entries" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("deflated.txt", b"the quick brown fox jumps over the lazy dog")
   archive.add(
     "stored.bin",
@@ -84,7 +84,7 @@ test "zip round-trips store and deflate entries" {
 
 ///|
 test "zip round-trips empty and zero-length payloads" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("empty.txt", b"")
   archive.add("b.txt", b"")
   let bytes = @zip.write(archive)
@@ -95,7 +95,7 @@ test "zip round-trips empty and zero-length payloads" {
 
 ///|
 test "zip data descriptor write round-trips" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("desc.txt", b"streamed entry payload", data_descriptor=true)
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
@@ -105,7 +105,7 @@ test "zip data descriptor write round-trips" {
 
 ///|
 test "zip stored data-descriptor entry round-trips" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add(
     "s.txt",
     b"stored descriptor payload",
@@ -120,7 +120,7 @@ test "zip stored data-descriptor entry round-trips" {
 
 ///|
 test "zip write_limited sizes a data-descriptor entry correctly" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("d.txt", b"limited descriptor payload", data_descriptor=true)
   let exact = @zip.write(archive)
   assert_eq(@zip.write_limited(archive, max_output_bytes=exact.length()), exact)
@@ -128,7 +128,7 @@ test "zip write_limited sizes a data-descriptor entry correctly" {
 
 ///|
 test "zip write_preserving re-emits a read archive byte-for-byte" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("a.txt", b"alpha")
   archive.add("b.txt", b"beta beta beta", compression=Store)
   let bytes = @zip.write(archive)
@@ -139,7 +139,7 @@ test "zip write_preserving re-emits a read archive byte-for-byte" {
 
 ///|
 test "zip write_preserving round-trips a data-descriptor entry byte-for-byte" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("desc.txt", b"streamed payload", data_descriptor=true)
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
@@ -150,7 +150,7 @@ test "zip write_preserving round-trips a data-descriptor entry byte-for-byte" {
 
 ///|
 test "zip write_preserving keeps pristine records and re-encodes replacements" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("keep.txt", b"keep me", compression=Store)
   archive.add("replace.txt", b"old payload", compression=Store)
   let original = @zip.write(archive)
@@ -174,7 +174,7 @@ test "zip write_preserving round-trips a zip64 archive byte-for-byte" {
 
 ///|
 test "zip write_preserving patches end-record counts after entry removal" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("a.txt", b"a", compression=Store)
   archive.add("b.txt", b"b", compression=Store)
   archive.add("c.txt", b"c", compression=Store)
@@ -189,7 +189,7 @@ test "zip write_preserving patches end-record counts after entry removal" {
 
 ///|
 test "zip set_comment invalidates the preserved trailer" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("a.txt", b"x")
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
@@ -397,7 +397,7 @@ test "zip rejects a lying zip64 size that exceeds the Int range" {
 
 ///|
 test "zip writes and reads back a zip64 trailer" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   for i in 0..<65_536 {
     archive.add("e\{i}", b"", compression=Store)
   }
@@ -408,7 +408,7 @@ test "zip writes and reads back a zip64 trailer" {
 
 ///|
 test "zip archive comment round-trips" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("a.txt", b"x")
   archive.set_comment(b"archive comment")
   let parsed = @zip.read(@zip.write(archive))
@@ -417,7 +417,7 @@ test "zip archive comment round-trips" {
 
 ///|
 test "zip remove and replace" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("a.txt", b"a")
   archive.add("b.txt", b"b")
   assert_eq(archive.remove("a.txt"), true)
@@ -535,7 +535,7 @@ test "zip read honours cancellation" {
 
 ///|
 test "zip write_limited matches write and rejects oversize" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("a.txt", b"limited output payload")
   let exact = @zip.write(archive)
   assert_eq(@zip.write_limited(archive, max_output_bytes=exact.length()), exact)
@@ -567,7 +567,7 @@ test "zip rejects non-archive input" {
 
 ///|
 test "zip rejects a corrupted archive" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("a.txt", b"integrity")
   let bytes = @zip.write(archive).to_array()
   bytes[0] = bytes[0].lnot()

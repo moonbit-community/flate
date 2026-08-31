@@ -38,7 +38,7 @@ fn coverage_expect_both_errors(data : Bytes, expected : String) -> Unit raise {
   } noraise {
     _ => fail("in-memory decoder accepted malformed DEFLATE")
   }
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
   try ignore(inflater.step(data[:], output.mut_view())) catch {
     InflateError(kind, message) => {
@@ -106,7 +106,7 @@ test "streaming decoder error classification is total" {
 test "Huffman decoder uses its two-level table" {
   // Kraft sum: 1/2 + 1/4 + ... + 1/512 + 2/1024 = 1.
   let lengths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10]
-  let h = HuffmanDecoder::new()
+  let h = HuffmanDecoder()
   assert_true(h.initialize(lengths[:]))
   assert_true(h.links.length() > 0)
   assert_eq(h.link_mask, 1U)
@@ -114,17 +114,17 @@ test "Huffman decoder uses its two-level table" {
   // Symbols 9 and 10 have canonical codes 1022 and 1023. Their transmitted
   // (bit-reversed) forms are respectively 0x1ff and 0x3ff.
   let code9 : Bytes = [0xFF, 0x01]
-  let stream9 = Inflater::new()
+  let stream9 = Inflater()
   stream9.view = code9[:]
   assert_eq(stream9.huff_sym(h), 9)
-  let memory9 = MemDecoder::new(code9, () => false)
+  let memory9 = MemDecoder(code9, () => false)
   assert_eq(memory9.huff_sym(h), 9)
 
   let code10 : Bytes = [0xFF, 0x03]
-  let stream10 = Inflater::new()
+  let stream10 = Inflater()
   stream10.view = code10[:]
   assert_eq(stream10.huff_sym(h), 10)
-  let memory10 = MemDecoder::new(code10, () => false)
+  let memory10 = MemDecoder(code10, () => false)
   assert_eq(memory10.huff_sym(h), 10)
 }
 
@@ -132,8 +132,8 @@ test "Huffman decoder uses its two-level table" {
 /// Empty decode tables are permitted while reading a malformed dynamic header,
 /// but selecting from one is an invalid Huffman code, not an input suspension.
 test "both inflaters reject an empty Huffman alphabet" {
-  let code_lengths = Array::make(num_codes, 0)
-  let w = BitWriter::new()
+  let code_lengths = Array::make(NUM_CODES, 0)
+  let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 4, code_lengths)
   coverage_expect_both_errors(
     coverage_finish_bits(w),
@@ -144,15 +144,15 @@ test "both inflaters reject an empty Huffman alphabet" {
 ///|
 /// HLIT and HDIST reserve values beyond the supported alphabets.
 test "both inflaters reject oversized dynamic alphabets" {
-  let code_lengths = Array::make(num_codes, 0)
-  let too_many_literals = BitWriter::new()
+  let code_lengths = Array::make(NUM_CODES, 0)
+  let too_many_literals = BitWriter()
   coverage_dynamic_header(too_many_literals, 31, 0, 4, code_lengths)
   coverage_expect_both_errors(
     coverage_finish_bits(too_many_literals),
     "corrupt: too many literal codes",
   )
 
-  let too_many_distances = BitWriter::new()
+  let too_many_distances = BitWriter()
   coverage_dynamic_header(too_many_distances, 0, 31, 4, code_lengths)
   coverage_expect_both_errors(
     coverage_finish_bits(too_many_distances),
@@ -163,11 +163,11 @@ test "both inflaters reject oversized dynamic alphabets" {
 ///|
 /// Three one-bit symbols oversubscribe the code-length Huffman tree.
 test "both inflaters reject an oversubscribed code-length tree" {
-  let code_lengths = Array::make(num_codes, 0)
+  let code_lengths = Array::make(NUM_CODES, 0)
   code_lengths[16] = 1
   code_lengths[17] = 1
   code_lengths[18] = 1
-  let w = BitWriter::new()
+  let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 4, code_lengths)
   coverage_expect_both_errors(
     coverage_finish_bits(w),
@@ -178,9 +178,9 @@ test "both inflaters reject an oversubscribed code-length tree" {
 ///|
 /// Repeat symbol 16 cannot be the first decoded code length.
 test "both inflaters reject repeat-without-previous" {
-  let code_lengths = Array::make(num_codes, 0)
+  let code_lengths = Array::make(NUM_CODES, 0)
   code_lengths[16] = 1 // valid degenerate one-symbol tree; code is zero
-  let w = BitWriter::new()
+  let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 4, code_lengths)
   w.write_bits(0, 1)
   coverage_expect_both_errors(
@@ -192,9 +192,9 @@ test "both inflaters reject repeat-without-previous" {
 ///|
 /// Two maximum symbol-18 runs describe 276 lengths although only 258 are due.
 test "both inflaters reject code-length repeat overflow" {
-  let code_lengths = Array::make(num_codes, 0)
+  let code_lengths = Array::make(NUM_CODES, 0)
   code_lengths[18] = 1 // valid degenerate one-symbol tree; code is zero
-  let w = BitWriter::new()
+  let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 4, code_lengths)
   w.write_bits(0, 1)
   w.write_bits(127, 7) // 11 + 127 = 138 zeros
@@ -211,11 +211,11 @@ test "both inflaters reject code-length repeat overflow" {
 /// literal code, which is neither complete nor the permitted one-bit degenerate
 /// tree.
 test "both inflaters reject an incomplete literal-length tree" {
-  let code_lengths = Array::make(num_codes, 0)
+  let code_lengths = Array::make(NUM_CODES, 0)
   code_lengths[0] = 1
   code_lengths[2] = 2
   code_lengths[18] = 2
-  let w = BitWriter::new()
+  let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 16, code_lengths)
   w.write_bits(1, 2) // symbol 2: clbits[0] = 2
   w.write_bits(3, 2) // symbol 18
@@ -232,12 +232,12 @@ test "both inflaters reject an incomplete literal-length tree" {
 /// A one-bit EOB-only literal tree is valid, while a lone two-bit distance tree
 /// is incomplete and must be rejected independently.
 test "both inflaters reject an incomplete distance tree" {
-  let code_lengths = Array::make(num_codes, 0)
+  let code_lengths = Array::make(NUM_CODES, 0)
   code_lengths[0] = 2
   code_lengths[1] = 2
   code_lengths[2] = 2
   code_lengths[18] = 2
-  let w = BitWriter::new()
+  let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 18, code_lengths)
   w.write_bits(3, 2) // symbol 18
   w.write_bits(127, 7) // 138 zeros
@@ -254,7 +254,7 @@ test "both inflaters reject an incomplete distance tree" {
 ///|
 /// Fixed literal/length symbols 286 and 287 are reserved by RFC 1951.
 test "both inflaters reject a reserved fixed literal-length symbol" {
-  let w = BitWriter::new()
+  let w = BitWriter()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
   let reserved = fixed_litlen_info[286]
@@ -268,7 +268,7 @@ test "both inflaters reject a reserved fixed literal-length symbol" {
 ///|
 /// Fixed distance symbols 30 and 31 are reserved by RFC 1951.
 test "both inflaters reject a reserved fixed distance symbol" {
-  let w = BitWriter::new()
+  let w = BitWriter()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
   let length3 = fixed_litlen_info[257]
@@ -283,7 +283,7 @@ test "both inflaters reject a reserved fixed distance symbol" {
 ///|
 /// A valid distance code is still illegal before any history byte exists.
 test "both inflaters reject a back-reference before the window" {
-  let w = BitWriter::new()
+  let w = BitWriter()
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
   let length3 = fixed_litlen_info[257]
@@ -308,7 +308,7 @@ test "stored header truncation stages streaming input" {
   } noraise {
     _ => fail("in-memory decoder accepted a truncated stored header")
   }
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
   let status = inflater.step(truncated[:], output.mut_view())
   let consumed = inflater.last_consumed()
@@ -325,7 +325,7 @@ test "stored header truncation stages streaming input" {
 /// Stored-byte reads may resume from an owned atomic tail. Once part of that
 /// tail is permanent, compaction must retain only the unread suffix.
 test "stored input drains and compacts a partial staged tail" {
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   inflater.staged_input = [b'\xAA', b'\xBB', b'\xCC']
   inflater.staged_pos = 0
   assert_true(inflater.next_stored_byte() == Some(b'\xAA'))
@@ -360,7 +360,7 @@ test "fixed-symbol truncation suspends only the streaming inflater" {
   } noraise {
     _ => fail("in-memory decoder accepted a truncated fixed block")
   }
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
   let status = inflater.step(truncated[:], output.mut_view())
   let consumed = inflater.last_consumed()

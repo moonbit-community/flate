@@ -120,7 +120,7 @@ pub struct Inflater {
 ///|
 /// Create a fresh decompressor positioned at the start of a DEFLATE stream.
 /// If supplied, `dictionary` preloads the history window with its final 32 KiB.
-pub fn Inflater::new(dictionary? : BytesView) -> Inflater {
+pub fn Inflater::Inflater(dictionary? : BytesView) -> Inflater {
   let empty_out = FixedArray::make(0, b'\x00')
   let inflater : Inflater = {
     mode: AtBlock,
@@ -131,13 +131,13 @@ pub fn Inflater::new(dictionary? : BytesView) -> Inflater {
     hl: None,
     hd: None,
     hd_fixed: false,
-    window: FixedArray::make(window_size, b'\x00'),
+    window: FixedArray::make(WINDOW_SIZE, b'\x00'),
     wpos: 0,
     filled: false,
-    dyn_litlen: HuffmanDecoder::new(),
-    dyn_dist: HuffmanDecoder::new(),
-    clbits: Array::make(max_num_lit + max_num_dist, 0),
-    codebits: Array::make(num_codes, 0),
+    dyn_litlen: HuffmanDecoder(),
+    dyn_dist: HuffmanDecoder(),
+    clbits: Array::make(MAX_NUM_LIT + MAX_NUM_DIST, 0),
+    codebits: Array::make(NUM_CODES, 0),
     copy_remaining: 0,
     copy_dist: 0,
     staged_input: [],
@@ -185,16 +185,16 @@ pub fn Inflater::last_produced(self : Inflater) -> Int {
 ///|
 /// Preload the history window with the final 32 KiB of a preset dictionary.
 fn Inflater::preload_dictionary(self : Inflater, dict : BytesView) -> Unit {
-  let start = if dict.length() > window_size {
-    dict.length() - window_size
+  let start = if dict.length() > WINDOW_SIZE {
+    dict.length() - WINDOW_SIZE
   } else {
     0
   }
   for i in start..<dict.length() {
-    self.window[self.wpos & (window_size - 1)] = dict[i]
+    self.window[self.wpos & (WINDOW_SIZE - 1)] = dict[i]
     self.wpos = self.wpos + 1
   }
-  if self.wpos >= window_size {
+  if self.wpos >= WINDOW_SIZE {
     self.filled = true
   }
 }
@@ -272,10 +272,10 @@ fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int raise {
     self.fill(n)
     let mut chunk = h.chunks[self.bitbuf & 0x1FF]
     n = (chunk & 0xF).reinterpret_as_int()
-    if n > huffman_chunk_bits {
-      let link = ((self.bitbuf >> huffman_chunk_bits).reinterpret_as_uint() &
+    if n > HUFFMAN_CHUNK_BITS {
+      let link = ((self.bitbuf >> HUFFMAN_CHUNK_BITS).reinterpret_as_uint() &
       h.link_mask).reinterpret_as_int()
-      chunk = h.links[(chunk >> huffman_value_shift).reinterpret_as_int()][link]
+      chunk = h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()][link]
       n = (chunk & 0xF).reinterpret_as_int()
     }
     if n <= self.bit_count {
@@ -284,7 +284,7 @@ fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int raise {
       }
       self.bitbuf = self.bitbuf >> n
       self.bit_count = self.bit_count - n
-      return (chunk >> huffman_value_shift).reinterpret_as_int()
+      return (chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
     }
   }
 }
@@ -297,9 +297,9 @@ fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int raise {
 fn Inflater::emit(self : Inflater, b : Byte) -> Unit {
   self.out.set(self.out_pos, b)
   self.out_pos = self.out_pos + 1
-  self.window[self.wpos & (window_size - 1)] = b
+  self.window[self.wpos & (WINDOW_SIZE - 1)] = b
   self.wpos = self.wpos + 1
-  if !self.filled && self.wpos >= window_size {
+  if !self.filled && self.wpos >= WINDOW_SIZE {
     self.filled = true
   }
 }
@@ -459,7 +459,7 @@ fn Inflater::release_step_views(self : Inflater) -> Unit {
 /// overlapping copies (run-length expansion) work correctly.
 fn Inflater::drain_match(self : Inflater) -> Unit {
   while self.copy_remaining > 0 && self.out_pos < self.out_end {
-    let src = (self.wpos - self.copy_dist) & (window_size - 1)
+    let src = (self.wpos - self.copy_dist) & (WINDOW_SIZE - 1)
     self.emit(self.window[src])
     self.copy_remaining = self.copy_remaining - 1
   }
@@ -490,7 +490,7 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
   } else {
     self.huff_sym(self.hd.unwrap())
   }
-  if dsym.reinterpret_as_uint() >= max_num_dist.reinterpret_as_uint() {
+  if dsym.reinterpret_as_uint() >= MAX_NUM_DIST.reinterpret_as_uint() {
     raise InflateError(Corrupt, "corrupt: invalid distance code")
   }
   let distance_base = distance_code_base(dsym)

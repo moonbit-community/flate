@@ -20,7 +20,7 @@ test "inflate a stored block (one-shot)" {
 
 ///|
 test "inflate suspends/resumes across a tiny output buffer" {
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let small : FixedArray[Byte] = FixedArray::make(2, b'\x00') // forces NeedMoreOutput
   let collected = Buffer()
   let view = hello_stored[:]
@@ -106,7 +106,7 @@ test "inflate stored block via inflate_all" {
 /// NeedMoreInput and NeedMoreOutput suspension/resume.
 test "Inflater::step streams a dynamic block in small chunks" {
   let comp = v_dynamic_text
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let obuf = FixedArray::make(300, b'\x00')
   let result = Buffer()
   let mut consumed = 0
@@ -141,7 +141,7 @@ test "Inflater::step streams a dynamic block in small chunks" {
 /// Stream a fixed-Huffman block (with back-references) one input byte at a time.
 test "Inflater::step streams a fixed block one input byte at a time" {
   let comp = v_fixed_aaa
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let obuf = FixedArray::make(300, b'\x00')
   let result = Buffer()
   let mut consumed = 0
@@ -173,7 +173,7 @@ test "Inflater::step streams a fixed block one input byte at a time" {
 /// byte. This is the case the async `@io.Reader` driver hits with small reads,
 /// which the old 258-byte-per-unit output floor would have deadlocked on.
 test "Inflater::step makes progress with a 1-byte output buffer" {
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let obuf = FixedArray::make(1, b'\x00')
   let result = Buffer()
   let view = v_fixed_aaa[:]
@@ -199,7 +199,7 @@ test "Inflater::step makes progress with a 1-byte output buffer" {
 /// 258-byte match, exercising mid-copy suspension plus `out_len` sub-ranging
 /// (write into the middle of a larger array).
 test "Inflater::step honors a small out_len within a larger buffer" {
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let obuf = FixedArray::make(64, b'\x00')
   let result = Buffer()
   let view = v_dynamic_text[:]
@@ -256,7 +256,7 @@ test "deflate_all stores incompressible data" {
 test "Deflater sync flush makes the prefix decodable" {
   let part1 = b"first message, sent immediately. "
   let part2 = b"second message follows after the flush point."
-  let enc = @flate.Deflater::new()
+  let enc = @flate.Deflater()
   let obuf = FixedArray::make(4096, b'\x00')
   let st1 = enc.step(part1[:], obuf.mut_view(), action=SyncFlush)
   let c1 = enc.last_consumed()
@@ -281,7 +281,7 @@ test "Deflater sync flush makes the prefix decodable" {
   for i in 0..<p1 {
     prefix.push(obuf[i])
   }
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let dbuf = FixedArray::make(4096, b'\x00')
   let dst = inf.step(Bytes::from_array(prefix)[:], dbuf.mut_view())
   let _dc = inf.last_consumed()
@@ -329,7 +329,7 @@ test "Deflater latches sync flush across output backpressure" {
   // Exactly one internal high-water window: the whole view is accepted, then
   // its stored block is backpressured before the empty flush request arrives.
   let src = Bytes::from_array(Array::make(16642, b'\x5A'))
-  let enc = @flate.Deflater::new(level=0)
+  let enc = @flate.Deflater(level=0)
   let no_output = FixedArray::make(0, b'\x00')
   let initial_status = enc.step(src[:], no_output.mut_view())
   let initial_consumed = enc.last_consumed()
@@ -364,7 +364,7 @@ test "Deflater latches sync flush across output backpressure" {
   assert_eq(flushed[flushed.length() - 3], b'\x00')
   assert_eq(flushed[flushed.length() - 2], b'\xFF')
   assert_eq(flushed[flushed.length() - 1], b'\xFF')
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let decoded = FixedArray::make(18000, b'\x00')
   let decode_status = inf.step(flushed[:], decoded.mut_view())
   let decode_consumed = inf.last_consumed()
@@ -409,7 +409,7 @@ test "compression levels round-trip" {
 test "reset reuses engines across streams" {
   let s1 = b"first stream payload, first stream payload"
   let s2 = b"second stream: completely different bytes!!"
-  let d = @flate.Deflater::new()
+  let d = @flate.Deflater()
   assert_eq(d.last_consumed(), 0)
   assert_eq(d.last_produced(), 0)
   let obuf = FixedArray::make(4096, b'\x00')
@@ -426,7 +426,7 @@ test "reset reuses engines across streams" {
     reused.push(obuf[i])
   }
   assert_eq(Bytes::from_array(reused), @flate.deflate_all(s2))
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   assert_eq(inf.last_consumed(), 0)
   assert_eq(inf.last_produced(), 0)
   let dbuf = FixedArray::make(4096, b'\x00')
@@ -466,7 +466,7 @@ test "reset reuses engines across streams" {
 test "preset dictionary: raw deflate round-trip" {
   let dict = b"the quick brown fox jumps over the lazy dog"
   let msg = b"the quick brown fox jumps over the lazy dog, again and again!"
-  let d = @flate.Deflater::new(dictionary=dict[:])
+  let d = @flate.Deflater(dictionary=dict[:])
   let obuf = FixedArray::make(4096, b'\x00')
   let st = d.step(msg[:], obuf.mut_view(), action=Finish)
   let p = d.last_produced()
@@ -479,7 +479,7 @@ test "preset dictionary: raw deflate round-trip" {
   // The dictionary must actually pay: smaller than dictionary-less output.
   assert_true(compressed.length() < @flate.deflate_all(msg).length())
   // With the dictionary: decodes to the message.
-  let inf = @flate.Inflater::new(dictionary=dict[:])
+  let inf = @flate.Inflater(dictionary=dict[:])
   let dbuf = FixedArray::make(4096, b'\x00')
   let ist = inf.step(compressed[:], dbuf.mut_view())
   let ip = inf.last_produced()
@@ -490,7 +490,7 @@ test "preset dictionary: raw deflate round-trip" {
   }
   assert_eq(Bytes::from_array(got), msg)
   // Without the dictionary: a back-reference reaches before the stream start.
-  let inf2 = @flate.Inflater::new()
+  let inf2 = @flate.Inflater()
   try {
     let _ = inf2.step(compressed[:], dbuf.mut_view())
   } catch {

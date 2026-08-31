@@ -31,7 +31,7 @@ drain the same engine with whatever buffers their runtime provides:
 ///|
 test "README streaming Deflater" {
   let source = b"small buffers exercise suspension and resume"
-  let encoder = @flate.Deflater::new()
+  let encoder = @flate.Deflater()
   let chunk = FixedArray::make(3, b'\x00')
   let compressed = Buffer()
   let mut first = true
@@ -80,7 +80,7 @@ test "README streaming Deflater" {
   the same error.
 - Once `Done` is returned, new input is not consumed; reset the raw engine or
   create a new wrapper before reuse.
-- Configure a raw preset dictionary through `Deflater::new`/`Inflater::new`, or
+- Configure a raw preset dictionary through `Deflater(...)`/`Inflater(...)`, or
   while starting a fresh stream through `reset(dictionary=...)`; dictionary
   selection cannot be mutated after a stream begins.
 - gzip/zlib decoders may accept transport read-ahead beyond their trailer;
@@ -137,7 +137,7 @@ the same engine. It is io-free and suspendable like the rest of the library:
 ```mbt nocheck
 ///|
 test "README zip round-trip" {
-  let archive = @zip.Archive::new()
+  let archive = @zip.Archive()
   archive.add("hello.txt", b"hello, zip")
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
@@ -161,20 +161,21 @@ without materializing an oversized candidate.
 ENCODE: bytes → raw DEFLATE
 ═══════════════════════════
 
- deflate_all     Deflater::step             deflate_all_optimal(input)
-  one-shot         streaming, suspendable;    one-shot, offline (zopfli-style)
-  greedy           sync flush, preset dict
-        │              │                           │
-        └──────┬───────┘                           │
-               ▼                                    ▼
- ┌─ parser ─────────────────┐    ┌─ parser ───────────────────┐
- │ lz77.mbt                 │    │ optimal_parse.mbt          │
- │ greedy/lazy hash chains  │    │ squeeze: iterated          │
- │ (levels 1-9; 0 = stored) │    │ cost-optimal shortest path │
- ├─ block driver ───────────┤    ├─ planner ──────────────────┤
- │ block_planner.mbt (strm) │    │ optimal_plan.mbt           │
- │ or deflate_all.mbt inline│    │ content-driven splitting   │
- │ both: 16 KB blocks       │    │ (FindMinimum + resplit)    │
+ deflate_all     Deflater::step             deflate_all_split(input)   deflate_all_optimal(input)
+  one-shot         streaming, suspendable;    one-shot, adaptive         one-shot, offline
+  fixed 16 KB      sync flush, preset dict    block splitting            (zopfli-style)
+  blocks
+        │              │                           │                        │
+        └──────┬───────┘                           │                        │
+               ▼                                   ▼                        ▼
+ ┌─ parser ─────────────────┐    ┌─ planner ─────────────────┐  ┌─ parser ───────────────────┐
+ │ lz77.mbt                 │    │ split_plan.mbt            │  │ optimal_parse.mbt          │
+ │ greedy/lazy hash chains  │    │ observation-divergence    │  │ squeeze: iterated          │
+ │ (levels 1-9; 0 = stored) │    │ split, arbitrated vs      │  │ cost-optimal shortest path │
+ ├─ block driver ───────────┤    │ the 16 KB cadence         │  ├─ planner ──────────────────┤
+ │ block_planner.mbt (strm) │    └────────────┬──────────────┘  │ optimal_plan.mbt           │
+ │ or deflate_all.mbt inline│                 │                 │ content-driven splitting   │
+ │ both: 16 KB blocks       │                 │                 │ (FindMinimum + resplit)    │
  └────────────┬─────────────┘    └─────────────┬──────────────┘
               └────────────┬───────────────────┘
                            ▼
@@ -237,11 +238,16 @@ truncations, and bit flips.
 ## Effort tiers
 
 All standard DEFLATE on the wire. Levels 0-9 (zlib's tuning table) on
-`deflate_all` / `Deflater`; `deflate_all_optimal` adds zopfli-style iterated
-optimal parsing (`optimal_parse.mbt`) plus content-driven block splitting
-(`optimal_plan.mbt`) — drop-in replacements for the greedy parser (`lz77.mbt`)
-and the threshold planner (`block_planner.mbt`) behind the same
-(tokens, frequencies) → `emit_block` seam.
+`deflate_all` / `Deflater`. `deflate_all_split` is a one-shot mid-tier that
+tokenizes each large window once with the full 32 KB history and cuts blocks
+where the literal/match observation distribution drifts (libdeflate's
+observation-divergence splitter, `split_plan.mbt`), arbitrating each chunk
+against the fixed 16 KB cadence by exact cost so it is never larger — typically
+several percent smaller on prose, code, and repetitive data. `deflate_all_optimal`
+adds zopfli-style iterated optimal parsing (`optimal_parse.mbt`) plus
+content-driven block splitting (`optimal_plan.mbt`) — drop-in replacements for
+the greedy parser (`lz77.mbt`) and the threshold planner (`block_planner.mbt`)
+behind the same (tokens, frequencies) → `emit_block` seam.
 
 The containers expose both tiers: `gzip_compress` / `zlib_compress` and their
 streaming `Encoder`s take `level` 0-9; `gzip_compress_optimal` /

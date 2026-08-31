@@ -18,7 +18,7 @@ priv struct LevelInfo {
 }
 
 ///|
-fn LevelInfo::new() -> LevelInfo {
+fn LevelInfo::LevelInfo() -> LevelInfo {
   { level: 0, last_freq: 0, next_char_freq: 0, next_pair_freq: 0, needed: 0, }
 }
 
@@ -38,7 +38,7 @@ fn bit_counts(nodes : Array[Node], n : Int, max_bits_in : Int) -> Array[Int] {
   }
   let levels : Array[LevelInfo] = []
   for _i in 0..<17 {
-    levels.push(LevelInfo::new())
+    levels.push(LevelInfo())
   }
   let leaf_counts : Array[Array[Int]] = []
   for _i in 0..<17 {

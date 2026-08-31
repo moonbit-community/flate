@@ -26,7 +26,7 @@ pub struct Crc32 {
 
 ///|
 /// Create a fresh CRC-32 accumulator.
-pub fn Crc32::new() -> Crc32 {
+pub fn Crc32::Crc32() -> Crc32 {
   { state: 0xFFFFFFFF, }
 }
 
@@ -60,7 +60,7 @@ pub fn Crc32::finish(self : Crc32) -> UInt {
 ///|
 /// Compute the CRC-32 checksum of `data` in one shot.
 pub fn crc32(data : BytesView) -> UInt {
-  let d = Crc32::new()
+  let d = Crc32()
   d.update(data)
   d.finish()
 }

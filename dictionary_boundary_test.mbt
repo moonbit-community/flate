@@ -9,7 +9,7 @@ test "preset dictionaries retain exactly the final 32 KiB" {
   }
   let dictionary = Bytes::from_array(dictionary_bytes)
   let message = Bytes::from_array(message_bytes)
-  let deflater = @flate.Deflater::new(dictionary=dictionary[:])
+  let deflater = @flate.Deflater(dictionary=dictionary[:])
   let compressed_buffer = FixedArray::make(4096, b'\x00')
   let deflate_status = deflater.step(
     message[:],
@@ -26,7 +26,7 @@ test "preset dictionaries retain exactly the final 32 KiB" {
   for i in 0..<compressed_size {
     compressed.push(compressed_buffer[i])
   }
-  let inflater = @flate.Inflater::new(dictionary=dictionary[:])
+  let inflater = @flate.Inflater(dictionary=dictionary[:])
   let output = FixedArray::make(1024, b'\x00')
   let inflate_status = inflater.step(
     Bytes::from_array(compressed)[:],

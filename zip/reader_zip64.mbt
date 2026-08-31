@@ -37,7 +37,7 @@ fn read_zip64_extra(
   while pos < extra.length() {
     let (header_id, data_size, data_offset) = extra_field_at(extra, pos)
     pos = data_offset + data_size
-    if header_id == zip64_extra_id {
+    if header_id == ZIP64_EXTRA_ID {
       let count = (if need_uncomp { 1 } else { 0 }) +
         (if need_comp { 1 } else { 0 }) +
         (if need_offset { 1 } else { 0 })
@@ -47,7 +47,7 @@ fn read_zip64_extra(
           "zip: zip64 extra field size mismatch",
         )
       }
-      let reader = Cursor::new(extra[data_offset:data_offset + data_size], 0)
+      let reader = Cursor(extra[data_offset:data_offset + data_size], 0)
       let uncomp = if need_uncomp { Some(reader.read_u64_raw()) } else { None }
       let comp = if need_comp { Some(reader.read_u64_raw()) } else { None }
       let offset = if need_offset { Some(reader.read_u64_raw()) } else { None }
@@ -79,7 +79,7 @@ fn read_zip64_eocd(
 ) -> (UInt64, UInt64, UInt64, Int) raise ZipError {
   let locator_offset = eocd_offset - 20
   if locator_offset < 0 ||
-    read_u32_le_at_raw(bytes, locator_offset) != zip64_locator_sig {
+    read_u32_le_at_raw(bytes, locator_offset) != ZIP64_LOCATOR_SIG {
     raise ZipError(UnsupportedFeature, "zip: zip64 locator missing")
   }
   let locator_disk = read_u32_le_at_raw(bytes, locator_offset + 4)
@@ -95,9 +95,9 @@ fn read_zip64_eocd(
   if zip64_offset > locator_offset || 12 > locator_offset - zip64_offset {
     raise ZipError(Truncated, "zip: zip64 end record out of bounds")
   }
-  let reader = Cursor::new(bytes, zip64_offset)
+  let reader = Cursor(bytes, zip64_offset)
   let sig = reader.read_u32_raw()
-  if sig != zip64_eocd_sig {
+  if sig != ZIP64_EOCD_SIG {
     raise ZipError(InvalidSignature, "zip: invalid zip64 end record signature")
   }
   let record_size = reader.read_u64_raw()
@@ -133,8 +133,8 @@ fn data_descriptor_matches(
   signed : Bool,
 ) -> Bool {
   try {
-    let reader = Cursor::new(bytes, offset)
-    if signed && reader.read_u32_raw() != data_descriptor_sig {
+    let reader = Cursor(bytes, offset)
+    if signed && reader.read_u32_raw() != DATA_DESCRIPTOR_SIG {
       return false
     }
     if reader.read_u32_raw() != crc {
@@ -206,7 +206,7 @@ fn local_size_matches(
   if allow_placeholder && raw == 0 {
     return zip64_matches
   }
-  if raw == max_u32 {
+  if raw == MAX_U32 {
     return zip64 is Some(_) && zip64_matches
   }
   UInt64::extend_uint(raw) == expected64 && zip64_matches

@@ -1,6 +1,6 @@
 ///|
 /// Maximum compressed input retained while output is backpressured.
-let decoder_input_limit = 65536
+pub const DECODER_INPUT_LIMIT : Int = 65536
 
 ///|
 priv enum DecMode {
@@ -35,10 +35,10 @@ pub struct Decoder {
 /// Create a fresh zlib decompressor. Supply `dictionary` when the stream was
 /// compressed with a preset dictionary : the header's DICTID
 /// is verified against it before use.
-pub fn Decoder::new(dictionary? : Bytes) -> Decoder {
+pub fn Decoder::Decoder(dictionary? : Bytes) -> Decoder {
   {
-    inf: @flate.Inflater::new(),
-    adler: @checksum.Adler32::new(),
+    inf: @flate.Inflater(),
+    adler: @checksum.Adler32(),
     pending: [],
     pending_pos: 0,
     body_input: b"",
@@ -229,10 +229,10 @@ fn Decoder::step_active(
   if self.mode is ZFinished {
     return self.finish_step(Done, 0, 0)
   }
-  if !self.ending && self.pending.length() >= decoder_input_limit {
+  if !self.ending && self.pending.length() >= DECODER_INPUT_LIMIT {
     self.compact_for_input()
   }
-  let capacity = decoder_input_limit - self.pending.length()
+  let capacity = DECODER_INPUT_LIMIT - self.pending.length()
   let consumed = if self.ending || capacity <= 0 {
     0
   } else if input.length() < capacity {

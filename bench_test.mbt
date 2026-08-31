@@ -138,3 +138,41 @@ test "bench deflate_all_optimal" (b : @bench.T) {
     b.keep(@flate.deflate_all_optimal(small))
   })
 }
+
+///|
+/// Realistic English prose so the adaptive-split speed is measured on the
+/// regime where it wins ratio.
+fn bench_prose(size : Int) -> Bytes {
+  let unit = b"The history of data compression is a history of finding structure in information that does not want to be found. Early codes worked letter by letter; the leap to phrase-based matching came only when programmers realized that a file is rarely a stream of independent symbols but a tapestry of repeated fragments. Consider a text file: common words appear over and over, at distances that vary with the sentence structure around them, and an encoder that treats every occurrence as new is wasting its time. Matching is not the same as deciding: a match that is one byte longer but a thousand bytes farther away may cost more in offset bits than it saves in literals."
+  let arr : Array[Byte] = []
+  while arr.length() < size {
+    for i in 0..<unit.length() {
+      arr.push(unit[i])
+    }
+  }
+  Bytes::from_array(arr)
+}
+
+///|
+/// Speed comparison of the fixed 16 KB cadence (`deflate_all`) against the
+/// adaptive observation-divergence splitter (`deflate_all_split`) at the same
+/// level, on the same inputs. Pairs are emitted adjacently so the runner
+/// interleaves them fairly.
+test "bench deflate_all vs deflate_all_split" (b : @bench.T) {
+  let n = 262144
+  let prose = bench_prose(n)
+  let rep = bench_repetitive(n)
+  let rnd = bench_random(n)
+  let mix = bench_mixed(n)
+  for level in [1, 6, 9] {
+    for t in [("prose", prose), ("rep", rep), ("rnd", rnd), ("mix", mix)] {
+      let (name, data) = t
+      b.bench(name="deflate L\{level} \{name} fixed", () => {
+        b.keep(@flate.deflate_all(data, level~))
+      })
+      b.bench(name="deflate L\{level} \{name} split", () => {
+        b.keep(@flate.deflate_all_split(data, level~))
+      })
+    }
+  }
+}

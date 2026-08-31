@@ -1,6 +1,6 @@
 ///|
 test "shared distance-symbol interpretation follows the RFC table" {
-  for symbol in 0..<max_num_dist {
+  for symbol in 0..<MAX_NUM_DIST {
     let info = distance_code_info_table[symbol]
     assert_eq(info >> 4, dist_base[symbol])
     assert_eq(info & 0xF, dist_extra[symbol])
@@ -66,7 +66,7 @@ test "reserved HLIT wins over a truncated HDIST" {
   } noraise {
     _ => fail("in-memory decoder read HDIST before validating HLIT")
   }
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
   try ignore(inflater.step(data[:], output.mut_view(), end=true)) catch {
     InflateError(kind, message) => {
@@ -81,9 +81,9 @@ test "reserved HLIT wins over a truncated HDIST" {
 ///|
 test "shared back-reference validation uses available history" {
   assert_true(back_reference_distance_is_valid(1, 1))
-  assert_true(back_reference_distance_is_valid(window_size, window_size))
-  assert_false(back_reference_distance_is_valid(0, window_size))
-  assert_false(back_reference_distance_is_valid(-1, window_size))
+  assert_true(back_reference_distance_is_valid(WINDOW_SIZE, WINDOW_SIZE))
+  assert_false(back_reference_distance_is_valid(0, WINDOW_SIZE))
+  assert_false(back_reference_distance_is_valid(-1, WINDOW_SIZE))
   assert_false(back_reference_distance_is_valid(2, 1))
   assert_false(back_reference_distance_is_valid(1, 0))
 }

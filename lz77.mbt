@@ -9,7 +9,7 @@
 // the same (tokens, frequencies) shape can replace `tokenize` wholesale.
 
 ///|
-let hash_bits = 15
+pub const HASH_BITS : Int = 15
 
 ///|
 /// Per-level match-search tuning. The good/lazy/nice/chain values are adopted
@@ -43,7 +43,7 @@ fn hash3(data : Bytes, i : Int) -> Int {
   let a = data[i].to_int()
   let b = data[i + 1].to_int()
   let c = data[i + 2].to_int()
-  (a ^ (b << 5) ^ (c << 10)) & ((1 << hash_bits) - 1)
+  (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
 }
 
 ///|
@@ -253,10 +253,10 @@ fn tokenize(
   // LZ77 with hash chains: head[hash] is the most recent position with a
   // given 3-byte hash, prev[pos] the next-older. "Lazy" means a match found
   // at i is held back to see if i+1 starts a longer one.
-  let head = Array::make(1 << hash_bits, -1)
+  let head = Array::make(1 << HASH_BITS, -1)
   // Positions farther back than the window can never be referenced
   // (find_match rejects distances > 32768), so seeding them is pure waste.
-  let seed_from = if start > window_size { start - window_size } else { 0 }
+  let seed_from = if start > WINDOW_SIZE { start - WINDOW_SIZE } else { 0 }
   // `prev` is indexed relative to `seed_from` and covers only positions that
   // are seeded or tokenized here — the carried window plus this segment plus a
   // match's worth of overhang — never the absolute offset into `data`. Sizing

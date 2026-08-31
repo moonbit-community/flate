@@ -48,7 +48,7 @@ test "round-trip: large input via dynamic Huffman" {
 /// drain a tiny 16-byte output buffer (forces NeedMoreOutput), then round-trip.
 test "Deflater::step streams compression then round-trips" {
   let data = b"the quick brown fox jumps over the lazy dog. the quick brown fox jumps over the lazy dog. pack my box."
-  let def = @flate.Deflater::new()
+  let def = @flate.Deflater()
   let obuf = FixedArray::make(16, b'\x00')
   let comp = Buffer()
   let n = data.length()
@@ -92,7 +92,7 @@ test "Deflater emits multiple blocks for a large input and round-trips" {
     }
   }
   let data = Bytes::from_array(arr) // 45000 bytes
-  let def = @flate.Deflater::new()
+  let def = @flate.Deflater()
   let obuf = FixedArray::make(64, b'\x00')
   let comp = Buffer()
   let n = data.length()
@@ -131,7 +131,7 @@ test "Deflater finalization preserves unconsumed input under backpressure" {
   let prefix = Bytes::from_array(Array::make(17000, b'\x5A'))
   let final_input = b"terminal-state payload"
   let after_end = b"belongs to the next protocol state"
-  let def = @flate.Deflater::new(level=0)
+  let def = @flate.Deflater(level=0)
   let no_output = FixedArray::make(0, b'\x00')
   let compressed = Buffer()
   let prefix_status = def.step(prefix[:], no_output.mut_view())

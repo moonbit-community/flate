@@ -5,6 +5,7 @@ target
 .mooncakes/
 .moonagent/
 .repos/
+.local/
 # coverage report artifacts
 bisect.coverage
 # editor artifacts

@@ -24,7 +24,7 @@
 /// enough to amortize the dynamic-Huffman table header over many bytes, small
 /// enough that one table tracks roughly-stationary statistics and that
 /// streaming bounds latency and memory rather than spanning whole megabytes.
-let deflate_block_size = 16384
+pub const DEFLATE_BLOCK_SIZE : Int = 16384
 
 ///|
 /// Streaming DEFLATE compressor : a push-based, suspendable state
@@ -50,12 +50,15 @@ pub struct Deflater {
 /// with zlib-equivalent tuning; 0 emits stored blocks only, 6 is the default.
 /// `dictionary`, when supplied, preloads the match window with its last 32 KB;
 /// the decoder must use the same preset dictionary.
-pub fn Deflater::new(level? : Int = 6, dictionary? : BytesView) -> Deflater {
+pub fn Deflater::Deflater(
+  level? : Int = 6,
+  dictionary? : BytesView,
+) -> Deflater {
   let lv = if level < 0 { 0 } else if level > 9 { 9 } else { level }
   let deflater = {
     pending: [],
     window_carry: 0,
-    w: BitWriter::new(),
+    w: BitWriter(),
     out_pos: 0,
     emitted_final: false,
     done: false,
@@ -80,8 +83,8 @@ fn Deflater::preload_dictionary(
   self : Deflater,
   dictionary : BytesView,
 ) -> Unit {
-  let start = if dictionary.length() > window_size {
-    dictionary.length() - window_size
+  let start = if dictionary.length() > WINDOW_SIZE {
+    dictionary.length() - WINDOW_SIZE
   } else {
     0
   }
@@ -206,7 +209,7 @@ pub fn Deflater::step(
   }
   let out_end = output.length()
   let input_end = input.length()
-  let input_limit = deflate_block_size + min_lookahead
+  let input_limit = DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD
   let mut consumed = 0
   let mut write_pos = 0
   for ;; {

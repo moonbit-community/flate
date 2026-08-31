@@ -106,7 +106,7 @@ test "streaming gzip Decoder decodes a multi-member stream" {
   let p1 = b"alpha alpha alpha alpha "
   let p2 = b"beta beta beta beta beta "
   let stream = concat_bytes([@gzip.gzip_compress(p1), @gzip.gzip_compress(p2)])
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(8, b'\x00')
   let out = Buffer()
   let mut fed = false
@@ -135,7 +135,7 @@ test "streaming gzip Decoder suspends across a split member magic" {
   let second_payload = b"second member"
   let first = @gzip.gzip_compress(first_payload)
   let second = @gzip.gzip_compress(second_payload)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(128, b'\x00')
   let out = Buffer()
   let at_boundary = dec.step(first[:], obuf.mut_view())
@@ -175,7 +175,7 @@ test "streaming gzip Decoder decodes a multi-member stream in tiny chunks" {
     @gzip.gzip_compress(b" three"),
   ])
   let want = concat_bytes([b"one ", data, b" three"])
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(5, b'\x00')
   let out = Buffer()
   let n = stream.length()
@@ -210,7 +210,7 @@ test "streaming gzip Encoder round-trips through gunzip" {
     }
   }
   let src = Bytes::from_array(arr)
-  let enc = @gzip.Encoder::new()
+  let enc = @gzip.Encoder()
   let obuf = FixedArray::make(50, b'\x00')
   let out = Buffer()
   let n = src.length()
@@ -240,7 +240,7 @@ test "streaming gzip Encoder round-trips through gunzip" {
 
 ///|
 test "streaming gzip Encoder: empty input" {
-  let enc = @gzip.Encoder::new()
+  let enc = @gzip.Encoder()
   let obuf = FixedArray::make(64, b'\x00')
   let out = Buffer()
   for ;; {
@@ -262,7 +262,7 @@ test "streaming gzip Encoder: empty input" {
 /// revealing 3 input bytes at a time into a 7-byte output buffer — exercising
 /// both NeedMoreInput and NeedMoreOutput suspension and the CRC/length verify.
 test "streaming gzip Decoder decodes a python gzip stream in tiny chunks" {
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(7, b'\x00')
   let out = Buffer()
   let n = py_gzip.length()
@@ -297,7 +297,7 @@ test "streaming gzip Decoder round-trips a large stream" {
   }
   let src = Bytes::from_array(arr)
   let gz = @gzip.gzip_compress(src)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(13, b'\x00')
   let out = Buffer()
   let n = gz.length()
@@ -321,7 +321,7 @@ test "streaming gzip Decoder round-trips a large stream" {
 ///|
 test "streaming gzip Decoder: empty" {
   let gz = @gzip.gzip_compress(b"")
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(8, b'\x00')
   let out = Buffer()
   let n = gz.length()
@@ -375,7 +375,7 @@ test "streaming gzip Decoder skips optional header fields" {
     arr.push(gz[i])
   }
   let full = Bytes::from_array(arr)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(11, b'\x00')
   let out = Buffer()
   let n = full.length()
@@ -409,7 +409,7 @@ test "streaming gzip Decoder rejects a corrupted trailer" {
   let last = arr.length() - 1
   arr[last] = (arr[last].to_int() ^ 0xFF).to_byte()
   let bad = Bytes::from_array(arr)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(256, b'\x00')
   try {
     let n = bad.length()
@@ -448,7 +448,7 @@ test "gzip decoders reject reserved FLG bits" {
   } noraise {
     _ => fail("one-shot decoding accepted a reserved FLG bit")
   }
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let out = FixedArray::make(64, b'\x00')
   try ignore(dec.step(bad[:], out.mut_view(), end=true)) catch {
     GzipError(kind, _) => assert_true(kind == InvalidHeader)
@@ -472,7 +472,7 @@ test "gzip decoders reject a truncated subsequent member" {
   } noraise {
     _ => fail("one-shot decoding ignored a partial second member")
   }
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let out = FixedArray::make(4096, b'\x00')
   try ignore(dec.step(stream[:], out.mut_view(), end=true)) catch {
     GzipError(kind, _) => assert_true(kind == Truncated)
@@ -488,7 +488,7 @@ test "gzip decoders reject a truncated subsequent member" {
 /// first fixed header and while waiting for the trailer.
 test "streaming gzip Decoder rejects truncated input at end" {
   let out = FixedArray::make(256, b'\x00')
-  let empty_dec = @gzip.Decoder::new()
+  let empty_dec = @gzip.Decoder()
   try ignore(empty_dec.step(b""[:], out.mut_view(), end=true)) catch {
     GzipError(kind, _) => assert_true(kind == Truncated)
   } noraise {
@@ -498,7 +498,7 @@ test "streaming gzip Decoder rejects truncated input at end" {
   assert_eq(empty_dec.last_produced(), 0)
   let gz = @gzip.gzip_compress(b"missing trailer byte")
   let truncated = prefix_bytes(gz, gz.length() - 1)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   try ignore(dec.step(truncated[:], out.mut_view(), end=true)) catch {
     GzipError(kind, _) => assert_true(kind == Truncated)
   } noraise {
@@ -523,7 +523,7 @@ test "gzip decoders wrap malformed DEFLATE as GzipError" {
   } noraise {
     _ => fail("one-shot decoding accepted a reserved DEFLATE block")
   }
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let out = FixedArray::make(64, b'\x00')
   try ignore(dec.step(bad[:], out.mut_view(), end=true)) catch {
     GzipError(kind, _) => assert_true(kind == InvalidDeflate)
@@ -542,7 +542,7 @@ test "streaming gzip Decoder latches its first error" {
     0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x07, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   ]
-  let decoder = @gzip.Decoder::new()
+  let decoder = @gzip.Decoder()
   let output = FixedArray::make(8, b'\xA5')
   let mut first_kind : @gzip.GzipErrorKind = InvalidHeader
   let mut first_error = ""
@@ -583,7 +583,7 @@ test "streaming gzip Decoder latches its first error" {
 test "streaming gzip Decoder latches end across one-byte output" {
   let payload = b"end latch with one-byte output and a long repeated repeated repeated tail"
   let gz = @gzip.gzip_compress(payload)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(1, b'\x00')
   let plain = Buffer()
   let mut first = true
@@ -627,7 +627,7 @@ test "streaming gzip Decoder resumes with one-byte input and output" {
   }
   let payload = Bytes::from_array(bytes)
   let gz = @gzip.gzip_compress(payload)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(1, b'\x00')
   let plain = Buffer()
   let mut fed = 0
@@ -664,7 +664,7 @@ test "streaming gzip Decoder drains a large stored member one byte at a time" {
   }
   let payload = Bytes::from_array(bytes)
   let gz = @gzip.gzip_compress(payload, level=0)
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let obuf = FixedArray::make(1, b'\x00')
   let plain = Buffer()
   let mut first = true
@@ -695,7 +695,7 @@ test "streaming gzip Decoder drains a large stored member one byte at a time" {
 test "streaming gzip Encoder latches flush across header backpressure" {
   let first = b"data that must be visible at the sync-flush boundary"
   let rest = b" and data after that boundary"
-  let enc = @gzip.Encoder::new()
+  let enc = @gzip.Encoder()
   let obuf = FixedArray::make(1, b'\x00')
   let encoded = Buffer()
   let mut first_call = true
@@ -725,7 +725,7 @@ test "streaming gzip Encoder latches flush across header backpressure" {
   // The non-final prefix must already be independently decodable through the
   // sync-flush point.
   let prefix = encoded.to_bytes()
-  let dec = @gzip.Decoder::new()
+  let dec = @gzip.Decoder()
   let plain = Buffer()
   let mut fed_prefix = false
   let mut reached_boundary = false
@@ -794,7 +794,7 @@ test "streaming gzip Decoder preserves input after the final member" {
   for byte in next_frame {
     combined.write_byte(byte)
   }
-  let decoder = @gzip.Decoder::new()
+  let decoder = @gzip.Decoder()
   let output = FixedArray::make(1, b'\x00')
   let decoded = Buffer()
   let mut first = true
@@ -838,7 +838,7 @@ test "streaming gzip Decoder can stop after one member" {
   for byte in second_member {
     combined.write_byte(byte)
   }
-  let decoder = @gzip.Decoder::new(multistream=false)
+  let decoder = @gzip.Decoder(multistream=false)
   let output = FixedArray::make(1, b'\x00')
   let decoded = Buffer()
   let mut first = true

@@ -6,7 +6,7 @@ test "Inflater owns only a bounded atomic tail between non-overlapping chunks" {
   }
   let source = Bytes::from_array(bytes)
   let compressed = deflate_all(source)
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
   let decoded = Buffer()
   let mut pos = 0

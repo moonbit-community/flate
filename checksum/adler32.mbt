@@ -1,6 +1,6 @@
 ///|
 /// Largest modulus.
-let adler_modulus = 65521
+const ADLER_MODULUS : Int = 65521
 
 ///|
 /// Incremental Adler-32 accumulator (RFC 1950 §9), the streaming counterpart to
@@ -12,7 +12,7 @@ pub struct Adler32 {
 
 ///|
 /// Create a fresh Adler-32 accumulator.
-pub fn Adler32::new() -> Adler32 {
+pub fn Adler32::Adler32() -> Adler32 {
   { a: 1, b: 0, }
 }
 
@@ -22,8 +22,8 @@ pub fn Adler32::update(self : Adler32, data : BytesView) -> Unit {
   let mut a = self.a
   let mut b = self.b
   for byte in data {
-    a = (a + byte.to_int()) % adler_modulus
-    b = (b + a) % adler_modulus
+    a = (a + byte.to_int()) % ADLER_MODULUS
+    b = (b + a) % ADLER_MODULUS
   }
   self.a = a
   self.b = b
@@ -34,8 +34,8 @@ pub fn Adler32::update(self : Adler32, data : BytesView) -> Unit {
 /// it can only reach one at a time (e.g. read back from a `MutArrayView`
 /// output) without materializing a `Bytes`.
 pub fn Adler32::update_byte(self : Adler32, byte : Byte) -> Unit {
-  self.a = (self.a + byte.to_int()) % adler_modulus
-  self.b = (self.b + self.a) % adler_modulus
+  self.a = (self.a + byte.to_int()) % ADLER_MODULUS
+  self.b = (self.b + self.a) % ADLER_MODULUS
 }
 
 ///|
@@ -48,7 +48,7 @@ pub fn Adler32::finish(self : Adler32) -> UInt {
 /// Compute the Adler-32 checksum of `data` in one shot. Shared primitive:
 /// `@checksum.adler32`.
 pub fn adler32(data : Bytes) -> UInt {
-  let d = Adler32::new()
+  let d = Adler32()
   d.update(data[:])
   d.finish()
 }

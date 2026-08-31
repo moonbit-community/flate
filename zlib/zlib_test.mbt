@@ -53,7 +53,7 @@ test "streaming zlib Encoder round-trips through zlib_decompress" {
     }
   }
   let src = Bytes::from_array(arr)
-  let enc = @zlib.Encoder::new()
+  let enc = @zlib.Encoder()
   let obuf = FixedArray::make(50, b'\x00')
   let out = Buffer()
   let n = src.length()
@@ -83,7 +83,7 @@ test "streaming zlib Encoder round-trips through zlib_decompress" {
 
 ///|
 test "streaming zlib Encoder: empty input" {
-  let enc = @zlib.Encoder::new()
+  let enc = @zlib.Encoder()
   let obuf = FixedArray::make(64, b'\x00')
   let out = Buffer()
   for ;; {
@@ -103,7 +103,7 @@ test "streaming zlib Encoder: empty input" {
 /// Decode the python-produced zlib vector through the streaming `zlib.Decoder`,
 /// 3 input bytes at a time into a 7-byte output buffer.
 test "streaming zlib Decoder decodes a python zlib stream in tiny chunks" {
-  let dec = @zlib.Decoder::new()
+  let dec = @zlib.Decoder()
   let obuf = FixedArray::make(7, b'\x00')
   let out = Buffer()
   let n = py_zlib.length()
@@ -137,7 +137,7 @@ test "streaming zlib Decoder round-trips a large stream" {
   }
   let src = Bytes::from_array(arr)
   let z = @zlib.zlib_compress(src)
-  let dec = @zlib.Decoder::new()
+  let dec = @zlib.Decoder()
   let obuf = FixedArray::make(13, b'\x00')
   let out = Buffer()
   let n = z.length()
@@ -161,7 +161,7 @@ test "streaming zlib Decoder round-trips a large stream" {
 ///|
 test "streaming zlib Decoder: empty" {
   let z = @zlib.zlib_compress(b"")
-  let dec = @zlib.Decoder::new()
+  let dec = @zlib.Decoder()
   let obuf = FixedArray::make(8, b'\x00')
   let out = Buffer()
   let n = z.length()
@@ -188,7 +188,7 @@ test "streaming zlib Decoder: empty" {
 test "zlib preset dictionary round-trip" {
   let dict = b"common preamble shared by both sides of the protocol"
   let msg = b"common preamble shared by both sides of the protocol -- payload"
-  let enc = @zlib.Encoder::new(dictionary=dict)
+  let enc = @zlib.Encoder(dictionary=dict)
   let obuf = FixedArray::make(4096, b'\x00')
   let out = Buffer()
   let mut sent = false
@@ -206,7 +206,7 @@ test "zlib preset dictionary round-trip" {
   }
   let z = out.to_bytes()
   // With the right dictionary: decodes and verifies the trailer.
-  let dec = @zlib.Decoder::new(dictionary=dict)
+  let dec = @zlib.Decoder(dictionary=dict)
   let dbuf = FixedArray::make(4096, b'\x00')
   let got = Buffer()
   let n = z.length()
@@ -225,7 +225,7 @@ test "zlib preset dictionary round-trip" {
   }
   assert_eq(got.to_bytes(), msg)
   // Without a dictionary: rejected at the header.
-  let dec2 = @zlib.Decoder::new()
+  let dec2 = @zlib.Decoder()
   try {
     let _ = dec2.step(z[:], dbuf.mut_view())
   } catch {
@@ -234,7 +234,7 @@ test "zlib preset dictionary round-trip" {
     _ => fail("expected the missing dictionary to be rejected")
   }
   // With the wrong dictionary: DICTID mismatch.
-  let dec3 = @zlib.Decoder::new(dictionary=b"a completely different dictionary")
+  let dec3 = @zlib.Decoder(dictionary=b"a completely different dictionary")
   try {
     let _ = dec3.step(z[:], dbuf.mut_view())
   } catch {
@@ -258,7 +258,7 @@ test "zlib rejects CINFO values above seven" {
   } noraise {
     _ => fail("one-shot decoder accepted CINFO=8")
   }
-  let dec = @zlib.Decoder::new()
+  let dec = @zlib.Decoder()
   let output = FixedArray::make(64, b'\x00')
   try dec.step(invalid[:], output.mut_view()) catch {
     ZlibError(kind, _) => assert_true(kind == InvalidHeader)
@@ -295,7 +295,7 @@ test "malformed DEFLATE errors are wrapped as ZlibError" {
   } noraise {
     _ => fail("one-shot decoder accepted reserved DEFLATE block type")
   }
-  let dec = @zlib.Decoder::new()
+  let dec = @zlib.Decoder()
   let output = FixedArray::make(1, b'\x00')
   try dec.step(malformed[:], output.mut_view()) catch {
     ZlibError(kind, _) => assert_true(kind == InvalidDeflate)
@@ -309,7 +309,7 @@ test "malformed DEFLATE errors are wrapped as ZlibError" {
 /// later input is not accepted and the original diagnostic is rethrown.
 test "streaming zlib Decoder latches its first error" {
   let malformed : Bytes = [0x78, 0x01, 0x07, 0x00, 0x00, 0x00, 0x01]
-  let decoder = @zlib.Decoder::new()
+  let decoder = @zlib.Decoder()
   let output = FixedArray::make(8, b'\xA5')
   let mut first_kind : @zlib.ZlibErrorKind = InvalidHeader
   let mut first_error = ""
@@ -349,7 +349,7 @@ test "streaming zlib Decoder latches its first error" {
 /// wrapper state, including the optional DICTID and checksum trailer.
 test "streaming zlib Decoder reports truncation at end" {
   let output = FixedArray::make(256, b'\x00')
-  let header = @zlib.Decoder::new()
+  let header = @zlib.Decoder()
   try ignore(header.step(b"\x78"[:], output.mut_view(), end=true)) catch {
     ZlibError(kind, message) => {
       assert_true(kind == Truncated)
@@ -359,7 +359,7 @@ test "streaming zlib Decoder reports truncation at end" {
     _ => fail("truncated zlib header was accepted")
   }
 
-  let dictid = @zlib.Decoder::new()
+  let dictid = @zlib.Decoder()
   try
     ignore(dictid.step(b"\x78\x20\x00\x00"[:], output.mut_view(), end=true))
   catch {
@@ -371,7 +371,7 @@ test "streaming zlib Decoder reports truncation at end" {
     _ => fail("truncated zlib DICTID was accepted")
   }
 
-  let body = @zlib.Decoder::new()
+  let body = @zlib.Decoder()
   try ignore(body.step(b"\x78\x01\x03"[:], output.mut_view(), end=true)) catch {
     ZlibError(kind, message) => {
       assert_true(kind == Truncated)
@@ -382,7 +382,7 @@ test "streaming zlib Decoder reports truncation at end" {
   }
 
   let encoded = @zlib.zlib_compress(b"truncated checksum trailer")
-  let trailer = @zlib.Decoder::new()
+  let trailer = @zlib.Decoder()
   try
     ignore(
       trailer.step(encoded[:encoded.length() - 1], output.mut_view(), end=true),
@@ -403,7 +403,7 @@ test "streaming zlib Decoder reports truncation at end" {
 test "streaming zlib Decoder latches end across output backpressure" {
   let source = b"sticky zlib end with one-byte output and repeated repeated data"
   let encoded = @zlib.zlib_compress(source)
-  let decoder = @zlib.Decoder::new()
+  let decoder = @zlib.Decoder()
   let no_output = FixedArray::make(0, b'\x00')
   let initial_status = decoder.step(encoded[:], no_output.mut_view(), end=true)
   let initial_consumed = decoder.last_consumed()
@@ -437,7 +437,7 @@ test "streaming zlib Decoder latches end across output backpressure" {
 test "streaming zlib Encoder latches flush across header backpressure" {
   let first = b"flush me before the two-byte header has drained"
   let second = b" and then continue the same stream"
-  let enc = @zlib.Encoder::new()
+  let enc = @zlib.Encoder()
   let output = FixedArray::make(1, b'\x00')
   let compressed = Buffer()
   let initial_status = enc.step(first[:], output.mut_view(), action=SyncFlush)
@@ -504,7 +504,7 @@ test "streaming zlib Encoder latches flush across header backpressure" {
 ///|
 test "streaming zlib Encoder leaves input unconsumed after end is latched" {
   let source = b"the final accepted input"
-  let enc = @zlib.Encoder::new()
+  let enc = @zlib.Encoder()
   let no_output = FixedArray::make(0, b'\x00')
   let initial_status = enc.step(source[:], no_output.mut_view(), action=Finish)
   let initial_consumed = enc.last_consumed()
@@ -541,7 +541,7 @@ test "streaming zlib Encoder leaves input unconsumed after end is latched" {
 test "streaming zlib Decoder drains large pending input one byte at a time" {
   let source = Bytes::from_array(Array::make(8192, b'\xA5'))
   let compressed = @zlib.zlib_compress(source, level=0)
-  let dec = @zlib.Decoder::new()
+  let dec = @zlib.Decoder()
   let output = FixedArray::make(1, b'\x00')
   let decoded = Buffer()
   let mut first_call = true
@@ -577,7 +577,7 @@ test "streaming zlib Decoder drains large pending input one byte at a time" {
 test "streaming zlib Decoder resumes with one-byte input and output" {
   let source = Bytes::from_array(Array::make(700, b'\x5A'))
   let compressed = @zlib.zlib_compress(source)
-  let dec = @zlib.Decoder::new()
+  let dec = @zlib.Decoder()
   let output = FixedArray::make(1, b'\x00')
   let decoded = Buffer()
   let mut fed = 0
@@ -619,7 +619,7 @@ test "streaming zlib Decoder preserves input after the trailer" {
   for byte in next_frame {
     combined.write_byte(byte)
   }
-  let decoder = @zlib.Decoder::new()
+  let decoder = @zlib.Decoder()
   let output = FixedArray::make(1, b'\x00')
   let decoded = Buffer()
   let mut first = true

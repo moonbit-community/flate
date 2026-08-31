@@ -48,7 +48,7 @@ fn u32_be(data : Bytes, off : Int) -> UInt {
 /// useful to some callers but would let bytes hide between a zlib body and its
 /// Adler-32 trailer.
 fn inflate_exact(input : BytesView) -> Bytes raise ZlibError {
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let scratch = FixedArray::make(32768, b'\x00')
   let out = Buffer()
   let mut pos = 0

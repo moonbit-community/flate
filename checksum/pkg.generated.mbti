@@ -12,16 +12,16 @@ pub fn crc32(BytesView) -> UInt
 pub struct Adler32 {
   // private fields
 }
+pub fn Adler32::Adler32() -> Self
 pub fn Adler32::finish(Self) -> UInt
-pub fn Adler32::new() -> Self
 pub fn Adler32::update(Self, BytesView) -> Unit
 pub fn Adler32::update_byte(Self, Byte) -> Unit
 
 pub struct Crc32 {
   // private fields
 }
+pub fn Crc32::Crc32() -> Self
 pub fn Crc32::finish(Self) -> UInt
-pub fn Crc32::new() -> Self
 pub fn Crc32::update(Self, BytesView) -> Unit
 pub fn Crc32::update_byte(Self, Byte) -> Unit
 

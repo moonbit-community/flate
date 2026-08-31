@@ -14,8 +14,8 @@ test "compression levels clamp at both public boundaries" {
   let source = b"level clamping must be deterministic deterministic"
   assert_eq(deflate_all(source, level=-7), deflate_all(source, level=0))
   assert_eq(deflate_all(source, level=99), deflate_all(source, level=9))
-  let low = Deflater::new(level=-7)
-  let high = Deflater::new(level=99)
+  let low = Deflater(level=-7)
+  let high = Deflater(level=99)
   assert_eq(low.level, 0)
   assert_eq(high.level, 9)
   assert_eq(
@@ -28,17 +28,17 @@ test "compression levels clamp at both public boundaries" {
 test "block planner direct boundary paths emit valid work" {
   // Exercise emit_capped's defensive short-buffer branch directly. Normal
   // streaming callers enter it only after accumulating a full block.
-  let short = Deflater::new()
+  let short = Deflater()
   ignore(fill_deflater_pending_for_coverage(short, 257))
   short.emit_capped()
   assert_true(short.w.out.length() > 0)
 
   // Finalization with more than one token block must emit a capped non-final
   // block before the final remainder.
-  let finishing = Deflater::new()
+  let finishing = Deflater()
   let final_source = fill_deflater_pending_for_coverage(
     finishing,
-    deflate_block_size + min_lookahead + 257,
+    DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 257,
   )
   finishing.emit_final()
   assert_true(finishing.emitted_final)
@@ -46,17 +46,17 @@ test "block planner direct boundary paths emit valid work" {
 
   // Both level-0 and parsed sync-flush paths have their own non-final block
   // loops before the empty stored marker.
-  let stored = Deflater::new(level=0)
+  let stored = Deflater(level=0)
   ignore(fill_deflater_pending_for_coverage(stored, 31))
   stored.emit_flush()
   assert_eq(stored.pending.length(), 0)
   assert_true(stored.w.out.length() >= 4)
 
-  let parsed = Deflater::new()
+  let parsed = Deflater()
   ignore(
     fill_deflater_pending_for_coverage(
       parsed,
-      deflate_block_size + min_lookahead + 257,
+      DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 257,
     ),
   )
   parsed.emit_flush()
@@ -66,13 +66,13 @@ test "block planner direct boundary paths emit valid work" {
   // Validate the final stored-block bit directly. This is kept explicit
   // because the coverage compiler currently fails to credit the constant-one
   // arm inside write_stored's inline conditional.
-  let final_stored = BitWriter::new()
+  let final_stored = BitWriter()
   write_stored(final_stored, b"", 0, 0, is_final=true)
   assert_eq(final_stored.out[0] & b'\x01', b'\x01')
 
   // Force write_stored to split at the 16-bit LEN limit as well.
   let split_source = Bytes::from_array(Array::make(65536, b'\x5A'))
-  let split_stored = BitWriter::new()
+  let split_stored = BitWriter()
   write_stored(
     split_stored,
     split_source,
@@ -118,7 +118,7 @@ test "lazy match pending at a block boundary is committed" {
 test "stored-byte helper drains a prefetched accumulator byte" {
   // Public state transitions currently leave bit_count at zero on entry to a
   // stored payload, but the helper deliberately supports a prefetched byte.
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   inflater.bitbuf = 0xBBAA
   inflater.bit_count = 16
   assert_true(inflater.next_stored_byte() is Some(b'\xAA'))
@@ -131,7 +131,7 @@ test "optimal planner crosses its master-block boundary" {
   // Repetition keeps the optimal parse small while forcing the outer planner
   // to choose its capped master target at least once.
   let source = Bytes::from_array(
-    Array::make(optimal_master_block + min_lookahead + 1, b'\x41'),
+    Array::make(OPTIMAL_MASTER_BLOCK + MIN_LOOKAHEAD + 1, b'\x41'),
   )
   let compressed = deflate_all_optimal(source, iterations=1)
   assert_eq(inflate_all(compressed), source)

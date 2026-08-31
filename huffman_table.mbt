@@ -3,13 +3,13 @@
 // and the in-memory `MemDecoder`.
 
 ///|
-let max_code_len = 16
+const MAX_CODE_LEN : Int = 16
 
 ///|
-let huffman_chunk_bits = 9
+pub const HUFFMAN_CHUNK_BITS : Int = 9
 
 ///|
-let huffman_value_shift = 4
+pub const HUFFMAN_VALUE_SHIFT : Int = 4
 
 ///|
 /// zlib-style chunked Huffman decode table. `chunk & 0xF` is the code length,
@@ -22,7 +22,7 @@ priv struct HuffmanDecoder {
 }
 
 ///|
-fn HuffmanDecoder::new() -> HuffmanDecoder {
+fn HuffmanDecoder::HuffmanDecoder() -> HuffmanDecoder {
   { min: 0, chunks: Array::make(512, 0U), links: [], link_mask: 0, }
 }
 
@@ -39,7 +39,7 @@ fn HuffmanDecoder::initialize(
     self.links = []
     self.link_mask = 0
   }
-  let count = Array::make(max_code_len, 0)
+  let count = Array::make(MAX_CODE_LEN, 0)
   let mut min = 0
   let mut max = 0
   for n in lengths {
@@ -58,7 +58,7 @@ fn HuffmanDecoder::initialize(
     return true
   }
   let mut code = 0
-  let nextcode = Array::make(max_code_len, 0)
+  let nextcode = Array::make(MAX_CODE_LEN, 0)
   for i in min..<=max {
     code = code << 1
     nextcode[i] = code
@@ -68,17 +68,17 @@ fn HuffmanDecoder::initialize(
     return false
   }
   self.min = min
-  if max > huffman_chunk_bits {
-    let num_links = 1 << (max - huffman_chunk_bits)
+  if max > HUFFMAN_CHUNK_BITS {
+    let num_links = 1 << (max - HUFFMAN_CHUNK_BITS)
     self.link_mask = (num_links - 1).reinterpret_as_uint()
-    let link = nextcode[huffman_chunk_bits + 1] >> 1
+    let link = nextcode[HUFFMAN_CHUNK_BITS + 1] >> 1
     self.links = Array::make(512 - link, ([] : Array[UInt]))
     for j in link..<512 {
       let mut reverse = reverse16((j & 0xffff).reinterpret_as_uint()).reinterpret_as_int()
-      reverse = reverse >> (16 - huffman_chunk_bits)
+      reverse = reverse >> (16 - HUFFMAN_CHUNK_BITS)
       let off = j - link
-      self.chunks[reverse] = (off.reinterpret_as_uint() << huffman_value_shift) |
-        (huffman_chunk_bits + 1).reinterpret_as_uint()
+      self.chunks[reverse] = (off.reinterpret_as_uint() << HUFFMAN_VALUE_SHIFT) |
+        (HUFFMAN_CHUNK_BITS + 1).reinterpret_as_uint()
       self.links[off] = Array::make(num_links, 0U)
     }
   }
@@ -88,22 +88,22 @@ fn HuffmanDecoder::initialize(
     }
     let code = nextcode[n]
     nextcode[n] = nextcode[n] + 1
-    let chunk = (idx << huffman_value_shift).reinterpret_as_uint() |
+    let chunk = (idx << HUFFMAN_VALUE_SHIFT).reinterpret_as_uint() |
       n.reinterpret_as_uint()
     let mut reverse = reverse16((code & 0xffff).reinterpret_as_uint()).reinterpret_as_int()
     reverse = reverse >> (16 - n)
-    if n <= huffman_chunk_bits {
+    if n <= HUFFMAN_CHUNK_BITS {
       for off = reverse; off < self.chunks.length(); off = off + (1 << n) {
         self.chunks[off] = chunk
       }
     } else {
       let j = reverse & 0x1FF
-      let value = (self.chunks[j] >> huffman_value_shift).reinterpret_as_int()
+      let value = (self.chunks[j] >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
       let linktab = self.links[value]
-      reverse = reverse >> huffman_chunk_bits
+      reverse = reverse >> HUFFMAN_CHUNK_BITS
       for off = reverse
           off < linktab.length()
-          off = off + (1 << (n - huffman_chunk_bits)) {
+          off = off + (1 << (n - HUFFMAN_CHUNK_BITS)) {
         linktab[off] = chunk
       }
     }
@@ -128,7 +128,7 @@ fn make_fixed_huffman_decoder() -> HuffmanDecoder {
   for i in 280..<288 {
     lengths[i] = 8
   }
-  let h = HuffmanDecoder::new()
+  let h = HuffmanDecoder()
   let _ = h.initialize(lengths[:])
   h
 }

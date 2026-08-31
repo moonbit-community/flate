@@ -6,7 +6,7 @@ priv struct MemDecoder {
   mut bitbuf : UInt // LSB-first bit accumulator
   mut bit_count : Int // valid bits in `bitbuf`
   out : Array[Byte]
-  cancelled : () -> Bool // polled every `cancel_granularity` produced bytes
+  cancelled : () -> Bool // polled every `CANCEL_GRANULARITY` produced bytes
   mut next_cancel : Int // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
   dyn_dist : HuffmanDecoder // distance
@@ -15,15 +15,15 @@ priv struct MemDecoder {
 }
 
 ///|
-let cancel_granularity = 4096
+const CANCEL_GRANULARITY : Int = 4096
 
 ///|
 /// Output chunk size for the streaming one-shot drivers: each `step` call
 /// writes into this scratch, so cancellation is polled at this granularity.
-let inflate_scratch_size = 8192
+const INFLATE_SCRATCH_SIZE : Int = 8192
 
 ///|
-fn MemDecoder::new(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
+fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
   {
     input,
     pos: 0,
@@ -32,10 +32,10 @@ fn MemDecoder::new(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
     out: [],
     cancelled,
     next_cancel: 0,
-    dyn_litlen: HuffmanDecoder::new(),
-    dyn_dist: HuffmanDecoder::new(),
-    clbits: Array::make(max_num_lit + max_num_dist, 0),
-    codebits: Array::make(num_codes, 0),
+    dyn_litlen: HuffmanDecoder(),
+    dyn_dist: HuffmanDecoder(),
+    clbits: Array::make(MAX_NUM_LIT + MAX_NUM_DIST, 0),
+    codebits: Array::make(NUM_CODES, 0),
   }
 }
 
@@ -45,7 +45,7 @@ fn MemDecoder::check_cancel(self : MemDecoder) -> Unit raise InflateError {
     if (self.cancelled)() {
       raise InflateError(Cancelled, "cancelled by caller")
     }
-    self.next_cancel = self.out.length() + cancel_granularity
+    self.next_cancel = self.out.length() + CANCEL_GRANULARITY
   }
 }
 
@@ -98,9 +98,9 @@ fn MemDecoder::huff_sym(
     }
     let mut chunk = h.chunks[(self.bitbuf & 0x1FF).reinterpret_as_int()]
     n = (chunk & 0xF).reinterpret_as_int()
-    if n > huffman_chunk_bits {
-      chunk = h.links[(chunk >> huffman_value_shift).reinterpret_as_int()][((
-          self.bitbuf >> huffman_chunk_bits
+    if n > HUFFMAN_CHUNK_BITS {
+      chunk = h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()][((
+          self.bitbuf >> HUFFMAN_CHUNK_BITS
         ) &
         h.link_mask).reinterpret_as_int()]
       n = (chunk & 0xF).reinterpret_as_int()
@@ -111,7 +111,7 @@ fn MemDecoder::huff_sym(
       }
       self.bitbuf = self.bitbuf >> n
       self.bit_count = self.bit_count - n
-      return (chunk >> huffman_value_shift).reinterpret_as_int()
+      return (chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
     }
   }
 }
@@ -137,7 +137,7 @@ fn MemDecoder::decode_block(
       } else {
         fixed_distance_symbol(self.read_bits(5))
       }
-      if dsym.reinterpret_as_uint() >= max_num_dist.reinterpret_as_uint() {
+      if dsym.reinterpret_as_uint() >= MAX_NUM_DIST.reinterpret_as_uint() {
         raise InflateError(Corrupt, "corrupt: invalid distance code")
       }
       let distance_base = distance_code_base(dsym)
@@ -148,7 +148,7 @@ fn MemDecoder::decode_block(
         distance_base + self.read_bits(distance_extra_bits)
       }
       let available_history = self.out.length()
-      if available_history < window_size &&
+      if available_history < WINDOW_SIZE &&
         !back_reference_distance_is_valid(dist, available_history) {
         raise InflateError(Corrupt, "corrupt: distance too far back")
       }
@@ -238,7 +238,7 @@ pub fn inflate_all(
   input : Bytes,
   cancelled? : () -> Bool = () => false,
 ) -> Bytes raise InflateError {
-  let d = MemDecoder::new(input, cancelled)
+  let d = MemDecoder(input, cancelled)
   d.run()
   Bytes::from_array(d.out)
 }
@@ -259,8 +259,8 @@ fn inflate_streaming_all(
   guard !cancelled() else {
     raise InflateError(Cancelled, "cancelled by caller")
   }
-  let inflater = Inflater::new()
-  let scratch = FixedArray::make(inflate_scratch_size, b'\x00')
+  let inflater = Inflater()
+  let scratch = FixedArray::make(INFLATE_SCRATCH_SIZE, b'\x00')
   let decoded : Array[Byte] = []
   let mut input_pos = 0
   for ;; {
@@ -340,7 +340,7 @@ fn inflate_drive(
   cancelled : () -> Bool,
   emit : (FixedArray[Byte], Int) -> Unit,
 ) -> Int raise InflateError {
-  let scratch = FixedArray::make(inflate_scratch_size, b'\x00')
+  let scratch = FixedArray::make(INFLATE_SCRATCH_SIZE, b'\x00')
   let mut total = 0
   let mut input_pos = 0
   for ;; {
@@ -395,7 +395,7 @@ fn inflate_preallocated(
   guard !cancelled() else {
     raise InflateError(Cancelled, "cancelled by caller")
   }
-  let inflater = Inflater::new()
+  let inflater = Inflater()
   let size = inflate_drive(inflater, input, max_output, true, cancelled, (
     _scratch,
     _produced,

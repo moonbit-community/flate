@@ -12,11 +12,11 @@
 /// Splitting and parsing happen within master chunks of this many input
 /// bytes, bounding the planner's working memory (zopfli's MASTER_BLOCK_SIZE
 /// plays the same role).
-let optimal_master_block = 262144
+pub const OPTIMAL_MASTER_BLOCK : Int = 262144
 
 ///|
 /// Most blocks the splitter may cut one master chunk into (zopfli's default).
-let optimal_max_blocks = 15
+const OPTIMAL_MAX_BLOCKS : Int = 15
 
 ///|
 /// Exact cost in bits of one block (3-bit header included): the cheapest of
@@ -159,14 +159,14 @@ fn find_best_split(
 
 ///|
 /// Greedily insert split points (token indices) while a split still lowers
-/// the exact total cost, up to `optimal_max_blocks` blocks. `tok_pos[k]` is
+/// the exact total cost, up to `OPTIMAL_MAX_BLOCKS` blocks. `tok_pos[k]` is
 /// the byte offset where token k starts (with `tok_pos[m]` = chunk end).
 fn plan_split_points(tokens : Array[Int], tok_pos : Array[Int]) -> Array[Int] {
   let bounds : Array[Int] = [0, tokens.length()]
   let split_result = FixedArray::make(2, 0)
   let ll_freq = Array::make(286, 0)
   let d_freq = Array::make(30, 0)
-  while bounds.length() - 1 < optimal_max_blocks {
+  while bounds.length() - 1 < OPTIMAL_MAX_BLOCKS {
     let mut best_gain = 0
     let mut best_seg = -1
     let mut best_k = -1
@@ -337,7 +337,7 @@ fn emit_optimal_chunk(
 /// per block (zopfli's default is 15).
 pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
   let iters = if iterations < 1 { 1 } else { iterations }
-  let w = BitWriter::new()
+  let w = BitWriter()
   let n = input.length()
   if n == 0 {
     let ll_freq = Array::make(286, 0)
@@ -349,8 +349,8 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
   }
   let mut pos = 0
   for ;; {
-    let target = if pos + optimal_master_block < n {
-      pos + optimal_master_block
+    let target = if pos + OPTIMAL_MASTER_BLOCK < n {
+      pos + OPTIMAL_MASTER_BLOCK
     } else {
       n
     }

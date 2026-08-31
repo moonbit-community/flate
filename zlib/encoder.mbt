@@ -38,9 +38,9 @@ pub struct Encoder {
 /// ratio; 0 = stored only, 6 = default. A preset `dictionary` (RFC 1950
 /// FDICT) preloads the match window and is announced in the header via its
 /// Adler-32; the decoder must supply the same dictionary.
-pub fn Encoder::new(level? : Int = 6, dictionary? : Bytes) -> Encoder {
+pub fn Encoder::Encoder(level? : Int = 6, dictionary? : Bytes) -> Encoder {
   let (def, stage) = if dictionary is Some(dict) {
-    let def = @flate.Deflater::new(level~, dictionary=dict[:])
+    let def = @flate.Deflater(level~, dictionary=dict[:])
     let id = @checksum.adler32(dict)
     let h = FixedArray::make(6, b'\x00')
     // CMF=0x78; FLG=0x20 sets FDICT (0x7820 is a multiple of 31, FCHECK ok),
@@ -53,11 +53,11 @@ pub fn Encoder::new(level? : Int = 6, dictionary? : Bytes) -> Encoder {
     h[5] = (id & 0xFF).reinterpret_as_int().to_byte()
     (def, h)
   } else {
-    (@flate.Deflater::new(level~), zlib_header_bytes)
+    (@flate.Deflater(level~), zlib_header_bytes)
   }
   {
     def,
-    adler: @checksum.Adler32::new(),
+    adler: @checksum.Adler32(),
     mode: Header,
     stage,
     stage_pos: 0,

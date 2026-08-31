@@ -102,7 +102,7 @@ fn inflate_member(
   q : Int,
   consumed : FixedArray[Int],
 ) -> Bytes raise GzipError {
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let out = Buffer()
   let buf = FixedArray::make(65536, b'\x00')
   let mut used = 0

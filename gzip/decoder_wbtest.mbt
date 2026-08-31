@@ -3,7 +3,7 @@
 /// arrive, never banked in `pending`, so an adversarial unterminated FNAME
 /// cannot grow decoder memory.
 test "gzip header FNAME bytes are discarded, not retained" {
-  let dec = Decoder::new()
+  let dec = Decoder()
   let obuf = FixedArray::make(1, b'\x00')
   // Fixed header with FLG = FNAME only.
   let hdr : Bytes = [0x1F, 0x8B, 0x08, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF]
@@ -30,7 +30,7 @@ test "gzip body backpressure reuses pending storage" {
     input.push((i & 0xFF).to_byte())
   }
   let gz = gzip_compress(Bytes::from_array(input), level=0)
-  let dec = Decoder::new()
+  let dec = Decoder()
   let obuf = FixedArray::make(1, b'\x00')
   let split = 9000
   assert_true(gz.length() > split + 1)
@@ -80,7 +80,7 @@ test "gzip completion releases consumed input and caches read-ahead" {
   for byte in suffix {
     combined.push(byte)
   }
-  let decoder = Decoder::new()
+  let decoder = Decoder()
   let output = FixedArray::make(128, b'\x00')
   let status = decoder.step(Bytes::from_array(combined)[:], output.mut_view())
   let consumed = decoder.last_consumed()
@@ -104,7 +104,7 @@ test "gzip failed state freezes decoder cursors" {
     0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x07, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   ]
-  let decoder = Decoder::new()
+  let decoder = Decoder()
   let output = FixedArray::make(1, b'\x00')
   let mut first_kind : GzipErrorKind = InvalidHeader
   let mut first_error = ""

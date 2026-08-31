@@ -2,7 +2,7 @@
 /// The block cap keeps both accepted input and generated output bounded even
 /// when a large caller-owned view is paired with no output capacity.
 test "Deflater pending stays bounded after a large feed" {
-  let d = Deflater::new()
+  let d = Deflater()
   let no_output = FixedArray::make(0, b'\x00')
   let arr : Array[Byte] = []
   for i in 0..<200000 {
@@ -17,9 +17,9 @@ test "Deflater pending stays bounded after a large feed" {
   assert_true(first_consumed < src.length())
   assert_eq(first_produced, 0)
   assert_true(
-    d.pending.length() <= window_size + deflate_block_size + min_lookahead,
+    d.pending.length() <= WINDOW_SIZE + DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD,
   )
-  assert_true(d.w.out.length() <= deflate_block_size + min_lookahead + 16)
+  assert_true(d.w.out.length() <= DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 16)
 
   let buf = FixedArray::make(65536, b'\x00')
   let mut pos = first_consumed
@@ -28,9 +28,9 @@ test "Deflater pending stays bounded after a large feed" {
     let consumed = d.last_consumed()
     pos = pos + consumed
     assert_true(
-      d.pending.length() <= window_size + deflate_block_size + min_lookahead,
+      d.pending.length() <= WINDOW_SIZE + DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD,
     )
-    assert_true(d.w.out.length() <= deflate_block_size + min_lookahead + 16)
+    assert_true(d.w.out.length() <= DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 16)
     if status is NeedMoreInput && pos == src.length() {
       break
     }
@@ -41,9 +41,9 @@ test "Deflater pending stays bounded after a large feed" {
 ///|
 test "Deflater latches end before a completed view is backpressured" {
   let source = Bytes::from_array(
-    Array::make(deflate_block_size + min_lookahead, b'\x41'),
+    Array::make(DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD, b'\x41'),
   )
-  let deflater = Deflater::new(level=0)
+  let deflater = Deflater(level=0)
   let no_output = FixedArray::make(0, b'\x00')
   let first_status = deflater.step(
     source[:],
@@ -89,7 +89,7 @@ test "stored block count handles empty and 65535-byte boundaries" {
 
 ///|
 test "Deflater reset clears a queued flush request" {
-  let d = Deflater::new(level=0)
+  let d = Deflater(level=0)
   let src = Bytes::from_array(Array::make(17000, b'\x5A'))
   let no_output = FixedArray::make(0, b'\x00')
   let _ = d.step(src[:], no_output.mut_view())
@@ -101,7 +101,7 @@ test "Deflater reset clears a queued flush request" {
 
 ///|
 test "Deflater reset clears a queued end request" {
-  let d = Deflater::new(level=0)
+  let d = Deflater(level=0)
   let src = Bytes::from_array(Array::make(17000, b'\x5A'))
   let no_output = FixedArray::make(0, b'\x00')
   let _ = d.step(src[:], no_output.mut_view())

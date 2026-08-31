@@ -24,7 +24,7 @@ fn make_bytes(seed : UInt, len : Int, alpha : Int) -> Bytes {
 ///|
 /// Compress `data` feeding one input byte per `step` into a one-byte output.
 fn deflate_1b(data : Bytes, level : Int) -> Bytes {
-  let def = @flate.Deflater::new(level~)
+  let def = @flate.Deflater(level~)
   let comp = Buffer()
   let ob = FixedArray::make(1, b'\x00')
   let n = data.length()
@@ -56,7 +56,7 @@ fn deflate_1b(data : Bytes, level : Int) -> Bytes {
 /// atomic units are retained inside Inflater, so every consumed byte is fed
 /// exactly once; no growing replay window is required.
 fn inflate_1b(comp : Bytes) -> Bytes raise {
-  let inf = @flate.Inflater::new()
+  let inf = @flate.Inflater()
   let out = Buffer()
   let ob = FixedArray::make(1, b'\x00')
   let n = comp.length()
