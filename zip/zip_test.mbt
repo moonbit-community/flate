@@ -199,11 +199,11 @@ test "zip set_comment invalidates the preserved trailer" {
 }
 
 ///|
-test "zip Archive::fork isolates add/replace/remove mutations" {
+test "zip Archive::clone isolates add/replace/remove mutations" {
   let archive = @zip.Archive()
   archive.add("a.txt", b"a", compression=Store)
   archive.add("b.txt", b"b", compression=Store)
-  let fork = archive.fork()
+  let fork = archive.clone()
   fork.add("c.txt", b"c")
   ignore(fork.replace("a.txt", b"a2"))
   ignore(fork.remove("b.txt"))
@@ -222,13 +222,13 @@ test "zip Archive::fork isolates add/replace/remove mutations" {
 }
 
 ///|
-test "zip Archive::fork preserves source records for byte-preserving writes" {
+test "zip Archive::clone preserves source records for byte-preserving writes" {
   let archive = @zip.Archive()
   archive.add("a.txt", b"alpha", compression=Store)
   archive.add("b.txt", b"beta beta", data_descriptor=true)
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
-  let fork = parsed.fork()
+  let fork = parsed.clone()
   assert_true(fork.entries()[0].raw_local_record() is Some(_))
   assert_true(fork.entries()[0].raw_central_record() is Some(_))
   assert_eq(@zip.write_preserving(fork), bytes)

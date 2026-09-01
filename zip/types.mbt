@@ -303,16 +303,23 @@ pub fn Archive::set_comment(self : Archive, comment : BytesView) -> Unit {
 }
 
 ///|
-/// Returns an independently mutable snapshot of this archive. The fork shares
+/// Returns an independently mutable snapshot of this archive. The clone shares
 /// entry payloads and preserved source records (immutable `Bytes`) but owns a
 /// fresh entries array, so `add`/`replace`/`remove` on either side never
 /// affects the other. `add` and `replace` defensively own their inputs.
-pub fn Archive::fork(self : Archive) -> Archive {
+pub fn Archive::clone(self : Archive) -> Archive {
   {
     entries: self.entries.copy(),
     comment: self.comment,
     trailer: self.trailer,
   }
+}
+
+///|
+/// Deprecated alias of `Archive::clone`.
+#deprecated("use `Archive::clone` instead")
+pub fn Archive::fork(self : Archive) -> Archive {
+  self.clone()
 }
 
 ///|

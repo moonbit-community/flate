@@ -51,8 +51,10 @@ pub struct Archive {
 }
 pub fn Archive::Archive() -> Self
 pub fn Archive::add(Self, String, BytesView, compression? : Compression, data_descriptor? : Bool) -> Unit
+pub fn Archive::clone(Self) -> Self
 pub fn Archive::comment(Self) -> BytesView
 pub fn Archive::entries(Self) -> ArrayView[Entry]
+#deprecated
 pub fn Archive::fork(Self) -> Self
 pub fn Archive::get(Self, StringView) -> BytesView?
 pub fn Archive::remove(Self, StringView) -> Bool
