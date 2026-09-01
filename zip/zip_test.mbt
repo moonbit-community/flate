@@ -199,6 +199,58 @@ test "zip set_comment invalidates the preserved trailer" {
 }
 
 ///|
+test "zip Archive::fork isolates add/replace/remove mutations" {
+  let archive = @zip.Archive()
+  archive.add("a.txt", b"a", compression=Store)
+  archive.add("b.txt", b"b", compression=Store)
+  let fork = archive.fork()
+  fork.add("c.txt", b"c")
+  ignore(fork.replace("a.txt", b"a2"))
+  ignore(fork.remove("b.txt"))
+  // The original is untouched.
+  assert_eq(archive.entries().length(), 2)
+  assert_eq(archive.get("a.txt"), Some(b"a"[:]))
+  assert_eq(archive.get("b.txt"), Some(b"b"[:]))
+  assert_true(archive.get("c.txt") is None)
+  // The fork reflects its own mutations.
+  assert_eq(fork.entries().length(), 2)
+  assert_eq(fork.get("a.txt"), Some(b"a2"[:]))
+  assert_eq(fork.get("c.txt"), Some(b"c"[:]))
+  // Mutating the original does not leak into the fork.
+  archive.add("d.txt", b"d")
+  assert_true(fork.get("d.txt") is None)
+}
+
+///|
+test "zip Archive::fork preserves source records for byte-preserving writes" {
+  let archive = @zip.Archive()
+  archive.add("a.txt", b"alpha", compression=Store)
+  archive.add("b.txt", b"beta beta", data_descriptor=true)
+  let bytes = @zip.write(archive)
+  let parsed = @zip.read(bytes)
+  let fork = parsed.fork()
+  assert_true(fork.entries()[0].raw_local_record() is Some(_))
+  assert_true(fork.entries()[0].raw_central_record() is Some(_))
+  assert_eq(@zip.write_preserving(fork), bytes)
+}
+
+///|
+test "zip Archive::retained_size_estimate is conservative and counts source records" {
+  let archive = @zip.Archive()
+  assert_true(archive.retained_size_estimate() >= 0L)
+  archive.add("a.txt", b"abc")
+  let base = archive.retained_size_estimate()
+  assert_true(base > 0L)
+  archive.add("b.txt", b"x")
+  assert_true(archive.retained_size_estimate() > base)
+  // A freshly read archive also counts its trailer and preserved source records.
+  let parsed = @zip.read(@zip.write(archive))
+  assert_true(
+    parsed.retained_size_estimate() > archive.retained_size_estimate(),
+  )
+}
+
+///|
 test "zip reads a python-produced archive" {
   let parsed = @zip.read(py_mini)
   assert_eq(parsed.entries().length(), 1)

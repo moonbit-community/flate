@@ -301,3 +301,56 @@ pub fn Archive::set_comment(self : Archive, comment : BytesView) -> Unit {
   self.comment = comment.to_owned()
   self.trailer = None
 }
+
+///|
+/// Returns an independently mutable snapshot of this archive. The fork shares
+/// entry payloads and preserved source records (immutable `Bytes`) but owns a
+/// fresh entries array, so `add`/`replace`/`remove` on either side never
+/// affects the other. `add` and `replace` defensively own their inputs.
+pub fn Archive::fork(self : Archive) -> Archive {
+  {
+    entries: self.entries.copy(),
+    comment: self.comment,
+    trailer: self.trailer,
+  }
+}
+
+///|
+/// Conservatively estimates bytes retained by this materialized archive: the
+/// archive comment, captured trailer records, and per-entry payloads, names,
+/// and preserved source records (each with a bookkeeping reserve). Payloads
+/// and records are counted exactly; only allocator/container overhead uses a
+/// fixed per-entry reserve. The source package buffer an archive was read from
+/// is not included.
+pub fn Archive::retained_size_estimate(self : Archive) -> Int64 {
+  let mut total = self.comment.length().to_int64()
+  match self.trailer {
+    Some(trailer) => {
+      total = total + trailer.classic_end_record.length().to_int64()
+      match trailer.zip64_end_record {
+        Some(record) => total = total + record.length().to_int64()
+        None => ()
+      }
+      match trailer.zip64_locator {
+        Some(locator) => total = total + locator.length().to_int64()
+        None => ()
+      }
+    }
+    None => ()
+  }
+  for entry in self.entries {
+    total = total + entry.data.length().to_int64()
+    total = total + entry.name.length().to_int64() * 2L
+    // Entry/array slots, references, option wrappers, and allocator metadata.
+    total = total + 512L
+    match entry.source {
+      Some(source) => {
+        total = total + source.local_record.length().to_int64()
+        total = total + source.central_record.length().to_int64()
+        total = total + 128L
+      }
+      None => ()
+    }
+  }
+  total
+}

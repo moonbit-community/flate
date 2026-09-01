@@ -53,9 +53,11 @@ pub fn Archive::Archive() -> Self
 pub fn Archive::add(Self, String, BytesView, compression? : Compression, data_descriptor? : Bool) -> Unit
 pub fn Archive::comment(Self) -> BytesView
 pub fn Archive::entries(Self) -> ArrayView[Entry]
+pub fn Archive::fork(Self) -> Self
 pub fn Archive::get(Self, StringView) -> BytesView?
 pub fn Archive::remove(Self, StringView) -> Bool
 pub fn Archive::replace(Self, StringView, BytesView) -> Bool
+pub fn Archive::retained_size_estimate(Self) -> Int64
 pub fn Archive::set_comment(Self, BytesView) -> Unit
 
 pub(all) enum Compression {

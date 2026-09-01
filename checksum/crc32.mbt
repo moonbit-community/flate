@@ -64,3 +64,32 @@ pub fn crc32(data : BytesView) -> UInt {
   d.update(data)
   d.finish()
 }
+
+///|
+/// Compute the CRC-32 checksum of `data` while polling `cancelled` at bounded
+/// byte intervals, returning `None` if cancellation is observed. Intended for
+/// cooperative cancellation on large, untrusted input; callers without that
+/// need can use `crc32`.
+pub fn crc32_cancellable(
+  bytes : BytesView,
+  cancelled? : () -> Bool = () => false,
+) -> UInt? {
+  if cancelled() {
+    return None
+  }
+  let crc = Crc32()
+  let mut start = 0
+  while start < bytes.length() {
+    if start > 0 && cancelled() {
+      return None
+    }
+    let end = (start + 4096).min(bytes.length())
+    crc.update(bytes[start:end])
+    start = end
+  }
+  if cancelled() {
+    None
+  } else {
+    Some(crc.finish())
+  }
+}
