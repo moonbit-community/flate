@@ -2,7 +2,9 @@
 
 ///|
 /// Property: the one-shot, incremental, byte-at-a-time, and cancellable CRC-32
-/// forms all agree; an always-true cancellation returns `None`.
+/// forms all agree; an always-true cancellation returns `None`, and a
+/// cancellation observed only after all data has been processed also returns
+/// `None` instead of silently succeeding.
 test "property: crc32 forms agree and are cancellable" {
   @quickcheck.check(
     (data : Bytes) => {
@@ -23,6 +25,18 @@ test "property: crc32 forms agree and are cancellable" {
         return false
       }
       if crc32_cancellable(data, cancelled=() => true) != None {
+        return false
+      }
+      // `cancelled` is polled at entry, after each 4 KiB chunk, and once more
+      // after the loop. A callback that turns `true` only on the very last
+      // poll must still cancel, exercising the post-loop check.
+      let total_polls = 2 + (data.length() - 1) / 4096
+      let mut polls = 0
+      let late_cancel = crc32_cancellable(data, cancelled=() => {
+        polls = polls + 1
+        polls >= total_polls
+      })
+      if late_cancel != None {
         return false
       }
       true
