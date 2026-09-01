@@ -2,3 +2,7 @@ import {
   "moonbit-community/flate",
   "moonbit-community/flate/checksum",
 }
+
+import {
+  "moonbitlang/core/quickcheck",
+} for "test"
