@@ -119,7 +119,6 @@ priv struct SourceRecord {
   local_record : Bytes
   central_record : Bytes
   central_zip64_offset_position : Int?
-  local_offset : Int
 }
 
 ///|
@@ -135,6 +134,7 @@ pub struct Entry {
   priv data_descriptor : Bool
   priv compressed_size : Int
   priv source : SourceRecord?
+  priv origin_local_offset : Int?
 }
 
 ///|
@@ -226,13 +226,16 @@ pub fn Archive::add(
     crc32: @checksum.crc32(data),
     compressed_size: data.length(),
     source: None,
+    origin_local_offset: None,
   })
 }
 
 ///|
 /// Replace the payload of the entry named `name`. The entry keeps its method
 /// policy but drops its raw source records (the next write re-encodes it).
-/// Returns `false` when no such entry exists.
+/// Its original position in the archive is retained, so a byte-preserving
+/// write keeps the entry where it was. Returns `false` when no such entry
+/// exists.
 pub fn Archive::replace(
   self : Archive,
   name : StringView,
@@ -250,6 +253,7 @@ pub fn Archive::replace(
         crc32: @checksum.crc32(data),
         compressed_size: data.length(),
         source: None,
+        origin_local_offset: entry.origin_local_offset,
       }
       return true
     }

@@ -530,18 +530,24 @@ priv struct EntryPlan {
 }
 
 ///|
-/// The order in which local records are written: pristine entries first, in
-/// their original source order, then entries created in memory. This lets a
-/// byte-preserving rewrite keep the archive's original layout for everything
-/// it can re-emit verbatim.
+/// The order in which local records are written: entries that originated in a
+/// read archive first, in their original local-record order, then entries
+/// created in memory. A `replace` keeps the replaced entry's original position
+/// (its source records are dropped for re-encoding, but its ordering hint
+/// survives), so a byte-preserving rewrite never silently moves an edited part
+/// to the end of the archive.
 fn archive_local_order(archive : Archive) -> Array[Int] {
   let order = []
   for index in 0..<archive.entries.length() {
     order.push(index)
   }
   order.sort_by((left, right) => {
-    match (archive.entries[left].source, archive.entries[right].source) {
-      (Some(a), Some(b)) => a.local_offset.compare(b.local_offset)
+    match
+      (
+        archive.entries[left].origin_local_offset,
+        archive.entries[right].origin_local_offset,
+      ) {
+      (Some(a), Some(b)) => a.compare(b)
       (Some(_), None) => -1
       (None, Some(_)) => 1
       (None, None) => left.compare(right)

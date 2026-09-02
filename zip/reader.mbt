@@ -615,7 +615,6 @@ fn decode_entry(
     ),
     central_record: meta.central_record,
     central_zip64_offset_position: meta.central_zip64_offset_position,
-    local_offset: meta.local_offset,
   })
   {
     name: meta.name,
@@ -625,6 +624,7 @@ fn decode_entry(
     data_descriptor: meta.data_descriptor,
     compressed_size: meta.compressed_size,
     source,
+    origin_local_offset: Some(meta.local_offset),
   }
 }
 

@@ -864,7 +864,6 @@ test "zip force_zip64 emits zip64 local and central records" {
     local_record: b"",
     central_record: template,
     central_zip64_offset_position: Some(38),
-    local_offset: 0,
   }
   write_preserved_central_record(Output::writing(None), source, 0)
   // A malformed preserved central record is rejected.
@@ -872,7 +871,6 @@ test "zip force_zip64 emits zip64 local and central records" {
     local_record: b"",
     central_record: b"bad template",
     central_zip64_offset_position: None,
-    local_offset: 0,
   }
   expect_zip_error(() => {
     write_preserved_central_record(Output::writing(None), bad_source, 0)
@@ -1034,7 +1032,7 @@ test "zip entry names and output limits are checked" {
 }
 
 ///|
-test "zip local-order keeps pristine records before fresh ones" {
+test "zip local-order keeps a replaced entry in its original position" {
   let src = Archive()
   src.add("a.txt", b"x")
   src.add("b.txt", b"y")
@@ -1042,6 +1040,6 @@ test "zip local-order keeps pristine records before fresh ones" {
   assert_eq(archive.replace("a.txt", b"xx"), true)
   let order = archive_local_order(archive)
   assert_eq(order.length(), 2)
-  assert_eq(archive.entries()[order[0]].name(), "b.txt")
-  assert_eq(archive.entries()[order[1]].name(), "a.txt")
+  assert_eq(archive.entries()[order[0]].name(), "a.txt")
+  assert_eq(archive.entries()[order[1]].name(), "b.txt")
 }
