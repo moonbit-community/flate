@@ -1043,3 +1043,28 @@ test "zip local-order keeps a replaced entry in its original position" {
   assert_eq(archive.entries()[order[0]].name(), "a.txt")
   assert_eq(archive.entries()[order[1]].name(), "b.txt")
 }
+
+///|
+test "zip local-order sorts read-origin entries ahead of fresh ones" {
+  let src = Archive()
+  src.add("a.txt", b"x")
+  src.add("b.txt", b"y")
+  let archive = read(write(src))
+  archive.add("fresh.txt", b"z")
+  // Read-origin entries (origin Some) precede a fresh entry (origin None).
+  let forward = archive_local_order(archive)
+  assert_eq(forward.length(), 3)
+  assert_eq(archive.entries()[forward[0]].name(), "a.txt")
+  assert_eq(archive.entries()[forward[1]].name(), "b.txt")
+  assert_eq(archive.entries()[forward[2]].name(), "fresh.txt")
+  // Even when the fresh entry sits first in the array, it still sorts last.
+  let mixed = {
+    entries: [archive.entries[2], archive.entries[0], archive.entries[1]],
+    comment: b"",
+    trailer: None,
+  }
+  let reordered = archive_local_order(mixed)
+  assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
+  assert_eq(mixed.entries()[reordered[1]].name(), "b.txt")
+  assert_eq(mixed.entries()[reordered[2]].name(), "fresh.txt")
+}
