@@ -1,0 +1,15 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbit-community/flate/benchmark"
+
+// Values
+pub fn bench_mixed(Int) -> Bytes
+
+pub fn bench_repetitive(Int) -> Bytes
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

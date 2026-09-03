@@ -1,0 +1,6 @@
+import {
+  "moonbit-community/flate",
+  "moonbit-community/flate/gzip",
+  "moonbit-community/flate/zlib",
+  "moonbitlang/core/bench",
+}
