@@ -101,6 +101,17 @@ test "inflate stored block via inflate_all" {
 }
 
 ///|
+test "inflate_all bulk-copies multi-block stored input" {
+  let bytes = Array::make(131072, b'\x00')
+  for i in 0..<bytes.length() {
+    bytes[i] = (i * 31 + i / 7).to_byte()
+  }
+  let source = Bytes::from_array(bytes)
+  let compressed = @flate.deflate_all(source, level=0)
+  assert_eq(@flate.inflate_all(compressed), source)
+}
+
+///|
 /// Stream a dynamic-Huffman block through `step`, revealing input 5 bytes at a
 /// time and draining a 300-byte output buffer (< 611 decoded), exercising both
 /// NeedMoreInput and NeedMoreOutput suspension/resume.

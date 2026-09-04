@@ -478,9 +478,7 @@ fn parse_central_directory(
   let central_bytes = bytes[eocd.central_offset:eocd.central_boundary]
   let central_reader = Cursor(central_bytes, 0)
   let max_plausible = eocd.central_size / 46
-  let metas : Array[EntryMeta] = Array::new(
-    capacity=eocd.entry_count.min(max_plausible),
-  )
+  let metas = Array(capacity=eocd.entry_count.min(max_plausible))
   let mut used_total = 0
   for entry_index in 0..<eocd.entry_count {
     if entry_index % 64 == 0 {

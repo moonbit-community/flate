@@ -238,6 +238,25 @@ test "inflate_all polls the cancel callback" {
 }
 
 ///|
+test "inflate_all polls while copying stored blocks" {
+  let source = Bytes::from_array(Array::make(10000, b'X'))
+  let compressed = @flate.deflate_all(source, level=0)
+  let mut calls = 0
+  try
+    ignore(
+      @flate.inflate_all(compressed, cancelled=() => {
+        calls = calls + 1
+        calls >= 3
+      }),
+    )
+  catch {
+    InflateError(kind, _) => assert_true(kind == Cancelled)
+  } noraise {
+    _ => fail("inflate_all did not poll while copying stored data")
+  }
+}
+
+///|
 test "inflate_all_limited polls the cancel callback" {
   let source = Bytes::from_array(Array::make(20000, b'X'))
   let compressed = @flate.deflate_all(source)

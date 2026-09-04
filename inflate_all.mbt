@@ -1,11 +1,74 @@
 ///|
+/// Growable fixed storage for the one-shot inflater. `FixedArray` exposes the
+/// core bulk-copy primitives needed by stored blocks while `length` records
+/// the initialized output prefix.
+priv struct OutputBuffer {
+  mut storage : FixedArray[Byte]
+  mut length : Int
+}
+
+///|
+const OUTPUT_INITIAL_CAPACITY : Int = 4096
+
+///|
+fn OutputBuffer::OutputBuffer() -> OutputBuffer {
+  { storage: FixedArray::make(0, b'\x00'), length: 0, }
+}
+
+///|
+fn OutputBuffer::ensure_capacity(self : OutputBuffer, additional : Int) -> Unit {
+  let required = self.length + additional
+  guard required > self.storage.length() else { return }
+  let current = self.storage.length()
+  let capacity = if current == 0 {
+    required.max(OUTPUT_INITIAL_CAPACITY)
+  } else if required - current <= current {
+    current * 2
+  } else {
+    required
+  }
+  let storage = FixedArray::make(capacity, b'\x00')
+  FixedArray::unsafe_blit(storage, 0, self.storage, 0, self.length)
+  self.storage = storage
+}
+
+///|
+fn OutputBuffer::push(self : OutputBuffer, byte : Byte) -> Unit {
+  self.ensure_capacity(1)
+  self.storage[self.length] = byte
+  self.length = self.length + 1
+}
+
+///|
+fn OutputBuffer::append_bytes(
+  self : OutputBuffer,
+  source : Bytes,
+  source_offset : Int,
+  length : Int,
+) -> Unit {
+  self.ensure_capacity(length)
+  self.storage.blit_from_bytes(self.length, source, source_offset, length)
+  self.length = self.length + length
+}
+
+///|
+fn OutputBuffer::at(self : OutputBuffer, index : Int) -> Byte {
+  self.storage[index]
+}
+
+///|
+fn OutputBuffer::to_bytes(self : OutputBuffer) -> Bytes {
+  Bytes::from_array(self.storage[:self.length])
+}
+
+///|
 /// In-memory DEFLATE decoder. Reads from a `Bytes` and appends to `out`.
 priv struct MemDecoder {
   input : Bytes
   mut pos : Int // next input byte
   mut bitbuf : UInt // LSB-first bit accumulator
   mut bit_count : Int // valid bits in `bitbuf`
-  out : Array[Byte]
+  out : OutputBuffer
   cancelled : () -> Bool // polled every `CANCEL_GRANULARITY` produced bytes
   mut next_cancel : Int // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
@@ -29,7 +92,7 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
     pos: 0,
     bitbuf: 0,
     bit_count: 0,
-    out: [],
+    out: OutputBuffer(),
     cancelled,
     next_cancel: 0,
     dyn_litlen: HuffmanDecoder(),
@@ -41,11 +104,11 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
 
 ///|
 fn MemDecoder::check_cancel(self : MemDecoder) -> Unit raise InflateError {
-  guard self.out.length() >= self.next_cancel else { return }
+  guard self.out.length >= self.next_cancel else { return }
   if (self.cancelled)() {
     raise InflateError(Cancelled, "cancelled by caller")
   }
-  self.next_cancel = self.out.length() + CANCEL_GRANULARITY
+  self.next_cancel = self.out.length + CANCEL_GRANULARITY
 }
 
 ///|
@@ -145,15 +208,30 @@ fn MemDecoder::decode_block(
     // distance when the code carries no extra bits.
     let dist = distance_code_base(dsym) +
       self.read_bits(distance_code_extra(dsym))
-    let available_history = self.out.length()
+    let available_history = self.out.length
     guard available_history >= WINDOW_SIZE ||
       back_reference_distance_is_valid(dist, available_history) else {
       raise InflateError(Corrupt, "corrupt: distance too far back")
     }
     let start = available_history - dist
     for k in 0..<length {
-      self.push(self.out[start + k])
+      self.push(self.out.at(start + k))
     }
+  }
+}
+
+///|
+fn MemDecoder::copy_stored(self : MemDecoder, length : Int) -> Unit raise InflateError {
+  let mut remaining = length
+  while remaining > 0 {
+    // Preserve `inflate_all`'s cancellation cadence while copying each chunk
+    // through the core bulk-copy primitive.
+    let until_cancel = self.next_cancel - self.out.length
+    let chunk = remaining.min(until_cancel)
+    self.out.append_bytes(self.input, self.pos, chunk)
+    self.pos = self.pos + chunk
+    remaining = remaining - chunk
+    self.check_cancel()
   }
 }
 
@@ -174,10 +252,7 @@ fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
   if self.pos + len > self.input.length() {
     raise InflateError(Truncated, "unexpected end of input")
   }
-  for k in 0..<len {
-    self.push(self.input[self.pos + k])
-  }
-  self.pos = self.pos + len
+  self.copy_stored(len)
 }
 
 ///|
@@ -234,7 +309,7 @@ pub fn inflate_all(
 ) -> Bytes raise InflateError {
   let d = MemDecoder(input, cancelled)
   d.run()
-  Bytes::from_array(d.out)
+  d.out.to_bytes()
 }
 
 ///|
