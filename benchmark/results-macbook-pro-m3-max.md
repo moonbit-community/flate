@@ -2,17 +2,17 @@
 
 These are reference measurements for the MoonBit implementation in this
 repository and the standalone `libdeflate` C runner. They were collected on
-2026-09-03.
+2026-09-04.
 
 ## Device and Toolchain
 
 - Apple MacBook Pro, `Mac15,9`, Apple M3 Max
 - 16 CPU cores (12 performance, 4 efficiency), 128 GB RAM
 - macOS `26.6.2` (`25G83`), `arm64`
-- Moon `0.1.20260901`, moonc `0.10.11+fa880aae3-nightly`
-- Apple clang `21.0.0` (`-O3 -DNDEBUG` for the C runner)
+- Moon `0.1.20260901`, moonc `0.10.11+5876a226e-nightly`
+- Apple clang `21.0.0` from Xcode (`-O3 -DNDEBUG` for the C runner)
 - libdeflate `1.25` from Homebrew
-- repository working tree at `1c5e055`
+- repository working tree at `0183fac`
 
 ## Method
 
@@ -44,15 +44,15 @@ Throughput in MiB/s. `MoonBit` is derived from its reported mean milliseconds;
 
 | Level | Corpus | MoonBit compress | libdeflate compress | MoonBit decompress | libdeflate decompress |
 | ---: | --- | ---: | ---: | ---: | ---: |
-| 1 | repetitive | 179.9 | 1673.6 | 484.5 | 10939.5 |
-| 1 | random | 34.2 | 172.5 | 504.5 | 67567.6 |
-| 1 | mixed | 58.1 | 371.4 | 474.0 | 21818.8 |
-| 6 | repetitive | 176.1 | 1132.1 | 478.4 | 13648.5 |
-| 6 | random | 33.9 | 134.4 | 461.9 | 66880.7 |
-| 6 | mixed | 57.5 | 262.0 | 474.5 | 21960.7 |
-| 9 | repetitive | 174.8 | 1154.3 | 457.3 | 13467.7 |
-| 9 | random | 27.7 | 129.1 | 445.7 | 67953.3 |
-| 9 | mixed | 48.9 | 253.5 | 486.6 | 21139.9 |
+| 1 | repetitive | 186.6 | 1716.0 | 385.9 | 11315.3 |
+| 1 | random | 37.0 | 177.7 | 13616.6 | 69367.4 |
+| 1 | mixed | 64.4 | 409.4 | 730.7 | 21985.8 |
+| 6 | repetitive | 186.6 | 1184.5 | 382.4 | 13159.3 |
+| 6 | random | 37.4 | 142.2 | 13041.2 | 70561.7 |
+| 6 | mixed | 62.8 | 280.3 | 733.6 | 22986.4 |
+| 9 | repetitive | 174.8 | 1152.6 | 387.2 | 13509.9 |
+| 9 | random | 27.9 | 135.4 | 13276.7 | 70382.9 |
+| 9 | mixed | 49.6 | 269.8 | 736.7 | 22845.7 |
 
 For the C output sizes, raw DEFLATE produced 833/874 bytes for repetitive data
 (L6/L9 versus L1), 262,169 bytes for random data, and 131,646/131,574 bytes
@@ -66,17 +66,18 @@ each cell formatted as `compress / decompress`.
 
 | Corpus | MoonBit zlib | libdeflate zlib | MoonBit gzip | libdeflate gzip |
 | --- | ---: | ---: | ---: | ---: |
-| repetitive | 105.9 / 142.9 | 1114.0 / 11187.7 | 123.8 / 164.5 | 1132.1 / 11170.2 |
-| random | 29.3 / 147.9 | 131.1 / 30883.3 | 30.3 / 172.4 | 133.8 / 31577.6 |
-| mixed | 46.9 / 144.5 | 258.0 / 16224.3 | 50.1 / 167.8 | 259.6 / 16195.9 |
+| repetitive | 109.2 / 146.2 | 1142.5 / 11496.4 | 126.3 / 167.8 | 1153.8 / 11006.9 |
+| random | 31.6 / 154.3 | 135.2 / 31613.6 | 33.5 / 179.9 | 142.4 / 32907.7 |
+| mixed | 49.8 / 151.5 | 275.7 / 16568.4 | 53.0 / 176.1 | 271.7 / 16848.6 |
 
 ## Conclusions
 
 - At L6 raw compression, libdeflate is about `6.4x` faster on repetitive data,
-  `4.0x` on random data, and `4.6x` on mixed data.
-- At L6 raw decompression, the measured gaps are about `28x`, `145x`, and
-  `46x`, respectively. The very large random-data gap is dominated by the
-  stored-block/copy path and should not be generalized to all DEFLATE streams.
+  `3.8x` on random data, and `4.5x` on mixed data.
+- At L6 raw decompression, libdeflate is about `34x` faster on repetitive data,
+  `5.4x` on random data, and `31x` on mixed data. The random-data gap is much
+  smaller in this run because the current MoonBit native backend handles the
+  stored/copy path substantially faster than the previous toolchain.
 - The gap is not a pure algorithm comparison: MoonBit's public one-shot API
   allocates its returned `Bytes` during the timed operation, while the C runner
   reuses buffers and codec objects. The C and MoonBit decoders also consume
