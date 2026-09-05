@@ -277,7 +277,7 @@ fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int raise {
     if n > HUFFMAN_CHUNK_BITS {
       let link = ((self.bitbuf >> HUFFMAN_CHUNK_BITS).reinterpret_as_uint() &
       h.link_mask).reinterpret_as_int()
-      chunk = h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()][link]
+      chunk = h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int() + link]
       n = (chunk & 0xF).reinterpret_as_int()
     }
     if n <= self.bit_count {
@@ -483,8 +483,8 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
   guard v < 286 else {
     raise InflateError(Corrupt, "corrupt: invalid literal/length code")
   }
-  let base = length_code_base(v)
-  let length = base + self.read_bits(length_code_extra(v))
+  let length_info = length_code_info_table[v - 257]
+  let length = (length_info >> 3) + self.read_bits(length_info & 0x7)
   let dsym = if self.hd_fixed {
     fixed_distance_symbol(self.read_bits(5))
   } else {
@@ -493,10 +493,10 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
   guard dsym.reinterpret_as_uint() < MAX_NUM_DIST.reinterpret_as_uint() else {
     raise InflateError(Corrupt, "corrupt: invalid distance code")
   }
+  let distance_info = distance_code_info_table[dsym]
   // `read_bits(0)` reads nothing and returns 0, so the base serves as the
   // distance when the code carries no extra bits.
-  let dist = distance_code_base(dsym) +
-    self.read_bits(distance_code_extra(dsym))
+  let dist = (distance_info >> 4) + self.read_bits(distance_info & 0xF)
   guard self.filled || back_reference_distance_is_valid(dist, self.wpos) else {
     raise InflateError(Corrupt, "corrupt: distance too far back")
   }

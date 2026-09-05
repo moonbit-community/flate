@@ -13,11 +13,13 @@ pub const HUFFMAN_VALUE_SHIFT : Int = 4
 
 ///|
 /// zlib-style chunked Huffman decode table. `chunk & 0xF` is the code length,
-/// `chunk >> 4` is the value (or a link-table index for codes wider than 9 bits).
+/// `chunk >> 4` is the value (or an offset into the flat link table for codes
+/// wider than 9 bits). Keeping all link tables contiguous removes one pointer
+/// chase from the decode hot path.
 priv struct HuffmanDecoder {
   mut min : Int
   mut chunks : Array[UInt]
-  mut links : Array[Array[UInt]]
+  mut links : Array[UInt]
   mut link_mask : UInt
 }
 
@@ -68,14 +70,13 @@ fn HuffmanDecoder::initialize(
     let num_links = 1 << (max - HUFFMAN_CHUNK_BITS)
     self.link_mask = (num_links - 1).reinterpret_as_uint()
     let link = nextcode[HUFFMAN_CHUNK_BITS + 1] >> 1
-    self.links = Array::make(512 - link, ([] : Array[UInt]))
+    self.links = Array::make((512 - link) * num_links, 0U)
     for j in link..<512 {
       let mut reverse = reverse16((j & 0xffff).reinterpret_as_uint()).reinterpret_as_int()
       reverse = reverse >> (16 - HUFFMAN_CHUNK_BITS)
-      let off = j - link
+      let off = (j - link) * num_links
       self.chunks[reverse] = (off.reinterpret_as_uint() << HUFFMAN_VALUE_SHIFT) |
         (HUFFMAN_CHUNK_BITS + 1).reinterpret_as_uint()
-      self.links[off] = Array::make(num_links, 0U)
     }
   }
   for idx, n in lengths {
@@ -95,12 +96,12 @@ fn HuffmanDecoder::initialize(
     } else {
       let j = reverse & 0x1FF
       let value = (self.chunks[j] >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
-      let linktab = self.links[value]
+      let num_links = 1 << (max - HUFFMAN_CHUNK_BITS)
       reverse = reverse >> HUFFMAN_CHUNK_BITS
       for off = reverse
-          off < linktab.length()
+          off < num_links
           off = off + (1 << (n - HUFFMAN_CHUNK_BITS)) {
-        linktab[off] = chunk
+        self.links[value + off] = chunk
       }
     }
   }

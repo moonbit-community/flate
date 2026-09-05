@@ -74,36 +74,6 @@ fn interpret_code_length_repeat(
 }
 
 ///|
-/// Interpret a literal/length code's base length and extra-bit width
-/// (RFC 1951 §3.2.5). The caller adds `read_bits(extra)` to the base.
-/// Split into two scalar helpers rather than returning a tuple so the per-token
-/// decode path allocates nothing.
-#inline
-fn length_code_base(code : Int) -> Int {
-  length_code_info_table[code - 257] >> 3
-}
-
-///|
-#inline
-fn length_code_extra(code : Int) -> Int {
-  length_code_info_table[code - 257] & 0x7
-}
-
-///|
-/// Interpret a distance code's base distance and extra-bit width
-/// (RFC 1951 §3.2.5). The caller adds `read_bits(extra)` to the base.
-#inline
-fn distance_code_base(code : Int) -> Int {
-  distance_code_info_table[code] >> 4
-}
-
-///|
-#inline
-fn distance_code_extra(code : Int) -> Int {
-  distance_code_info_table[code] & 0xF
-}
-
-///|
 /// The fixed-Huffman distance symbol carried by a raw five-bit code: the code
 /// is stored bit-reversed in the lowest five bits (RFC 1951 §3.2.6).
 #inline

@@ -1,63 +1,97 @@
 ///|
-/// Growable fixed storage for the one-shot inflater. `FixedArray` exposes the
-/// core bulk-copy primitives needed by stored blocks while `length` records
-/// the initialized output prefix.
-priv struct OutputBuffer {
+/// Output storage for the one-shot decoder. Unlike the general-purpose core
+/// `Buffer`, this exposes the fixed backing array needed for DEFLATE's
+/// overlapping back-reference copies.
+priv struct DecodeOutput {
   mut storage : FixedArray[Byte]
   mut length : Int
 }
 
 ///|
-const OUTPUT_INITIAL_CAPACITY : Int = 4096
-
-///|
-fn OutputBuffer::OutputBuffer() -> OutputBuffer {
-  { storage: FixedArray::make(0, b'\x00'), length: 0, }
+fn DecodeOutput::DecodeOutput(size_hint : Int) -> DecodeOutput {
+  { storage: FixedArray::make(size_hint.max(1), b'\x00'), length: 0, }
 }
 
 ///|
-fn OutputBuffer::ensure_capacity(self : OutputBuffer, additional : Int) -> Unit {
+fn DecodeOutput::ensure_capacity(self : DecodeOutput, additional : Int) -> Unit {
   let required = self.length + additional
   guard required > self.storage.length() else { return }
   let current = self.storage.length()
-  let capacity = if current == 0 {
-    required.max(OUTPUT_INITIAL_CAPACITY)
-  } else if required - current <= current {
-    current * 2
+  let capacity = if required < self.length {
+    abort("DEFLATE output size overflow")
   } else {
-    required
+    let doubled = current * 2
+    if doubled > current && doubled >= required {
+      doubled
+    } else {
+      required
+    }
   }
-  let storage = FixedArray::make(capacity, b'\x00')
-  FixedArray::unsafe_blit(storage, 0, self.storage, 0, self.length)
-  self.storage = storage
+  self.storage = FixedArray::make_and_blit(
+    self.storage,
+    allocate_len=capacity,
+    init=b'\x00',
+    len=self.length,
+  )
 }
 
 ///|
-fn OutputBuffer::push(self : OutputBuffer, byte : Byte) -> Unit {
+fn DecodeOutput::append_byte(self : DecodeOutput, byte : Byte) -> Unit {
   self.ensure_capacity(1)
   self.storage[self.length] = byte
   self.length = self.length + 1
 }
 
 ///|
-fn OutputBuffer::append_bytes(
-  self : OutputBuffer,
+fn DecodeOutput::append_bytes(
+  self : DecodeOutput,
   source : Bytes,
   source_offset : Int,
   length : Int,
 ) -> Unit {
+  guard length > 0 else { return }
   self.ensure_capacity(length)
   self.storage.blit_from_bytes(self.length, source, source_offset, length)
   self.length = self.length + length
 }
 
 ///|
-fn OutputBuffer::at(self : OutputBuffer, index : Int) -> Byte {
-  self.storage[index]
+/// Append a DEFLATE match. The first copy is non-overlapping; subsequent copies
+/// double the generated prefix so `distance < length` has the required
+/// forward-expanding semantics instead of ordinary memmove semantics.
+fn DecodeOutput::append_repeated_suffix(
+  self : DecodeOutput,
+  distance : Int,
+  length : Int,
+) -> Unit {
+  guard length > 0 else { return }
+  self.ensure_capacity(length)
+  let start = self.length
+  let first = distance.min(length)
+  FixedArray::unsafe_blit(
+    self.storage,
+    start,
+    self.storage,
+    start - distance,
+    first,
+  )
+  let mut copied = first
+  while copied < length {
+    let chunk = copied.min(length - copied)
+    FixedArray::unsafe_blit(
+      self.storage,
+      start + copied,
+      self.storage,
+      start,
+      chunk,
+    )
+    copied = copied + chunk
+  }
+  self.length = self.length + length
 }
 
 ///|
-fn OutputBuffer::to_bytes(self : OutputBuffer) -> Bytes {
+fn DecodeOutput::to_bytes(self : DecodeOutput) -> Bytes {
   Bytes::from_array(self.storage[:self.length])
 }
 
@@ -68,7 +102,7 @@ priv struct MemDecoder {
   mut pos : Int // next input byte
   mut bitbuf : UInt // LSB-first bit accumulator
   mut bit_count : Int // valid bits in `bitbuf`
-  out : OutputBuffer
+  out : DecodeOutput
   cancelled : () -> Bool // polled every `CANCEL_GRANULARITY` produced bytes
   mut next_cancel : Int // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
@@ -79,6 +113,15 @@ priv struct MemDecoder {
 
 ///|
 const CANCEL_GRANULARITY : Int = 4096
+
+///|
+/// A DEFLATE Huffman code is at most 15 bits. The one-shot decoder can keep a
+/// 24-bit reservoir because it is allowed to consume trailing bytes after the
+/// final block, as documented by `inflate_all`'s prefix semantics.
+const HUFFMAN_FAST_BITS : Int = 15
+
+///|
+const HUFFMAN_FAST_REFILL_BITS : Int = 24
 
 ///|
 /// Output chunk size for the streaming one-shot drivers: each `step` call
@@ -92,7 +135,7 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
     pos: 0,
     bitbuf: 0,
     bit_count: 0,
-    out: OutputBuffer(),
+    out: DecodeOutput(input.length()),
     cancelled,
     next_cancel: 0,
     dyn_litlen: HuffmanDecoder(),
@@ -112,8 +155,9 @@ fn MemDecoder::check_cancel(self : MemDecoder) -> Unit raise InflateError {
 }
 
 ///|
+#inline
 fn MemDecoder::push(self : MemDecoder, b : Byte) -> Unit raise InflateError {
-  self.out.push(b)
+  self.out.append_byte(b)
   self.check_cancel()
 }
 
@@ -161,10 +205,8 @@ fn MemDecoder::huff_sym(
     let mut chunk = h.chunks[(self.bitbuf & 0x1FF).reinterpret_as_int()]
     n = (chunk & 0xF).reinterpret_as_int()
     if n > HUFFMAN_CHUNK_BITS {
-      chunk = h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()][((
-          self.bitbuf >> HUFFMAN_CHUNK_BITS
-        ) &
-        h.link_mask).reinterpret_as_int()]
+      let link = ((self.bitbuf >> HUFFMAN_CHUNK_BITS) & h.link_mask).reinterpret_as_int()
+      chunk = h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int() + link]
       n = (chunk & 0xF).reinterpret_as_int()
     }
     if n <= self.bit_count {
@@ -179,44 +221,127 @@ fn MemDecoder::huff_sym(
 }
 
 ///|
+/// Refill the one-shot bit reservoir in two-byte groups when possible. This is
+/// intentionally private to `MemDecoder`: a streaming inflater must not read
+/// past the current symbol because those bytes can be a container trailer.
+#inline
+fn MemDecoder::refill_huffman_fast(self : MemDecoder) -> Unit {
+  while self.bit_count < HUFFMAN_FAST_REFILL_BITS && self.pos < self.input.length() {
+    if self.bit_count <= HUFFMAN_FAST_BITS &&
+      self.pos + 1 < self.input.length() {
+      let pair = self.input[self.pos].to_uint() |
+        (self.input[self.pos + 1].to_uint() << 8)
+      self.bitbuf = self.bitbuf | (pair << self.bit_count)
+      self.bit_count = self.bit_count + 16
+      self.pos = self.pos + 2
+    } else {
+      self.bitbuf = self.bitbuf | (self.input[self.pos].to_uint() << self.bit_count)
+      self.bit_count = self.bit_count + 8
+      self.pos = self.pos + 1
+    }
+  }
+}
+
+///|
+/// Decode a data-block symbol using the prefilled fast reservoir when possible.
+/// Unlike the dynamic-header path, this loop is the dominant one-shot decode
+/// cost, so it keeps a wide reservoir and only falls back near physical EOF.
+#inline
+fn MemDecoder::huff_sym_data(
+  self : MemDecoder,
+  h : HuffmanDecoder,
+) -> Int raise InflateError {
+  self.refill_huffman_fast()
+  if self.bit_count < HUFFMAN_FAST_BITS {
+    return self.huff_sym(h)
+  }
+  let mut chunk = h.chunks[(self.bitbuf & 0x1FF).reinterpret_as_int()]
+  let mut n = (chunk & 0xF).reinterpret_as_int()
+  if n > HUFFMAN_CHUNK_BITS {
+    let link = ((self.bitbuf >> HUFFMAN_CHUNK_BITS) & h.link_mask).reinterpret_as_int()
+    chunk = h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int() + link]
+    n = (chunk & 0xF).reinterpret_as_int()
+  }
+  guard n != 0 else { raise InflateError(Corrupt, "corrupt: bad Huffman code") }
+  self.bitbuf = self.bitbuf >> n
+  self.bit_count = self.bit_count - n
+  (chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
+}
+
+///|
+/// Decode and copy one length/distance pair. Keeping the uncommon match path
+/// separate lets `decode_block` keep its literal fast loop branch-predictable.
+#inline
+fn MemDecoder::decode_match(
+  self : MemDecoder,
+  code : Int,
+  hd : HuffmanDecoder?,
+) -> Unit raise InflateError {
+  guard code < 286 else {
+    raise InflateError(Corrupt, "corrupt: invalid literal/length code")
+  }
+  let length_info = length_code_info_table[code - 257]
+  let length = (length_info >> 3) + self.read_bits(length_info & 0x7)
+  let dsym = if hd is Some(h) {
+    self.huff_sym_data(h)
+  } else {
+    fixed_distance_symbol(self.read_bits(5))
+  }
+  guard dsym.reinterpret_as_uint() < MAX_NUM_DIST.reinterpret_as_uint() else {
+    raise InflateError(Corrupt, "corrupt: invalid distance code")
+  }
+  let distance_info = distance_code_info_table[dsym]
+  // `read_bits(0)` reads nothing and returns 0, so the base serves as the
+  // distance when the code carries no extra bits.
+  let dist = (distance_info >> 4) + self.read_bits(distance_info & 0xF)
+  let available_history = self.out.length
+  guard available_history >= WINDOW_SIZE ||
+    back_reference_distance_is_valid(dist, available_history) else {
+    raise InflateError(Corrupt, "corrupt: distance too far back")
+  }
+  self.copy_match(dist, length)
+}
+
+///|
 fn MemDecoder::decode_block(
   self : MemDecoder,
   hl : HuffmanDecoder,
   hd : HuffmanDecoder?,
 ) -> Unit raise InflateError {
   for ;; {
-    let v = self.huff_sym(hl)
+    let v = self.huff_sym_data(hl)
     guard v >= 256 else {
       self.push(v.to_byte())
+      // Most DEFLATE streams contain literal runs. Decode one extra symbol
+      // before returning to the match/EOB dispatch to amortize that branch.
+      let next = self.huff_sym_data(hl)
+      guard next >= 256 else {
+        self.push(next.to_byte())
+        continue
+      }
+      guard next != 256 else { return }
+      self.decode_match(next, hd)
       continue
     }
     guard v != 256 else { return }
-    guard v < 286 else {
-      raise InflateError(Corrupt, "corrupt: invalid literal/length code")
-    }
-    let base = length_code_base(v)
-    let length = base + self.read_bits(length_code_extra(v))
-    let dsym = if hd is Some(h) {
-      self.huff_sym(h)
-    } else {
-      fixed_distance_symbol(self.read_bits(5))
-    }
-    guard dsym.reinterpret_as_uint() < MAX_NUM_DIST.reinterpret_as_uint() else {
-      raise InflateError(Corrupt, "corrupt: invalid distance code")
-    }
-    // `read_bits(0)` reads nothing and returns 0, so the base serves as the
-    // distance when the code carries no extra bits.
-    let dist = distance_code_base(dsym) +
-      self.read_bits(distance_code_extra(dsym))
-    let available_history = self.out.length
-    guard available_history >= WINDOW_SIZE ||
-      back_reference_distance_is_valid(dist, available_history) else {
-      raise InflateError(Corrupt, "corrupt: distance too far back")
-    }
-    let start = available_history - dist
-    for k in 0..<length {
-      self.push(self.out.at(start + k))
-    }
+    self.decode_match(v, hd)
+  }
+}
+
+///|
+fn MemDecoder::copy_match(
+  self : MemDecoder,
+  distance : Int,
+  length : Int,
+) -> Unit raise InflateError {
+  let mut remaining = length
+  while remaining > 0 {
+    // Keep the public cancellation cadence while copying in large chunks.
+    let until_cancel = self.next_cancel - self.out.length
+    let chunk = remaining.min(until_cancel)
+    self.out.append_repeated_suffix(distance, chunk)
+    remaining = remaining - chunk
+    self.check_cancel()
   }
 }
 
