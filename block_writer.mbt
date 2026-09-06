@@ -107,6 +107,13 @@ priv struct DynamicCodes {
 }
 
 ///|
+priv enum BlockEncoding {
+  Stored
+  Fixed
+  Dynamic(DynamicCodes)
+}
+
+///|
 /// Build the dynamic-Huffman code tables for one block from its symbol
 /// frequencies. `ll_freq` must already include the end-of-block symbol.
 fn build_dynamic_codes(
@@ -208,6 +215,42 @@ fn estimate_block_cost(
     stored: stored_bits,
     fixed: 3 + fixed_sym_bits + extra_bits,
     dynamic: 3 + dyn_hdr_bits + dyn_sym_bits + extra_bits,
+  }
+}
+
+///|
+// Decide an encoding once for both input backings. The streaming writer can
+// then copy a stored payload directly out of its ring, while one-shot callers
+// retain their contiguous `Bytes` fast path.
+fn choose_block_encoding(
+  byte_len : Int,
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> BlockEncoding {
+  ll_freq[256] += 1 // end-of-block
+  let codes = build_dynamic_codes(ll_freq, d_freq)
+  let cost = estimate_block_cost(codes, byte_len, ll_freq, d_freq)
+  if cost.stored < cost.fixed && cost.stored < cost.dynamic {
+    Stored
+  } else if cost.dynamic < cost.fixed {
+    Dynamic(codes)
+  } else {
+    Fixed
+  }
+}
+
+///|
+fn write_huffman_block(
+  w : BitWriter,
+  encoding : BlockEncoding,
+  tokens : ArrayView[Int],
+  is_final : Bool,
+) -> Unit {
+  w.write_bit(if is_final { 1 } else { 0 }) // BFINAL
+  match encoding {
+    Fixed => write_fixed_block(w, tokens)
+    Dynamic(codes) => write_dynamic_block(w, codes, tokens)
+    Stored => ()
   }
 }
 
@@ -341,23 +384,10 @@ fn emit_block(
   d_freq : Array[Int],
   is_final~ : Bool,
 ) -> Unit {
-  ll_freq[256] += 1 // end-of-block
-
-  // Build dynamic codes once, then let the shared accounting choose the
-  // encoding and the write path reuse the same tables.
-  let codes = build_dynamic_codes(ll_freq, d_freq)
-  let cost = estimate_block_cost(codes, end - start, ll_freq, d_freq)
-  // Stored is the fallback that caps worst-case expansion on incompressible
-  // data: verbatim bytes at ~5 bytes of framing per 65535-byte chunk.
-  guard cost.stored >= cost.fixed || cost.stored >= cost.dynamic else {
-    write_stored(w, data, start, end, is_final~)
-    return
-  }
-  w.write_bit(if is_final { 1 } else { 0 }) // BFINAL
-  if cost.dynamic < cost.fixed {
-    write_dynamic_block(w, codes, tokens)
-  } else {
-    write_fixed_block(w, tokens)
+  let encoding = choose_block_encoding(end - start, ll_freq, d_freq)
+  match encoding {
+    Stored => write_stored(w, data, start, end, is_final~)
+    Fixed | Dynamic(_) => write_huffman_block(w, encoding, tokens, is_final)
   }
 }
 
@@ -397,5 +427,61 @@ fn write_stored(
     if last {
       break
     }
+  }
+}
+
+///|
+// Streaming equivalent of `write_stored`: absolute positions map through the
+// low half of the mirrored input ring, so no temporary `Bytes` needs to be
+// materialized for an incompressible block.
+fn write_stored_window(
+  w : BitWriter,
+  data : FixedArray[Byte],
+  start : Int,
+  end : Int,
+  is_final~ : Bool,
+) -> Unit {
+  let mut p = start
+  for ;; {
+    let n = end - p
+    let chunk = if n < 65535 { n } else { 65535 }
+    let last = p + chunk == end
+    if is_final && last {
+      w.write_bit(1)
+    } else {
+      w.write_bit(0)
+    }
+    w.write_bits(0, 2)
+    w.flush()
+    let nlen = chunk ^ 0xFFFF
+    w.out.push((chunk & 0xFF).to_byte())
+    w.out.push(((chunk >> 8) & 0xFF).to_byte())
+    w.out.push((nlen & 0xFF).to_byte())
+    w.out.push(((nlen >> 8) & 0xFF).to_byte())
+    for i in p..<(p + chunk) {
+      w.out.push(data[i & STREAM_RING_MASK])
+    }
+    p = p + chunk
+    if last {
+      break
+    }
+  }
+}
+
+///|
+fn emit_window_block(
+  w : BitWriter,
+  data : FixedArray[Byte],
+  start : Int,
+  end : Int,
+  tokens : ArrayView[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+  is_final~ : Bool,
+) -> Unit {
+  let encoding = choose_block_encoding(end - start, ll_freq, d_freq)
+  match encoding {
+    Stored => write_stored_window(w, data, start, end, is_final~)
+    Fixed | Dynamic(_) => write_huffman_block(w, encoding, tokens, is_final)
   }
 }

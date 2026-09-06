@@ -1,7 +1,7 @@
 # Benchmarks
 
 This directory contains the MoonBit benchmark and the standalone C runner used
-to compare the implementation with `libdeflate`:
+to compare raw DEFLATE throughput with `libdeflate`:
 
 - [`bench_flate.mbt`](./bench_flate.mbt): native MoonBit raw DEFLATE, zlib, and
   gzip measurements.
@@ -34,8 +34,19 @@ moon bench --package moonbit-community/flate/benchmark \
   --file bench_flate.mbt --index 2  # zlib/gzip wrappers
 ```
 
-The MoonBit benchmark reports mean time per operation. For the 256 KiB parity
+The first two MoonBit benchmark groups are raw DEFLATE allocation-reuse tests.
+They create a `Deflater` or `Inflater` plus its fixed output buffer before
+timing, then reset and reuse both in every iteration. For the 256 KiB parity
 cases, convert a mean in seconds to MiB/s with `0.25 / mean_seconds`.
+
+This aligns allocation lifetime with the C runner, not implementation shape:
+the MoonBit side drives a suspendable streaming state machine, whereas
+libdeflate receives a direct input/output buffer call. Treat the results as a
+useful allocation-neutral comparison, not a strict codec-core comparison.
+
+The zlib/gzip and other one-shot groups are allocation-inclusive public API
+measurements. Do not compare those numbers directly with the C runner unless it
+is run in an equivalent per-operation allocation mode.
 
 ## Run libdeflate
 
@@ -49,8 +60,9 @@ cc -O3 -DNDEBUG benchmark/bench_libdeflate.c \
 ```
 
 The runner warms the codec, then reuses codec objects and output buffers during
-the timed loops. `-f` accepts `raw`, `zlib`, or `gzip`; `-l` accepts levels
-`0..12`; and `-n` sets the timed iteration count.
+the timed loops. This matches MoonBit's raw allocation-reuse boundary. `-f`
+accepts `raw`, `zlib`, or `gzip`; `-l` accepts levels `0..12`; and `-n` sets
+the timed iteration count.
 
 ## Corpus
 

@@ -9,12 +9,12 @@
 ///|
 priv enum PropInflateOutcome {
   PropOk(Bytes)
-  PropErr(InflateErrorKind)
+  PropErr(@flate.InflateErrorKind)
 } derive(Eq)
 
 ///|
 fn prop_inflate_all(input : Bytes) -> PropInflateOutcome {
-  try PropOk(inflate_all(input)) catch {
+  try PropOk(@flate.inflate_all(input)) catch {
     InflateError(kind, _) => PropErr(kind)
   } noraise {
     ok => ok
@@ -23,7 +23,7 @@ fn prop_inflate_all(input : Bytes) -> PropInflateOutcome {
 
 ///|
 fn prop_inflate_exact(input : Bytes) -> PropInflateOutcome {
-  try PropOk(inflate_exact(input)) catch {
+  try PropOk(@flate.inflate_exact(input)) catch {
     InflateError(kind, _) => PropErr(kind)
   } noraise {
     ok => ok
@@ -32,7 +32,7 @@ fn prop_inflate_exact(input : Bytes) -> PropInflateOutcome {
 
 ///|
 fn prop_inflate_exact_preallocated(input : Bytes) -> PropInflateOutcome {
-  try PropOk(inflate_exact(input, preallocated=true)) catch {
+  try PropOk(@flate.inflate_exact(input, preallocated=true)) catch {
     InflateError(kind, _) => PropErr(kind)
   } noraise {
     ok => ok
@@ -53,8 +53,8 @@ fn prop_chunk_size(step : Int, modulus : Int) -> Int {
 /// time, mirroring how an async reader feeds it.
 fn prop_inflate_streaming_loop(
   input : Bytes,
-) -> PropInflateOutcome raise InflateError {
-  let inflater = Inflater()
+) -> PropInflateOutcome raise @flate.InflateError {
+  let inflater = @flate.Inflater()
   let output = FixedArray::make(64, b'\x00')
   let decoded = Buffer()
   let mut input_pos = 0
@@ -110,7 +110,7 @@ fn prop_inflate_streaming(input : Bytes) -> PropInflateOutcome {
 
 ///|
 /// suffix with `action=Finish` until it reports `Done`.
-fn prop_deflate_finish(deflater : Deflater, data : Bytes) -> Bytes {
+fn prop_deflate_finish(deflater : @flate.Deflater, data : Bytes) -> Bytes {
   let output = FixedArray::make(4096, b'\x00')
   let compressed = Buffer()
   let mut pos = 0
@@ -133,9 +133,9 @@ fn prop_deflate_finish(deflater : Deflater, data : Bytes) -> Bytes {
 ///|
 /// output.
 fn prop_inflate_drive(
-  inflater : Inflater,
+  inflater : @flate.Inflater,
   input : Bytes,
-) -> Bytes raise InflateError {
+) -> Bytes raise @flate.InflateError {
   let output = FixedArray::make(4096, b'\x00')
   let decoded = Buffer()
   let mut pos = 0
@@ -272,8 +272,8 @@ test "property: deflate_all round-trips at every level" {
   @quickcheck.check(
     (data : Bytes) => {
       for level in 0..<10 {
-        let compressed = deflate_all(data, level~)
-        if inflate_all(compressed) != data {
+        let compressed = @flate.deflate_all(data, level~)
+        if @flate.inflate_all(compressed) != data {
           return false
         }
       }
@@ -292,10 +292,11 @@ test "property: deflate_all round-trips at every level" {
 test "property: optimal and split parsers round-trip" {
   @quickcheck.check(
     (data : Bytes) => {
-      if inflate_all(deflate_all_optimal(data, iterations=4)) != data {
+      if @flate.inflate_all(@flate.deflate_all_optimal(data, iterations=4)) !=
+        data {
         return false
       }
-      if inflate_all(deflate_all_split(data)) != data {
+      if @flate.inflate_all(@flate.deflate_all_split(data)) != data {
         return false
       }
       true
@@ -317,7 +318,7 @@ test "property: compressible data round-trips across boundaries" {
       let source = data.0
       let levels = [0, 1, 6, 9]
       for level in levels {
-        if inflate_all(deflate_all(source, level~)) != source {
+        if @flate.inflate_all(@flate.deflate_all(source, level~)) != source {
           return false
         }
       }
@@ -351,7 +352,7 @@ test "property: streaming Inflater agrees with inflate_all" {
 test "property: streaming Deflater round-trips arbitrary input" {
   @quickcheck.check(
     (data : Bytes) => {
-      let deflater = Deflater()
+      let deflater = @flate.Deflater()
       let output = FixedArray::make(64, b'\x00')
       let compressed = Buffer()
       let mut pos = 0
@@ -377,7 +378,7 @@ test "property: streaming Deflater round-trips arbitrary input" {
           break
         }
       }
-      inflate_all(compressed.to_bytes()) == data
+      @flate.inflate_all(compressed.to_bytes()) == data
     },
     count=50,
     max_size=2000,
@@ -427,7 +428,7 @@ test "property: inflate_all_limited respects max_output" {
       let all = prop_inflate_all(data)
       let limit = data.length()
       let limited = try
-        PropOk(inflate_all_limited(data, max_output=limit))
+        PropOk(@flate.inflate_all_limited(data, max_output=limit))
       catch {
         InflateError(kind, _) => PropErr(kind)
       } noraise {
@@ -448,7 +449,7 @@ test "property: inflate_all_limited respects max_output" {
   @quickcheck.check(
     (data : Bytes) => {
       try {
-        ignore(inflate_all_limited(data, max_output=-1))
+        ignore(@flate.inflate_all_limited(data, max_output=-1))
         false
       } catch {
         InflateError(OutputLimitExceeded, _) => true
@@ -488,7 +489,7 @@ test "property: cancellation semantics" {
   @quickcheck.check(
     (data : Bytes) => {
       let cancelled = try {
-        ignore(inflate_all(data, cancelled=() => true))
+        ignore(@flate.inflate_all(data, cancelled=() => true))
         false
       } catch {
         InflateError(Cancelled, _) => true
@@ -497,7 +498,9 @@ test "property: cancellation semantics" {
       if !cancelled {
         return false
       }
-      let quiet = try Some(inflate_all(data, cancelled=() => false)) catch {
+      let quiet = try
+        Some(@flate.inflate_all(data, cancelled=() => false))
+      catch {
         InflateError(_, _) => None
       } noraise {
         ok => ok
@@ -524,10 +527,10 @@ test "property: preset dictionary round-trips and unknown-dictionary decode neve
       let (dict, msg) = pair
       let dictionary = dict.0
       let message = msg.0
-      let deflater = Deflater(dictionary=dictionary[:])
+      let deflater = @flate.Deflater(dictionary=dictionary[:])
       let compressed = prop_deflate_finish(deflater, message)
       let with_dict = try {
-        let inflater = Inflater(dictionary=dictionary[:])
+        let inflater = @flate.Inflater(dictionary=dictionary[:])
         prop_inflate_drive(inflater, compressed) == message
       } catch {
         InflateError(_, _) => false

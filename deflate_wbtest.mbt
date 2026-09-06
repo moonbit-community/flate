@@ -16,9 +16,7 @@ test "Deflater pending stays bounded after a large feed" {
   assert_true(first_consumed > 0)
   assert_true(first_consumed < src.length())
   assert_eq(first_produced, 0)
-  assert_true(
-    d.pending.length() <= WINDOW_SIZE + DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD,
-  )
+  assert_true(d.pending_bytes() <= DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD)
   assert_true(d.w.out.length() <= DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 16)
 
   let buf = FixedArray::make(65536, b'\x00')
@@ -27,9 +25,7 @@ test "Deflater pending stays bounded after a large feed" {
     let status = d.step(src[pos:], buf.mut_view())
     let consumed = d.last_consumed()
     pos = pos + consumed
-    assert_true(
-      d.pending.length() <= WINDOW_SIZE + DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD,
-    )
+    assert_true(d.pending_bytes() <= DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD)
     assert_true(d.w.out.length() <= DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 16)
     if status is NeedMoreInput && pos == src.length() {
       break

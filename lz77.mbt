@@ -12,6 +12,21 @@
 pub const HASH_BITS : Int = 15
 
 ///|
+const WINDOW_MASK : Int = WINDOW_SIZE - 1
+
+///|
+// The streaming input ring holds the 32 KiB match window plus one accepted
+// block and its lookahead. It is mirrored so a 16-byte SIMD load at its end
+// can continue into the duplicate half without a wrap branch.
+const STREAM_RING_SIZE : Int = 65536
+
+///|
+const STREAM_RING_MASK : Int = STREAM_RING_SIZE - 1
+
+///|
+const STREAM_RING_STORAGE_SIZE : Int = STREAM_RING_SIZE * 2
+
+///|
 /// Per-level match-search tuning. The good/lazy/nice/chain values are adopted
 /// verbatim from zlib's `configuration_table` (its most field-tested knob
 /// set); levels 1-3 are zlib's non-lazy "fast" strategy, expressed here as
@@ -44,6 +59,50 @@ fn hash3(data : Bytes, i : Int) -> Int {
   let b = data[i + 1].to_int()
   let c = data[i + 2].to_int()
   (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
+}
+
+///|
+fn hash3_window(data : FixedArray[Byte], i : Int) -> Int {
+  let offset = i & STREAM_RING_MASK
+  let a = data[offset].to_int()
+  let b = data[offset + 1].to_int()
+  let c = data[offset + 2].to_int()
+  (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
+}
+
+///|
+// `head` records the most recent absolute position for each hash, while the
+// fixed 32 KiB `prev` ring links to the next older one. A candidate is valid
+// only while it remains within the DEFLATE window, so overwriting its slot on
+// the next lap cannot hide a valid match.
+priv struct MatchFinder {
+  head : Array[Int]
+  prev : Array[Int]
+}
+
+///|
+fn MatchFinder::MatchFinder() -> MatchFinder {
+  { head: Array::make(1 << HASH_BITS, -1), prev: Array::make(WINDOW_SIZE, -1), }
+}
+
+///|
+fn MatchFinder::reset(self : MatchFinder) -> Unit {
+  self.head.fill(-1)
+  self.prev.fill(-1)
+}
+
+///|
+fn MatchFinder::rebase(self : MatchFinder, offset : Int) -> Unit {
+  for i in 0..<self.head.length() {
+    if self.head[i] >= 0 {
+      self.head[i] = self.head[i] - offset
+    }
+  }
+  for i in 0..<self.prev.length() {
+    if self.prev[i] >= 0 {
+      self.prev[i] = self.prev[i] - offset
+    }
+  }
 }
 
 ///|
@@ -81,6 +140,35 @@ fn match_len_up_to(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
 }
 
 ///|
+#cfg(any(target="native", target="wasm"))
+fn match_len_in_window(
+  data : FixedArray[Byte],
+  src : Int,
+  pos : Int,
+  limit : Int,
+) -> Int {
+  let src = src & STREAM_RING_MASK
+  let pos = pos & STREAM_RING_MASK
+  let mut k = 0
+  while k + 16 <= limit {
+    let equal_lanes = @v128.i8x16_bitmask(
+      @v128.i8x16_eq(
+        @v128.v128_load(data, src + k),
+        @v128.v128_load(data, pos + k),
+      ),
+    )
+    if equal_lanes != 0xFFFF {
+      return k + (equal_lanes ^ 0xFFFF).ctz()
+    }
+    k = k + 16
+  }
+  while k < limit && data[src + k] == data[pos + k] {
+    k = k + 1
+  }
+  k
+}
+
+///|
 /// JS and wasm-gc currently lower V128 byte comparisons to BigInt/per-lane
 /// fallback code. Keep their match finder scalar until those backends provide
 /// real SIMD lowering; the native and linear-wasm implementation above remains
@@ -89,6 +177,22 @@ fn match_len_up_to(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
 fn match_len_up_to(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
   let mut k = 0
   while k < limit && data[src + k] == data[pos + k] {
+    k = k + 1
+  }
+  k
+}
+
+///|
+#cfg(not(any(target="native", target="wasm")))
+fn match_len_in_window(
+  data : FixedArray[Byte],
+  src : Int,
+  pos : Int,
+  limit : Int,
+) -> Int {
+  let mut k = 0
+  while k < limit &&
+        data[(src + k) & STREAM_RING_MASK] == data[(pos + k) & STREAM_RING_MASK] {
     k = k + 1
   }
   k
@@ -120,6 +224,30 @@ fn match_candidate_can_beat(
 }
 
 ///|
+#inline
+fn window_match_candidate_can_beat(
+  data : FixedArray[Byte],
+  candidate : Int,
+  position : Int,
+  best_len : Int,
+  limit : Int,
+) -> Bool {
+  guard best_len < limit else { return false }
+  let candidate = candidate & STREAM_RING_MASK
+  let position = position & STREAM_RING_MASK
+  if best_len < 3 {
+    data[candidate] == data[position] &&
+    data[candidate + 1] == data[position + 1] &&
+    data[candidate + 2] == data[position + 2]
+  } else {
+    data[candidate] == data[position] &&
+    data[candidate + 1] == data[position + 1] &&
+    data[candidate + best_len - 1] == data[position + best_len - 1] &&
+    data[candidate + best_len] == data[position + best_len]
+  }
+}
+
+///|
 /// Longest back-reference for position `i` that beats `base`, found by walking
 /// the hash chain (does not insert `i`). Returns `length << 16 | distance`; a
 /// zero distance means nothing longer than `base` was found. Both fields fit
@@ -129,16 +257,14 @@ fn match_candidate_can_beat(
 /// match, and the search stops outright at `nice_length`.
 fn find_match(
   data : Bytes,
-  head : Array[Int],
-  prev : Array[Int],
+  finder : MatchFinder,
   i : Int,
   n : Int,
   base : Int,
   cfg : LevelConfig,
-  seed_from : Int,
 ) -> Int {
   let h = hash3(data, i)
-  let mut cand = head[h]
+  let mut cand = finder.head[h]
   let mut best_len = base
   let mut best_dist = 0
   let limit = if n - i < 258 { n - i } else { 258 }
@@ -160,9 +286,45 @@ fn find_match(
         break
       }
     }
-    // `prev` is indexed relative to `seed_from` so it spans only the working
-    // window, not the absolute offset into `data` (see `tokenize`).
-    cand = prev[cand - seed_from]
+    cand = finder.prev[cand & WINDOW_MASK]
+    steps = steps + 1
+  }
+  (best_len << 16) | best_dist
+}
+
+///|
+fn find_window_match(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  i : Int,
+  end : Int,
+  base : Int,
+  cfg : LevelConfig,
+) -> Int {
+  let h = hash3_window(data, i)
+  let mut cand = finder.head[h]
+  let mut best_len = base
+  let mut best_dist = 0
+  let limit = if end - i < 258 { end - i } else { 258 }
+  let mut budget = cfg.max_chain
+  if base >= cfg.good_length {
+    budget = budget >> 2
+  }
+  let mut steps = 0
+  while cand >= 0 && steps < budget && i - cand <= WINDOW_SIZE {
+    let l = if window_match_candidate_can_beat(data, cand, i, best_len, limit) {
+      match_len_in_window(data, cand, i, limit)
+    } else {
+      best_len
+    }
+    if l > best_len {
+      best_len = l
+      best_dist = i - cand
+      if l >= cfg.nice_length {
+        break
+      }
+    }
+    cand = finder.prev[cand & WINDOW_MASK]
     steps = steps + 1
   }
   (best_len << 16) | best_dist
@@ -170,18 +332,25 @@ fn find_match(
 
 ///|
 /// Record position `i` in the hash chain so later positions can match it.
-fn insert_pos(
-  data : Bytes,
-  head : Array[Int],
-  prev : Array[Int],
-  i : Int,
-  n : Int,
-  seed_from : Int,
-) -> Unit {
+fn insert_pos(data : Bytes, finder : MatchFinder, i : Int, n : Int) -> Unit {
   if i + 3 <= n {
     let h = hash3(data, i)
-    prev[i - seed_from] = head[h]
-    head[h] = i
+    finder.prev[i & WINDOW_MASK] = finder.head[h]
+    finder.head[h] = i
+  }
+}
+
+///|
+fn insert_window_pos(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  i : Int,
+  end : Int,
+) -> Unit {
+  if i + 3 <= end {
+    let h = hash3_window(data, i)
+    finder.prev[i & WINDOW_MASK] = finder.head[h]
+    finder.head[h] = i
   }
 }
 
@@ -204,10 +373,8 @@ fn pack_match_token(length : Int, distance : Int) -> Int {
 #inline
 fn commit_match(
   data : Bytes,
-  head : Array[Int],
-  prev : Array[Int],
+  finder : MatchFinder,
   n : Int,
-  seed_from : Int,
   start : Int,
   length : Int,
   dist : Int,
@@ -220,7 +387,30 @@ fn commit_match(
   d_freq[dist_index(dist)] += 1
   let match_end = start + length
   for j in (start + 1)..<match_end {
-    insert_pos(data, head, prev, j, n, seed_from)
+    insert_pos(data, finder, j, n)
+  }
+  match_end
+}
+
+///|
+#inline
+fn commit_window_match(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  end : Int,
+  start : Int,
+  length : Int,
+  dist : Int,
+  tokens : Array[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Int {
+  tokens.push(pack_match_token(length, dist))
+  ll_freq[257 + len_to_idx[length]] += 1
+  d_freq[dist_index(dist)] += 1
+  let match_end = start + length
+  for j in (start + 1)..<match_end {
+    insert_window_pos(data, finder, j, end)
   }
   match_end
 }
@@ -240,14 +430,12 @@ fn emit_literal(tokens : Array[Int], ll_freq : Array[Int], b : Int) -> Unit {
 /// and returns the absolute position one past the last byte consumed (≥ `end`
 /// when a match straddled the boundary). Callers pass fresh, zeroed outputs.
 ///
-/// The window-eligible suffix of `data[0:start)` is seeded into the hash chain
-/// as history so matches may reference it, but is not itself tokenized.
-/// Matches may extend past `end` into any lookahead present in `data`, which
-/// is how a streaming caller keeps cross-block back-references intact: pass
-/// the carried window as `data[0:start)` and reserve a lookahead tail beyond
-/// `end`.
+/// `finder` persists for the whole compression session, so prior blocks are
+/// already chained when this call begins. Matches may extend past `end` into
+/// any lookahead present in `data`.
 fn tokenize(
   data : Bytes,
+  finder : MatchFinder,
   start : Int,
   end : Int,
   cfg : LevelConfig,
@@ -259,21 +447,6 @@ fn tokenize(
   // LZ77 with hash chains: head[hash] is the most recent position with a
   // given 3-byte hash, prev[pos] the next-older. "Lazy" means a match found
   // at i is held back to see if i+1 starts a longer one.
-  let head = Array::make(1 << HASH_BITS, -1)
-  // Positions farther back than the window can never be referenced
-  // (find_match rejects distances > 32768), so seeding them is pure waste.
-  let seed_from = if start > WINDOW_SIZE { start - WINDOW_SIZE } else { 0 }
-  // `prev` is indexed relative to `seed_from` and covers only positions that
-  // are seeded or tokenized here — the carried window plus this segment plus a
-  // match's worth of overhang — never the absolute offset into `data`. Sizing
-  // it to `data.length()` instead would make a one-shot driver (whole input as
-  // `data`, one block at a time) allocate the full input per block.
-  let span_end = if end + 258 < n { end + 258 } else { n }
-  let prev_size = span_end - seed_from
-  let prev = Array::make(if prev_size > 0 { prev_size } else { 1 }, -1)
-  for j in seed_from..<start {
-    insert_pos(data, head, prev, j, n, seed_from)
-  }
   let mut i = start
   let mut prev_len = 0
   let mut prev_dist = 0
@@ -284,21 +457,19 @@ fn tokenize(
     let searching = i + 3 <= n && !(have_prev && prev_len >= cfg.max_lazy)
     let base = if have_prev { prev_len } else { 0 }
     let match_info = if searching {
-      find_match(data, head, prev, i, n, base, cfg, seed_from)
+      find_match(data, finder, i, n, base, cfg)
     } else {
       0
     }
     let cur_len = match_info >> 16
     let cur_dist = match_info & 0xFFFF
-    insert_pos(data, head, prev, i, n, seed_from)
+    insert_pos(data, finder, i, n)
     // The deferred match (starting at i-1) wins: emit it.
     guard !have_prev || cur_dist > 0 else {
       i = commit_match(
         data,
-        head,
-        prev,
+        finder,
         n,
-        seed_from,
         i - 1,
         prev_len,
         prev_dist,
@@ -326,7 +497,7 @@ fn tokenize(
     // Greedy levels (1-3): commit the match immediately.
     guard cfg.max_lazy > 0 else {
       i = commit_match(
-        data, head, prev, n, seed_from, i, cur_len, cur_dist, tokens, ll_freq, d_freq,
+        data, finder, n, i, cur_len, cur_dist, tokens, ll_freq, d_freq,
       )
       continue
     }
@@ -340,10 +511,93 @@ fn tokenize(
     // A still-pending match at the boundary commits here.
     i = commit_match(
       data,
-      head,
-      prev,
+      finder,
       n,
-      seed_from,
+      i - 1,
+      prev_len,
+      prev_dist,
+      tokens,
+      ll_freq,
+      d_freq,
+    )
+  }
+  i
+}
+
+///|
+// Streaming counterpart of `tokenize`: positions are absolute within the
+// mirrored input ring, but the parse policy and token accounting are exactly
+// the same as the one-shot path above.
+fn tokenize_window(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  start : Int,
+  token_end : Int,
+  available_end : Int,
+  cfg : LevelConfig,
+  tokens : Array[Int],
+  ll_freq : Array[Int],
+  d_freq : Array[Int],
+) -> Int {
+  let mut i = start
+  let mut prev_len = 0
+  let mut prev_dist = 0
+  let mut have_prev = false
+  while i < token_end {
+    let searching = i + 3 <= available_end &&
+      !(have_prev && prev_len >= cfg.max_lazy)
+    let base = if have_prev { prev_len } else { 0 }
+    let match_info = if searching {
+      find_window_match(data, finder, i, available_end, base, cfg)
+    } else {
+      0
+    }
+    let cur_len = match_info >> 16
+    let cur_dist = match_info & 0xFFFF
+    insert_window_pos(data, finder, i, available_end)
+    guard !have_prev || cur_dist > 0 else {
+      i = commit_window_match(
+        data,
+        finder,
+        available_end,
+        i - 1,
+        prev_len,
+        prev_dist,
+        tokens,
+        ll_freq,
+        d_freq,
+      )
+      have_prev = false
+      continue
+    }
+    guard !have_prev else {
+      emit_literal(tokens, ll_freq, data[(i - 1) & STREAM_RING_MASK].to_int())
+      prev_len = cur_len
+      prev_dist = cur_dist
+      i = i + 1
+      continue
+    }
+    guard cur_dist > 0 && cur_len >= 3 else {
+      emit_literal(tokens, ll_freq, data[i & STREAM_RING_MASK].to_int())
+      i = i + 1
+      continue
+    }
+    guard cfg.max_lazy > 0 else {
+      i = commit_window_match(
+        data, finder, available_end, i, cur_len, cur_dist, tokens, ll_freq, d_freq,
+      )
+      continue
+    }
+    prev_len = cur_len
+    prev_dist = cur_dist
+    have_prev = true
+    i = i + 1
+  }
+  if have_prev {
+    i = commit_window_match(
+      data,
+      finder,
+      available_end,
       i - 1,
       prev_len,
       prev_dist,

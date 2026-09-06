@@ -1,12 +1,7 @@
-// Block planning stage of the encode pipeline: decides where block boundaries
-// fall and what state carries across them. Non-final blocks cover at most
-// `DEFLATE_BLOCK_SIZE` tokenizable bytes (a cap as well as a floor: one
-// Huffman table should not span heterogeneous megabytes, and the token buffer
-// stays bounded). `emit_one` reserves a lookahead tail so boundary matches
-// see their full extent; `emit_final` settles the remainder block-by-block;
-// `emit_flush` is the sync-flush boundary the caller can force at any time.
-// Level 0 bypasses parsing entirely and writes stored blocks.
-//
+// Block planning for the streaming encoder. Input lives in a fixed mirrored
+// ring: the first half is indexed by absolute position modulo 64 KiB and the
+// second half mirrors it for branch-free SIMD comparisons across the wrap.
+// The parser and its 32 KiB matchfinder survive every block boundary.
 
 ///|
 /// Bytes of unconsumed lookahead reserved beyond a non-final block boundary so
@@ -14,67 +9,101 @@
 pub const MIN_LOOKAHEAD : Int = 258
 
 ///|
-/// Trim `pending` so at most a 32 KB window of already-processed bytes remains
-/// as history, and reset `window_carry`.
-fn Deflater::trim_window(self : Deflater, processed : Int) -> Unit {
-  let newstart = (processed - WINDOW_SIZE).max(0)
-  if newstart > 0 {
-    let kept : Array[Byte] = []
-    for j in newstart..<self.pending.length() {
-      kept.push(self.pending[j])
-    }
-    self.pending = kept
-  }
-  self.window_carry = processed - newstart
+fn Deflater::pending_bytes(self : Deflater) -> Int {
+  self.pending_end - self.parse_pos
 }
 
 ///|
-/// Emit one non-final block covering at most `DEFLATE_BLOCK_SIZE` tokenizable
-/// bytes (plus up to 257 bytes of match overhang), then trim `pending` back to
-/// a 32 KB history window. The caller guarantees enough input is present for
-/// matches at the boundary to see their full extent.
+fn Deflater::push_pending_byte(self : Deflater, byte : Byte) -> Unit {
+  let offset = self.pending_end & STREAM_RING_MASK
+  self.pending[offset] = byte
+  self.pending[offset + STREAM_RING_SIZE] = byte
+  self.pending_end = self.pending_end + 1
+}
+
+///|
+fn Deflater::write_stored_pending(self : Deflater, is_final~ : Bool) -> Unit {
+  write_stored_window(
+    self.w,
+    self.pending,
+    self.parse_pos,
+    self.pending_end,
+    is_final~,
+  )
+  self.parse_pos = self.pending_end
+}
+
+///|
+// The final two bytes of an earlier accepted chunk could not yet form a
+// 3-byte hash. Insert them once new lookahead makes them hashable; all older
+// history is already present in the persistent chain.
+fn Deflater::chain_ready_history(self : Deflater) -> Unit {
+  let ready_end = self.parse_pos.min((self.pending_end - 2).max(0))
+  while self.hashed_through < ready_end {
+    insert_window_pos(
+      self.pending,
+      self.finder,
+      self.hashed_through,
+      self.pending_end,
+    )
+    self.hashed_through = self.hashed_through + 1
+  }
+}
+
+///|
+fn Deflater::record_chained_positions(self : Deflater, processed : Int) -> Unit {
+  let chained_end = processed.min((self.pending_end - 2).max(0))
+  if chained_end > self.hashed_through {
+    self.hashed_through = chained_end
+  }
+}
+
+///|
+/// Emit one non-final parsed block. `pending` already includes the lookahead
+/// tail, and `tokenize_window` only commits `DEFLATE_BLOCK_SIZE` bytes except
+/// for an ordinary 258-byte match overhang.
 fn Deflater::emit_capped(self : Deflater) -> Unit {
-  let data = Bytes::from_array(self.pending)
-  let cap = self.window_carry + DEFLATE_BLOCK_SIZE
-  let tok_end = cap.min(data.length())
+  let target = (self.parse_pos + DEFLATE_BLOCK_SIZE).min(self.pending_end)
   let tokens : Array[Int] = []
   let ll_freq = Array::make(286, 0)
   let d_freq = Array::make(30, 0)
-  let processed = tokenize(
-    data,
-    self.window_carry,
-    tok_end,
+  self.chain_ready_history()
+  let processed = tokenize_window(
+    self.pending,
+    self.finder,
+    self.parse_pos,
+    target,
+    self.pending_end,
     self.cfg,
     tokens,
     ll_freq,
     d_freq,
   )
-  emit_block(
+  emit_window_block(
     self.w,
-    data,
-    self.window_carry,
+    self.pending,
+    self.parse_pos,
     processed,
     tokens[:],
     ll_freq,
     d_freq,
     is_final=false,
   )
-  self.trim_window(processed)
+  self.parse_pos = processed
+  self.record_chained_positions(processed)
+  self.maybe_rebase()
 }
 
 ///|
-/// Level 0: no parsing, no Huffman — write everything buffered as stored
-/// blocks. History is useless without matches, so `pending` empties entirely.
+/// Level 0 bypasses parsing entirely and writes buffered bytes straight out of
+/// the ring. With no matches, neither matchfinder nor history needs updates.
 fn Deflater::emit_stored_all(self : Deflater, is_final~ : Bool) -> Unit {
-  let data = Bytes::from_array(self.pending)
-  write_stored(self.w, data, self.window_carry, data.length(), is_final~)
-  self.pending.clear()
-  self.window_carry = 0
+  self.write_stored_pending(is_final~)
+  self.parse_pos = 0
+  self.pending_end = 0
 }
 
 ///|
-/// Emit one non-final block for the accrued input (level 0: all of it, as
-/// stored blocks).
 fn Deflater::emit_one(self : Deflater) -> Unit {
   guard self.level != 0 else {
     self.emit_stored_all(is_final=false)
@@ -84,45 +113,59 @@ fn Deflater::emit_one(self : Deflater) -> Unit {
 }
 
 ///|
-/// Tokenize everything currently un-tokenized in `pending` (from `window_carry`
-/// to the end) into one block and emit it. Shared by the final block and the
-/// sync-flush trailing block so both drain the remainder identically. Returns
-/// the position one past the last byte consumed.
+/// Tokenize all remaining input into one trailing block. The end bound removes
+/// the non-final lookahead restriction while preserving the same parse policy.
 fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
-  let data = Bytes::from_array(self.pending)
   let tokens : Array[Int] = []
   let ll_freq = Array::make(286, 0)
   let d_freq = Array::make(30, 0)
-  let processed = tokenize(
-    data,
-    self.window_carry,
-    data.length(),
+  self.chain_ready_history()
+  let processed = tokenize_window(
+    self.pending,
+    self.finder,
+    self.parse_pos,
+    self.pending_end,
+    self.pending_end,
     self.cfg,
     tokens,
     ll_freq,
     d_freq,
   )
-  emit_block(
+  emit_window_block(
     self.w,
-    data,
-    self.window_carry,
+    self.pending,
+    self.parse_pos,
     processed,
     tokens[:],
     ll_freq,
     d_freq,
     is_final~,
   )
+  self.parse_pos = processed
+  self.record_chained_positions(processed)
+  self.maybe_rebase()
   processed
 }
 
 ///|
-/// Tokenize all remaining input into final block(s) — capped non-final blocks
-/// while more than one block's worth remains — and flush to a byte boundary.
+/// Keep absolute positions comfortably below backend integer limits. This is
+/// amortized over 1 GiB of source and preserves every live 32 KiB chain link.
+fn Deflater::maybe_rebase(self : Deflater) -> Unit {
+  let rebase_at = 1 << 30
+  guard self.parse_pos >= rebase_at else { return }
+  let offset = (self.parse_pos / STREAM_RING_SIZE - 1) * STREAM_RING_SIZE
+  self.finder.rebase(offset)
+  self.parse_pos = self.parse_pos - offset
+  self.pending_end = self.pending_end - offset
+  self.hashed_through = self.hashed_through - offset
+}
+
+///|
 fn Deflater::emit_final(self : Deflater) -> Unit {
   if self.level == 0 {
     self.emit_stored_all(is_final=true)
   } else {
-    while self.pending.length() - self.window_carry > DEFLATE_BLOCK_SIZE {
+    while self.pending_bytes() > DEFLATE_BLOCK_SIZE {
       self.emit_capped()
     }
     ignore(self.emit_trailing_block(is_final=true))
@@ -132,39 +175,31 @@ fn Deflater::emit_final(self : Deflater) -> Unit {
 }
 
 ///|
-/// Level 0 sync flush: emit whatever remains as stored blocks.
 fn Deflater::flush_stored(self : Deflater) -> Unit {
-  if self.pending.length() > self.window_carry {
+  if self.pending_bytes() > 0 {
     self.emit_stored_all(is_final=false)
   }
 }
 
 ///|
-/// Levels >= 1 sync flush: emit capped non-final blocks for a full token
-/// window, then a trailing block for whatever remains, trimming the window.
 fn Deflater::flush_capped(self : Deflater) -> Unit {
-  while self.pending.length() - self.window_carry > DEFLATE_BLOCK_SIZE {
+  while self.pending_bytes() > DEFLATE_BLOCK_SIZE {
     self.emit_capped()
   }
-  // Capped blocks may have consumed everything (match overhang); only emit
-  // a trailing block if un-tokenized input actually remains.
-  if self.pending.length() > self.window_carry {
-    let processed = self.emit_trailing_block(is_final=false)
-    self.trim_window(processed)
+  if self.pending_bytes() > 0 {
+    ignore(self.emit_trailing_block(is_final=false))
   }
 }
 
 ///|
-/// Sync flush (zlib `Z_SYNC_FLUSH`): compress everything buffered into
-/// block(s), then append an empty stored block whose mandatory byte alignment
-/// pads the bit stream — after draining, every produced byte is final and
-/// transmittable, and the stream continues. The window is kept (levels ≥ 1),
-/// so post-flush data may still back-reference pre-flush data.
+/// Sync flush (zlib `Z_SYNC_FLUSH`): drain all buffered bytes, then append an
+/// empty byte-aligned stored block. The persistent matchfinder retains the
+/// preceding window for the stream's next input.
 fn Deflater::emit_flush(self : Deflater) -> Unit {
   if self.level == 0 {
     self.flush_stored()
   } else {
     self.flush_capped()
   }
-  write_stored(self.w, b"", 0, 0, is_final=false) // the 00 00 FF FF marker
+  write_stored(self.w, b"", 0, 0, is_final=false)
 }

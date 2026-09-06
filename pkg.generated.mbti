@@ -32,11 +32,11 @@ pub fn deflate_all_optimal(Bytes, iterations? : Int) -> Bytes
 
 pub fn deflate_all_split(Bytes, level? : Int) -> Bytes
 
-pub fn inflate_all(Bytes, cancelled? : () -> Bool) -> Bytes raise InflateError
+pub fn inflate_all(Bytes, cancelled? : () -> Bool) -> Bytes raise @flate.InflateError
 
-pub fn inflate_all_limited(Bytes, max_output~ : Int, cancelled? : () -> Bool) -> Bytes raise InflateError
+pub fn inflate_all_limited(Bytes, max_output~ : Int, cancelled? : () -> Bool) -> Bytes raise @flate.InflateError
 
-pub fn inflate_exact(Bytes, max_output? : Int?, cancelled? : () -> Bool, preallocated? : Bool) -> Bytes raise InflateError
+pub fn inflate_exact(Bytes, max_output? : Int?, cancelled? : () -> Bool, preallocated? : Bool) -> Bytes raise @flate.InflateError
 
 // Errors
 pub suberror InflateError {
@@ -82,7 +82,7 @@ pub fn Inflater::is_finished(Self) -> Bool
 pub fn Inflater::last_consumed(Self) -> Int
 pub fn Inflater::last_produced(Self) -> Int
 pub fn Inflater::reset(Self, dictionary? : BytesView) -> Unit
-pub fn Inflater::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> Status raise InflateError
+pub fn Inflater::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> Status raise @flate.InflateError
 
 pub(all) enum Status {
   Done

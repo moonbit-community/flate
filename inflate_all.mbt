@@ -226,16 +226,17 @@ fn MemDecoder::huff_sym(
 /// past the current symbol because those bytes can be a container trailer.
 #inline
 fn MemDecoder::refill_huffman_fast(self : MemDecoder) -> Unit {
-  while self.bit_count < HUFFMAN_FAST_REFILL_BITS && self.pos < self.input.length() {
-    if self.bit_count <= HUFFMAN_FAST_BITS &&
-      self.pos + 1 < self.input.length() {
+  while self.bit_count < HUFFMAN_FAST_REFILL_BITS &&
+        self.pos < self.input.length() {
+    if self.bit_count <= HUFFMAN_FAST_BITS && self.pos + 1 < self.input.length() {
       let pair = self.input[self.pos].to_uint() |
         (self.input[self.pos + 1].to_uint() << 8)
       self.bitbuf = self.bitbuf | (pair << self.bit_count)
       self.bit_count = self.bit_count + 16
       self.pos = self.pos + 2
     } else {
-      self.bitbuf = self.bitbuf | (self.input[self.pos].to_uint() << self.bit_count)
+      self.bitbuf = self.bitbuf |
+        (self.input[self.pos].to_uint() << self.bit_count)
       self.bit_count = self.bit_count + 8
       self.pos = self.pos + 1
     }
@@ -346,7 +347,10 @@ fn MemDecoder::copy_match(
 }
 
 ///|
-fn MemDecoder::copy_stored(self : MemDecoder, length : Int) -> Unit raise InflateError {
+fn MemDecoder::copy_stored(
+  self : MemDecoder,
+  length : Int,
+) -> Unit raise InflateError {
   let mut remaining = length
   while remaining > 0 {
     // Preserve `inflate_all`'s cancellation cadence while copying each chunk

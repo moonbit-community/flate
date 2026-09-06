@@ -250,6 +250,7 @@ priv struct OptimalChunk {
 ///|
 fn optimal_parse_chunk(
   input : Bytes,
+  finder : MatchFinder,
   pos : Int,
   target : Int,
   iterations : Int,
@@ -259,6 +260,7 @@ fn optimal_parse_chunk(
   let greedy_d_freq = Array::make(30, 0)
   let processed = tokenize(
     input,
+    finder,
     pos,
     target,
     level_configs[9],
@@ -338,9 +340,10 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
     return Bytes::from_array(w.out)
   }
   let mut pos = 0
+  let finder = MatchFinder()
   for ;; {
     let target = (pos + OPTIMAL_MASTER_BLOCK).min(n)
-    let chunk = optimal_parse_chunk(input, pos, target, iters)
+    let chunk = optimal_parse_chunk(input, finder, pos, target, iters)
     emit_optimal_chunk(w, input, chunk, pos, n)
     pos = chunk.chunk_end
     guard pos < n else { break }

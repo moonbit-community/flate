@@ -19,6 +19,25 @@ priv struct MatchRange {
 }
 
 ///|
+// The optimal parser has a separate candidate frontier and deliberately keeps
+// its own temporary table. Its future binary-tree/cache work must not inherit
+// the greedy/lazy session matchfinder's lifecycle.
+fn insert_optimal_pos(
+  data : Bytes,
+  head : Array[Int],
+  prev : Array[Int],
+  i : Int,
+  n : Int,
+  seed_from : Int,
+) -> Unit {
+  if i + 3 <= n {
+    let h = hash3(data, i)
+    prev[i - seed_from] = head[h]
+    head[h] = i
+  }
+}
+
+///|
 /// Chain candidates examined per position; effectively exhaustive, in keeping
 /// with the offline effort budget.
 const OPTIMAL_MAX_CHAIN : Int = 8192
@@ -36,12 +55,10 @@ fn collect_matches(
 ) -> Array[Array[MatchRange]] {
   let seed_from = if start > WINDOW_SIZE { start - WINDOW_SIZE } else { 0 }
   let head = Array::make(1 << HASH_BITS, -1)
-  // `prev` slots are relative to seed_from, so the array is bounded by
-  // window + segment, not by the absolute offset into the input.
   let prev = Array::make(if end > seed_from { end - seed_from } else { 1 }, -1)
   let n = data.length()
   for j in seed_from..<start {
-    insert_pos(data, head, prev, j, n, seed_from)
+    insert_optimal_pos(data, head, prev, j, n, seed_from)
   }
   let out : Array[Array[MatchRange]] = []
   for i in start..<end {
@@ -69,7 +86,7 @@ fn collect_matches(
         steps = steps + 1
       }
     }
-    insert_pos(data, head, prev, i, n, seed_from)
+    insert_optimal_pos(data, head, prev, i, n, seed_from)
     out.push(frontier)
   }
   out

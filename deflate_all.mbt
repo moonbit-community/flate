@@ -4,9 +4,9 @@
 
 ///|
 /// Compress bytes into a complete raw DEFLATE stream held entirely in memory.
-/// Because the whole input is in hand, no sliding window is needed: this
-/// tokenizes directly over `input`, advancing a single offset, with none of the
-/// streaming `Deflater`'s per-block buffering.
+/// The whole input is tokenized directly, advancing a single offset and a
+/// session-owned fixed matchfinder; unlike `Deflater`, no input staging ring
+/// is needed.
 pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
   let lv = clamp_level(level)
   let w = BitWriter()
@@ -18,6 +18,7 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
+  let finder = MatchFinder()
   // Each non-final block covers up to `DEFLATE_BLOCK_SIZE` tokenizable bytes; a
   // boundary match may overhang, so `processed` (not `target`) sets the next
   // start.
@@ -27,7 +28,9 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
     let tokens : Array[Int] = []
     let ll_freq = Array::make(286, 0)
     let d_freq = Array::make(30, 0)
-    let processed = tokenize(input, pos, target, cfg, tokens, ll_freq, d_freq)
+    let processed = tokenize(
+      input, finder, pos, target, cfg, tokens, ll_freq, d_freq,
+    )
     emit_block(
       w,
       input,

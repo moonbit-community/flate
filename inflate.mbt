@@ -8,8 +8,8 @@
 //    input arrives.
 //  - Output: a unit needs room for only its first byte; a match longer than the
 //    remaining output is copied in pieces, with `copy_remaining`/`copy_dist`
-//    carrying the rest to the next `step`. Stored blocks copy byte-by-byte and
-//    suspend on either side as needed.
+//    carrying the rest to the next `step`. Match and stored data are moved in
+//    contiguous window segments, then drained to the caller's output view.
 //  - Back-references read from a 32 KB circular history window.
 
 ///|
@@ -297,7 +297,8 @@ fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int raise {
 /// Emit one decoded byte to the output buffer and the history window. The
 /// caller guarantees output room before starting a unit / each stored byte.
 fn Inflater::emit(self : Inflater, b : Byte) -> Unit {
-  self.out.set(self.out_pos, b)
+  // The caller checks `out_pos < out_end` before every emit.
+  self.out.unsafe_set(self.out_pos, b)
   self.out_pos = self.out_pos + 1
   self.window[self.wpos & (WINDOW_SIZE - 1)] = b
   self.wpos = self.wpos + 1
@@ -456,15 +457,109 @@ fn Inflater::release_step_views(self : Inflater) -> Unit {
 }
 
 ///|
+/// Advance the absolute window cursor after a bounded batch write.
+#inline
+fn Inflater::advance_window(self : Inflater, count : Int) -> Unit {
+  self.wpos = self.wpos + count
+  if !self.filled && self.wpos >= WINDOW_SIZE {
+    self.filled = true
+  }
+}
+
+///|
+/// Drain a contiguous window segment into the caller's output view. The caller
+/// proves both ranges fit, so the unchecked view write avoids a bounds check for
+/// every byte while retaining the public `MutArrayView` API.
+#inline
+fn Inflater::write_window_to_output(
+  self : Inflater,
+  start : Int,
+  length : Int,
+) -> Unit {
+  for i in 0..<length {
+    self.out.unsafe_set(self.out_pos + i, self.window[start + i])
+  }
+  self.out_pos = self.out_pos + length
+}
+
+///|
+/// Copy a logical source range in the circular window to the current window
+/// cursor. Both ranges are split at their physical wrap points, so each blit is
+/// a valid fixed-array operation. Callers pass non-overlapping logical ranges;
+/// `drain_match` limits each logical copy to one distance window so overlapping
+/// DEFLATE matches retain their forward-copy semantics.
+#inline
+fn Inflater::copy_window_segment(
+  self : Inflater,
+  source : Int,
+  length : Int,
+) -> Unit {
+  let mut source = source
+  let mut remaining = length
+  while remaining > 0 {
+    let src = source & (WINDOW_SIZE - 1)
+    let dst = self.wpos & (WINDOW_SIZE - 1)
+    let chunk = remaining.min(WINDOW_SIZE - src).min(WINDOW_SIZE - dst)
+    FixedArray::unsafe_blit(self.window, dst, self.window, src, chunk)
+    self.write_window_to_output(dst, chunk)
+    self.advance_window(chunk)
+    source = source + chunk
+    remaining = remaining - chunk
+  }
+}
+
+///|
 /// Copy as many bytes of the in-progress match as fit before `out_end`, leaving
-/// the remainder in `copy_remaining` for the next `step`. Reads no input, so it
-/// never suspends on `NeedInput`; the window index is recomputed per byte so
-/// overlapping copies (run-length expansion) work correctly.
+/// the remainder in `copy_remaining` for the next `step`. The window is updated
+/// with fixed-array blits (or a fill for distance one), while output writes are
+/// performed once per contiguous segment.
 fn Inflater::drain_match(self : Inflater) -> Unit {
-  while self.copy_remaining > 0 && self.out_pos < self.out_end {
-    let src = (self.wpos - self.copy_dist) & (WINDOW_SIZE - 1)
-    self.emit(self.window[src])
-    self.copy_remaining = self.copy_remaining - 1
+  let total = self.copy_remaining.min(self.out_end - self.out_pos)
+  guard total > 0 else { return }
+  if self.copy_dist == 1 {
+    let repeated = self.window[(self.wpos - 1) & (WINDOW_SIZE - 1)]
+    let mut remaining = total
+    while remaining > 0 {
+      let dst = self.wpos & (WINDOW_SIZE - 1)
+      let chunk = remaining.min(WINDOW_SIZE - dst)
+      self.window.fill(repeated, start=dst, end=dst + chunk)
+      self.write_window_to_output(dst, chunk)
+      self.advance_window(chunk)
+      remaining = remaining - chunk
+    }
+  } else {
+    // Copy at most one distance window per blit. This is the largest logical
+    // range that is non-overlapping, so memmove semantics remain equivalent to
+    // DEFLATE's forward byte-at-a-time expansion even across output steps.
+    let mut remaining = total
+    while remaining > 0 {
+      let chunk = remaining.min(self.copy_dist)
+      self.copy_window_segment(self.wpos - self.copy_dist, chunk)
+      remaining = remaining - chunk
+    }
+  }
+  self.copy_remaining = self.copy_remaining - total
+}
+
+///|
+/// Copy a byte-aligned stored-block range directly from the current input view
+/// into the circular window, then drain it to output in contiguous segments.
+/// Staged input and bit-buffer bytes are handled by the caller's scalar fallback.
+fn Inflater::copy_stored_view(
+  self : Inflater,
+  source : Int,
+  length : Int,
+) -> Unit {
+  let mut source = source
+  let mut remaining = length
+  while remaining > 0 {
+    let dst = self.wpos & (WINDOW_SIZE - 1)
+    let chunk = remaining.min(WINDOW_SIZE - dst)
+    self.window.blit_from_bytesview(dst, self.view[source:source + chunk])
+    self.write_window_to_output(dst, chunk)
+    self.advance_window(chunk)
+    source = source + chunk
+    remaining = remaining - chunk
   }
 }
 
@@ -576,9 +671,25 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
       InStored => {
         while self.stored_remaining > 0 {
           guard self.out_pos < self.out_end else { return NeedMoreOutput }
-          guard self.next_stored_byte() is Some(b) else { return NeedMoreInput }
-          self.emit(b)
-          self.stored_remaining = self.stored_remaining - 1
+          // Once the bit buffer and staged tail are empty, move the available
+          // external input in window-sized segments instead of pulling bytes
+          // through the scalar `next_stored_byte` path.
+          if self.bit_count == 0 &&
+            self.staged_pos == self.staged_input.length() &&
+            self.in_pos < self.view.length() {
+            let output_room = self.out_end - self.out_pos
+            let input_room = self.view.length() - self.in_pos
+            let chunk = self.stored_remaining.min(output_room).min(input_room)
+            self.copy_stored_view(self.in_pos, chunk)
+            self.in_pos = self.in_pos + chunk
+            self.stored_remaining = self.stored_remaining - chunk
+          } else {
+            guard self.next_stored_byte() is Some(b) else {
+              return NeedMoreInput
+            }
+            self.emit(b)
+            self.stored_remaining = self.stored_remaining - 1
+          }
         }
         self.mode = if self.final_block { Done } else { AtBlock }
       }

@@ -6,12 +6,17 @@
 // build bytes in memory; the generators are deterministic. MoonBit reports
 // mean time per operation; divide 256 KiB by that time in seconds to obtain
 // the C runner's MiB/s unit.
-// The public MoonBit one-shot APIs allocate their result inside the timed
-// operation, while the C runner reuses codec buffers. Interpret the numbers as
-// API-level throughput unless the C runner is extended with allocation mode.
+// Raw parity tests reuse a streaming codec and fixed output buffer, matching
+// the C runner's allocation boundary. One-shot and wrapper tests below retain
+// their allocation-inclusive API throughput as separate measurements.
 
 ///|
 const BENCH_INPUT_SIZE : Int = 262144
+
+///|
+// Enough room for a 256 KiB raw stream even when stored blocks win, plus space
+// for the streaming decoder to consume the final EOB after its payload fills.
+const BENCH_CORE_OUTPUT_SLACK : Int = 1024
 
 ///|
 /// Highly compressible: a phrase repeated to fill `size` bytes.
@@ -68,39 +73,98 @@ pub fn bench_mixed(size : Int) -> Bytes {
 }
 
 ///|
-/// Decode without raising out of the bench closure.
+/// Drive a resettable streaming compressor into a caller-owned output buffer.
+/// Both the reset and the state-machine work are part of each codec operation;
+/// allocating the compressor and buffer is deliberately left to benchmark setup.
 #coverage.skip
-fn bench_inflate(c : Bytes) -> Bytes {
-  @flate.inflate_all(c) catch {
-    _ => b""
+fn bench_deflate_core(
+  deflater : @flate.Deflater,
+  input : Bytes,
+  output : FixedArray[Byte],
+) -> Int {
+  deflater.reset()
+  let mut input_pos = 0
+  let mut output_pos = 0
+  for ;; {
+    let status = deflater.step(
+      input[input_pos:],
+      output.mut_view(start=output_pos),
+      action=Finish,
+    )
+    input_pos = input_pos + deflater.last_consumed()
+    output_pos = output_pos + deflater.last_produced()
+    if status is Done {
+      return output_pos
+    }
   }
 }
 
 ///|
-/// Raw DEFLATE compression parity cases for `bench_libdeflate.c -f raw`.
+/// Drive a resettable streaming decompressor into a caller-owned output buffer.
+/// Valid benchmark fixtures must finish; an error aborts instead of turning an
+/// invalid zero-length result into an apparently valid sample.
 #coverage.skip
-test "bench parity raw deflate compression" (b : @bench.T) {
+fn bench_inflate_core(
+  inflater : @flate.Inflater,
+  input : Bytes,
+  output : FixedArray[Byte],
+) -> Int {
+  inflater.reset()
+  let mut input_pos = 0
+  let mut output_pos = 0
+  for ;; {
+    let status = inflater.step(
+      input[input_pos:],
+      output.mut_view(start=output_pos),
+      end=true,
+    ) catch {
+      _ => abort("benchmark fixture failed to inflate")
+    }
+    input_pos = input_pos + inflater.last_consumed()
+    output_pos = output_pos + inflater.last_produced()
+    if status is Done {
+      return output_pos
+    }
+  }
+}
+
+///|
+/// Raw DEFLATE allocation-reuse parity cases for `bench_libdeflate.c -f raw`.
+/// Codec objects and output buffers are created once per case outside the timed
+/// closure, then reset and reused for each sample.
+#coverage.skip
+test "bench parity raw deflate reusable compression" (b : @bench.T) {
   for level in [1, 6, 9] {
     for t in bench_corpora(BENCH_INPUT_SIZE) {
       let (name, data) = t
-      b.bench(name="raw compress L\{level} 256KiB \{name}", () => {
-        b.keep(@flate.deflate_all(data, level~))
+      let deflater = @flate.Deflater(level~)
+      let output = FixedArray::make(
+        data.length() + BENCH_CORE_OUTPUT_SLACK,
+        b'\x00',
+      )
+      b.bench(name="raw reusable compress L\{level} 256KiB \{name}", () => {
+        b.keep(bench_deflate_core(deflater, data, output))
       })
     }
   }
 }
 
 ///|
-/// Raw DEFLATE decompression parity cases. Compression is performed once
-/// before timing, matching the C runner's reuse of its compressed buffer.
+/// Raw DEFLATE allocation-reuse decompression parity cases. Fixture compression,
+/// decoder allocation, and output-buffer allocation all occur before timing.
 #coverage.skip
-test "bench parity raw deflate decompression" (b : @bench.T) {
+test "bench parity raw deflate reusable decompression" (b : @bench.T) {
   for level in [1, 6, 9] {
     for t in bench_corpora(BENCH_INPUT_SIZE) {
       let (name, data) = t
       let compressed = @flate.deflate_all(data, level~)
-      b.bench(name="raw decompress L\{level} 256KiB \{name}", () => {
-        b.keep(bench_inflate(compressed))
+      let inflater = @flate.Inflater()
+      let output = FixedArray::make(
+        data.length() + BENCH_CORE_OUTPUT_SLACK,
+        b'\x00',
+      )
+      b.bench(name="raw reusable decompress L\{level} 256KiB \{name}", () => {
+        b.keep(bench_inflate_core(inflater, compressed, output))
       })
     }
   }

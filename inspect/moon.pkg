@@ -1,0 +1,4 @@
+import {
+  "moonbit-community/flate",
+  "moonbitlang/core/quickcheck",
+} for "test"

@@ -282,13 +282,16 @@ pub fn deflate_all_split(input : Bytes, level? : Int = 6) -> Bytes {
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
+  let finder = MatchFinder()
   let mut pos = 0
   for ;; {
     let target = (pos + SPLIT_MASTER_CHUNK).min(n)
     let tokens : Array[Int] = []
     let ll_freq = Array::make(MAX_NUM_LIT, 0)
     let d_freq = Array::make(MAX_NUM_DIST, 0)
-    let processed = tokenize(input, pos, target, cfg, tokens, ll_freq, d_freq)
+    let processed = tokenize(
+      input, finder, pos, target, cfg, tokens, ll_freq, d_freq,
+    )
     let all_pos = token_positions(tokens, pos, processed)
     let split_cuts = choose_splits(tokens)
     // Arbitrate against the fixed cadence by exact cost so the adaptive split

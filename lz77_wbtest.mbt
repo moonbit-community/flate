@@ -132,11 +132,12 @@ test "match length agrees with scalar reference across boundaries and tails" {
       case_index = case_index + 1
     }
   }
-  for
-    mismatch in [
-      0, 1, 14, 15, 16, 17, 30, 31, 32, 33, 47, 48, 49, 63, 64, 65, 127, 128, 129,
-      255, 256, 257,
-    ] {
+
+  let mismatch_limits = [
+    0, 1, 14, 15, 16, 17, 30, 31, 32, 33, 47, 48, 49, 63, 64, 65, 127, 128, 129,
+    255, 256, 257,
+  ]
+  for mismatch in mismatch_limits {
     assert_match_len_differential_case(
       rng,
       case_index,

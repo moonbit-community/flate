@@ -4,13 +4,14 @@
 // produced incrementally.
 //
 // Model:
-//  - Input accumulates in `pending`, whose leading `window_carry` bytes are
-//    history kept only so cross-block back-references resolve; the rest is
-//    input not yet emitted.
+//  - Input accumulates in a fixed mirrored 64 KiB ring. `parse_pos` is the
+//    first un-emitted absolute position and `pending_end` is one past input.
+//  - A persistent 32 KiB hash-chain matchfinder spans every block boundary;
+//    no block rebuilds it or copies a carried history window.
 //  - When enough tokenizable input has accrued (a block's worth, with a
 //    lookahead margin reserved so matches near the boundary aren't truncated),
-//    one non-final block is emitted via the shared `tokenize` + `emit_block`,
-//    `pending` is trimmed back to a 32 KB window, and the bytes flow on.
+//    one non-final block is emitted via the shared parse policy and the bytes
+//    flow on.
 //  - `Finish` tokenizes whatever remains into a final block and flushes.
 //  - A persistent `BitWriter` carries the sub-byte bit remainder across blocks
 //    (the bit stream is continuous; only the final block pads to a byte). Its
@@ -36,8 +37,11 @@ fn clamp_level(level : Int) -> Int {
 /// Streaming DEFLATE compressor : a push-based, suspendable state
 /// machine. It emits the stream block-by-block as input arrives, and chooses fixed- or dynamic-Huffman per block.
 pub struct Deflater {
-  priv mut pending : Array[Byte] // carried window history + un-emitted input
-  priv mut window_carry : Int // leading history-only bytes in `pending`
+  priv pending : FixedArray[Byte] // mirrored 64 KiB input ring
+  priv mut parse_pos : Int // first un-emitted absolute byte position
+  priv mut pending_end : Int // one past the last accepted absolute position
+  priv mut hashed_through : Int // first historical position not yet chained
+  priv finder : MatchFinder // persistent 32 KiB hash-chain matchfinder
   priv w : BitWriter // persistent bit sink spanning all blocks
   priv mut out_pos : Int // next `w.out` index to hand to the caller
   priv mut emitted_final : Bool // the final block has been written into `w`
@@ -62,8 +66,11 @@ pub fn Deflater::Deflater(
 ) -> Deflater {
   let lv = clamp_level(level)
   let deflater = {
-    pending: [],
-    window_carry: 0,
+    pending: FixedArray::make(STREAM_RING_STORAGE_SIZE, b'\x00'),
+    parse_pos: 0,
+    pending_end: 0,
+    hashed_through: 0,
+    finder: MatchFinder(),
     w: BitWriter(),
     out_pos: 0,
     emitted_final: false,
@@ -83,17 +90,21 @@ pub fn Deflater::Deflater(
 }
 
 ///|
-/// Preload the match window from a constructor or reset dictionary. The caller
-/// has already cleared `pending`, so this copies at most the final 32 KB.
+/// Preload the match window from a constructor or reset dictionary. The
+/// persistent matchfinder receives the final 32 KiB once, as history only.
 fn Deflater::preload_dictionary(
   self : Deflater,
   dictionary : BytesView,
 ) -> Unit {
   let start = (dictionary.length() - WINDOW_SIZE).max(0)
   for i in start..<dictionary.length() {
-    self.pending.push(dictionary[i])
+    self.push_pending_byte(dictionary[i])
   }
-  self.window_carry = self.pending.length()
+  for i in 0..<self.pending_end {
+    insert_window_pos(self.pending, self.finder, i, self.pending_end)
+  }
+  self.hashed_through = (self.pending_end - 2).max(0)
+  self.parse_pos = self.pending_end
 }
 
 ///|
@@ -103,8 +114,10 @@ fn Deflater::preload_dictionary(
 /// preloads its last 32 KB for the new stream; the decoder must use the same
 /// preset dictionary.
 pub fn Deflater::reset(self : Deflater, dictionary? : BytesView) -> Unit {
-  self.pending.clear()
-  self.window_carry = 0
+  self.parse_pos = 0
+  self.pending_end = 0
+  self.hashed_through = 0
+  self.finder.reset()
   self.w.out.clear()
   self.w.bitbuf = 0
   self.w.bit_count = 0
@@ -201,7 +214,7 @@ fn Deflater::accept_input(
 ) -> Int {
   let take = (input_end - consumed).min(capacity)
   for i in consumed..<(consumed + take) {
-    self.pending.push(input[i])
+    self.push_pending_byte(input[i])
   }
   let consumed = consumed + take
   if take > 0 {
@@ -288,7 +301,7 @@ pub fn Deflater::step(
     // A full token window becomes one bounded non-final block before more
     // input is accepted. This is the high-water mark that propagates output
     // backpressure through `consumed`.
-    let buffered = self.pending.length() - self.window_carry
+    let buffered = self.pending_bytes()
     guard buffered < input_limit else {
       self.emit_one()
       continue

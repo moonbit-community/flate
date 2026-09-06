@@ -4,7 +4,7 @@ fn fill_deflater_pending_for_coverage(d : Deflater, size : Int) -> Bytes {
   for i in 0..<size {
     let byte = ((i * 73 + i / 17) & 0xFF).to_byte()
     bytes.push(byte)
-    d.pending.push(byte)
+    d.push_pending_byte(byte)
   }
   Bytes::from_array(bytes)
 }
@@ -49,7 +49,7 @@ test "block planner direct boundary paths emit valid work" {
   let stored = Deflater(level=0)
   ignore(fill_deflater_pending_for_coverage(stored, 31))
   stored.emit_flush()
-  assert_eq(stored.pending.length(), 0)
+  assert_eq(stored.pending_bytes(), 0)
   assert_true(stored.w.out.length() >= 4)
 
   let parsed = Deflater()
@@ -60,7 +60,7 @@ test "block planner direct boundary paths emit valid work" {
     ),
   )
   parsed.emit_flush()
-  assert_true(parsed.pending.length() >= parsed.window_carry)
+  assert_eq(parsed.pending_bytes(), 0)
   assert_true(parsed.w.out.length() >= 4)
 
   // Validate the final stored-block bit directly. This is kept explicit
@@ -92,8 +92,13 @@ test "lazy match pending at a block boundary is committed" {
   let tokens : Array[Int] = []
   let ll_freq = Array::make(286, 0)
   let d_freq = Array::make(30, 0)
+  let finder = MatchFinder()
+  for i in 0..<3 {
+    insert_pos(data, finder, i, data.length())
+  }
   let processed = tokenize(
     data,
+    finder,
     3,
     4,
     level_configs[6],
@@ -142,8 +147,10 @@ fn second_split_is_cheaper_for_coverage(input : Bytes) -> Bool {
   let greedy : Array[Int] = []
   let greedy_ll_freq = Array::make(286, 0)
   let greedy_d_freq = Array::make(30, 0)
+  let finder = MatchFinder()
   let chunk_end = tokenize(
     input,
+    finder,
     0,
     input.length(),
     level_configs[9],
