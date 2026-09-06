@@ -362,7 +362,10 @@ fn MemDecoder::copy_stored(self : MemDecoder, length : Int) -> Unit raise Inflat
 
 ///|
 fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
-  // Byte-align by discarding the rest of the current partial byte.
+  // The fast Huffman reader can have prefetched whole bytes beyond the current
+  // block header. Byte alignment discards only the remaining partial byte; put
+  // those unread whole bytes back so LEN/NLEN starts at the correct input byte.
+  self.pos = self.pos - (self.bit_count >> 3)
   self.bitbuf = 0
   self.bit_count = 0
   if self.pos + 4 > self.input.length() {
