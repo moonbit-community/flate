@@ -32,17 +32,22 @@ moon bench --package moonbit-community/flate/benchmark \
 moon bench --package moonbit-community/flate/benchmark \
   --release --target native --no-parallelize \
   --file bench_flate.mbt --index 2  # zlib/gzip wrappers
+FLATE_C_FIXTURE=/tmp/flate-libdeflate-l6.deflate \
+  FLATE_C_FIXTURE_SOURCE=/tmp/flate-repetitive-256k \
+  moon bench --package moonbit-community/flate/benchmark \
+  --release --target native --no-parallelize \
+  --file bench_flate.mbt --index 3  # MoonBit decodes a C fixture
 ```
 
-The first two MoonBit benchmark groups are raw DEFLATE allocation-reuse tests.
-They create a `Deflater` or `Inflater` plus its fixed output buffer before
-timing, then reset and reuse both in every iteration. For the 256 KiB parity
-cases, convert a mean in seconds to MiB/s with `0.25 / mean_seconds`.
+The first two MoonBit benchmark groups are raw DEFLATE direct-buffer tests.
+They create a whole-buffer `Compressor` or `Decompressor` plus its fixed output
+buffer before timing, then reuse both in every iteration. For the 256 KiB
+parity cases, convert a mean in seconds to MiB/s with `0.25 / mean_seconds`.
 
-This aligns allocation lifetime with the C runner, not implementation shape:
-the MoonBit side drives a suspendable streaming state machine, whereas
-libdeflate receives a direct input/output buffer call. Treat the results as a
-useful allocation-neutral comparison, not a strict codec-core comparison.
+This aligns allocation lifetime and API shape with the C runner: each side
+receives a complete input buffer and writes directly to a caller-owned output
+buffer. The LZ77 parser, block policy, and decompression fixture still differ;
+use exchanged fixtures for decoder comparisons.
 
 The zlib/gzip and other one-shot groups are allocation-inclusive public API
 measurements. Do not compare those numbers directly with the C runner unless it
@@ -60,9 +65,38 @@ cc -O3 -DNDEBUG benchmark/bench_libdeflate.c \
 ```
 
 The runner warms the codec, then reuses codec objects and output buffers during
-the timed loops. This matches MoonBit's raw allocation-reuse boundary. `-f`
+the timed loops. This matches MoonBit's raw direct-buffer boundary. `-f`
 accepts `raw`, `zlib`, or `gzip`; `-l` accepts levels `0..12`; and `-n` sets
 the timed iteration count.
+
+## Exchanged Fixtures
+
+The raw direct-buffer benchmarks accept the same complete input/output shape as
+the C runner. Decode both implementations' streams to isolate decoder behavior
+from the encoder that produced the fixture.
+
+```sh
+# MoonBit writes a raw DEFLATE fixture; C then benchmarks decoding it.
+moon run --release --target native benchmark/fixture_export \
+  /tmp/flate-repetitive-256k /tmp/flate-moonbit-l6.deflate 6
+/tmp/bench_libdeflate -f raw -l 6 -n 1000 \
+  --decompress-fixture /tmp/flate-moonbit-l6.deflate \
+  /tmp/flate-repetitive-256k
+
+# C writes its raw DEFLATE fixture; MoonBit's index 3 benchmarks decoding it.
+/tmp/bench_libdeflate -f raw -l 6 -n 1000 \
+  --write-compressed /tmp/flate-libdeflate-l6.deflate \
+  /tmp/flate-repetitive-256k
+FLATE_C_FIXTURE=/tmp/flate-libdeflate-l6.deflate \
+  FLATE_C_FIXTURE_SOURCE=/tmp/flate-repetitive-256k \
+  moon bench --package moonbit-community/flate/benchmark \
+  --release --target native --no-parallelize \
+  --file bench_flate.mbt --index 3
+```
+
+Use the matching corpus file for both commands. The C runner verifies that a
+provided decompression fixture reproduces that file before timing; MoonBit's
+cross-fixture benchmark verifies the full decoded payload before timing.
 
 ## Corpus
 

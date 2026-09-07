@@ -1,8 +1,9 @@
 # MacBook Pro M3 Max Results
 
 These are reference measurements for the MoonBit implementation in this
-repository and the standalone `libdeflate` C runner. They were collected on
-2026-09-06 (libdeflate) and 2026-09-07 (MoonBit).
+repository and the standalone `libdeflate` C runner. The retained C baseline
+was collected on 2026-09-06; direct-buffer MoonBit and exchanged-fixture runs
+were collected on 2026-09-07.
 
 ## Device and Toolchain
 
@@ -12,7 +13,7 @@ repository and the standalone `libdeflate` C runner. They were collected on
 - Moon `0.1.20260901`, moonc `0.10.11+5876a226e-nightly`
 - Apple clang `21.0.0` from Xcode (`-O3 -DNDEBUG` for the C runner)
 - libdeflate `1.25` from Homebrew
-- MoonBit source at `5522fd1`, with the allocation-reuse benchmark update
+- MoonBit source at `5522fd1` plus the uncommitted direct-buffer API/benchmark patch
 - retained libdeflate measurements from working tree `5670747`
 
 ## Method
@@ -24,7 +25,7 @@ The parity corpus is exactly 262,144 bytes (256 KiB):
 - `mixed`: 128 KiB `repetitive` followed by 128 KiB `random`
 
 MoonBit raw DEFLATE was rerun with native release code on 2026-09-07. Each raw
-sample resets and reuses a streaming `Deflater` or `Inflater` plus a fixed
+sample reuses a whole-buffer `Compressor` or `Decompressor` plus a fixed
 caller-owned output buffer allocated before timing. The benchmark reports mean
 time per operation; the MiB/s values below are `0.25 / mean_seconds`.
 
@@ -33,12 +34,10 @@ with `-O3 -DNDEBUG` and run with 1,000 iterations (250 MiB processed per
 phase). It warms the codec, then reuses the compressor/decompressor and output
 buffers inside the timed loops.
 
-The C runner's decompression case uses the stream produced by libdeflate itself;
-the MoonBit case uses the stream produced by `@flate` before timing.
-Cross-decoder fixtures are not part of this snapshot. Allocation lifetime is
-now aligned for raw DEFLATE, but the implementation paths are still different:
-MoonBit drives a suspendable streaming state machine, while libdeflate receives
-a direct input/output buffer call.
+The direct raw APIs now have the same shape: both accept a complete input buffer
+and write into a caller-owned output buffer. Their parsers and block policies
+still differ. The baseline decompression columns each use the implementation's
+own L1/L6/L9 fixture; exchanged L6 fixtures are reported separately below.
 
 No CPU affinity or thermal-isolation setup was used; treat these as same-machine
 reference numbers rather than a reproducible hardware limit.
@@ -48,22 +47,30 @@ reference numbers rather than a reproducible hardware limit.
 Throughput in MiB/s. `MoonBit` is derived from its reported mean milliseconds;
 `libdeflate` is the C runner's measured throughput.
 
-| Level | Corpus | MoonBit reusable compress | libdeflate compress | MoonBit reusable decompress | libdeflate decompress |
+| Level | Corpus | MoonBit direct compress | libdeflate compress | MoonBit direct decompress | libdeflate decompress |
 | ---: | --- | ---: | ---: | ---: | ---: |
-| 1 | repetitive | 350.4 | 1527.1 | 1144.0 | 11062.4 |
-| 1 | random | 39.0 | 178.3 | 1625.5 | 68436.9 |
-| 1 | mixed | 69.8 | 381.1 | 1232.3 | 21027.8 |
-| 6 | repetitive | 351.2 | 1155.1 | 1126.2 | 13961.8 |
-| 6 | random | 38.0 | 136.8 | 1606.7 | 69560.4 |
-| 6 | mixed | 66.5 | 269.4 | 1255.1 | 22208.4 |
-| 9 | repetitive | 351.6 | 1164.8 | 1144.5 | 13474.9 |
-| 9 | random | 21.3 | 130.9 | 1618.8 | 67990.2 |
-| 9 | mixed | 42.0 | 258.8 | 1234.9 | 21792.2 |
+| 1 | repetitive | 499.4 | 1527.1 | 4371.4 | 11062.4 |
+| 1 | random | 46.1 | 178.3 | 40257.6 | 68436.9 |
+| 1 | mixed | 84.2 | 381.1 | 6324.8 | 21027.8 |
+| 6 | repetitive | 496.8 | 1155.1 | 4369.9 | 13961.8 |
+| 6 | random | 44.2 | 136.8 | 40322.6 | 69560.4 |
+| 6 | mixed | 79.4 | 269.4 | 6340.9 | 22208.4 |
+| 9 | repetitive | 482.8 | 1164.8 | 4359.2 | 13474.9 |
+| 9 | random | 22.9 | 130.9 | 40453.1 | 67990.2 |
+| 9 | mixed | 43.9 | 258.8 | 6313.1 | 21792.2 |
 
-For the C output sizes, raw DEFLATE produced 833/874 bytes for repetitive data
-(L6/L9 versus L1), 262,169 bytes for random data, and 131,646/131,574 bytes
-for mixed data (L6/L9 versus L1). These sizes describe the libdeflate output,
-not the MoonBit output.
+## Exchanged L6 Fixtures
+
+All values are MiB/s. Fixture I/O and byte-for-byte output validation occur
+before timing. `own` means the decoder consumes the stream produced by the same
+implementation; the two cross columns consume the other implementation's
+stream. The shown fixture sizes are L6 raw DEFLATE bytes.
+
+| Corpus | C fixture | MoonBit fixture | MoonBit decode own | MoonBit decode C | C decode own | C decode MoonBit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| repetitive | 833 | 1033 | 4369.9 | 6546.2 | 13961.8 | 6659.2 |
+| random | 262169 | 262224 | 40322.6 | 39370.1 | 69560.4 | 72590.0 |
+| mixed | 131646 | 131740 | 6340.9 | 9117.4 | 22208.4 | 11987.5 |
 
 ## zlib and gzip Wrappers
 
@@ -82,24 +89,27 @@ application-level reference values, not parity measurements.
 
 ## Conclusions
 
-- Against the retained L6 C reference, libdeflate is about `3.3x` faster at raw
-  compression on repetitive data, `3.6x` on random data, and `4.1x` on mixed
+- Against the retained L6 C reference, libdeflate is about `2.3x` faster at raw
+  compression on repetitive data, `3.1x` on random data, and `3.4x` on mixed
   data.
-- Against the retained L6 C reference, libdeflate is about `12.4x` faster at
-  raw decompression on repetitive data, `43.3x` on random data, and `17.7x` on
+- Against the retained L6 C reference, libdeflate is about `3.2x` faster at raw
+  decompression on repetitive data, `1.7x` on random data, and `3.5x` on
   mixed data.
-- The raw measurements no longer include MoonBit codec/result-buffer allocation,
-  but they exercise the streaming `Deflater`/`Inflater`, not the separate
-  one-shot `deflate_all`/`inflate_all` code paths. Do not read the difference
-  from the earlier one-shot figures as a regression in those APIs.
-- Cross-column comparisons remain same-machine reference numbers rather than
-  controlled hardware limits: the decoder fixtures differ by encoder and the
-  C results were retained from the preceding day. A stricter comparison needs
-  exchanged compressed fixtures and a direct MoonBit caller-buffer one-shot API.
+- The direct APIs remove MoonBit result-buffer allocation and streaming state
+  machine overhead from raw comparison. They do not change the allocation-
+  inclusive `deflate_all` / `inflate_all` or wrapper measurements above.
+- Fixture choice matters substantially for compressible and mixed data: C's
+  repetitive decode rate drops from `13961.8` to `6659.2 MiB/s` on MoonBit's
+  stream, while MoonBit rises from `4369.9` to `6546.2 MiB/s` on C's stream.
+  Random data is nearly fixture-neutral. Do not attribute a same-encoder
+  decompression gap solely to either implementation's decoder.
+- These remain same-machine reference numbers rather than controlled hardware
+  limits: most C baseline values were retained from the preceding day, and
+  CPU affinity or thermal isolation was not used.
 
 ## Reproduction Commands
 
 Use the common corpus generation and runner commands in the
 [benchmark README](./README.md). The MoonBit commands used for this report are
-the three parity cases at indexes `0`, `1`, and `2` in `bench_flate.mbt`; the
-retained C measurements used `-n 1000`.
+the raw direct cases at indexes `0` and `1`, plus cross-fixture index `3`; the
+retained C baseline and exchanged-fixture runs used `-n 1000`.

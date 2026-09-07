@@ -1,4 +1,5 @@
 import {
   "moonbit-community/flate",
   "moonbitlang/core/quickcheck",
+  "moonbitlang/core/test",
 } for "test"

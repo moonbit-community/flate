@@ -3,4 +3,6 @@ import {
   "moonbit-community/flate/gzip",
   "moonbit-community/flate/zlib",
   "moonbitlang/core/bench",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
 }

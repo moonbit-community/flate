@@ -416,12 +416,12 @@ fn write_stored(
     w.write_bits(0, 2) // BTYPE = 00 (stored)
     w.flush() // stored blocks are byte-aligned
     let nlen = chunk ^ 0xFFFF
-    w.out.push((chunk & 0xFF).to_byte())
-    w.out.push(((chunk >> 8) & 0xFF).to_byte())
-    w.out.push((nlen & 0xFF).to_byte())
-    w.out.push(((nlen >> 8) & 0xFF).to_byte())
+    w.write_byte((chunk & 0xFF).to_byte())
+    w.write_byte(((chunk >> 8) & 0xFF).to_byte())
+    w.write_byte((nlen & 0xFF).to_byte())
+    w.write_byte(((nlen >> 8) & 0xFF).to_byte())
     for i in p..<(p + chunk) {
-      w.out.push(data[i])
+      w.write_byte(data[i])
     }
     p = p + chunk
     if last {

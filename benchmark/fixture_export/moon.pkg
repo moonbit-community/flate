@@ -1,0 +1,8 @@
+import {
+  "moonbit-community/flate",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+  "moonbitlang/x/fs",
+}
+
+pkgtype(kind: "executable")

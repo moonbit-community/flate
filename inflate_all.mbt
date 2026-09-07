@@ -5,17 +5,38 @@
 priv struct DecodeOutput {
   mut storage : FixedArray[Byte]
   mut length : Int
+  fixed_capacity : Bool
 }
 
 ///|
 fn DecodeOutput::DecodeOutput(size_hint : Int) -> DecodeOutput {
-  { storage: FixedArray::make(size_hint.max(1), b'\x00'), length: 0, }
+  {
+    storage: FixedArray::make(size_hint.max(1), b'\x00'),
+    length: 0,
+    fixed_capacity: false,
+  }
 }
 
 ///|
-fn DecodeOutput::ensure_capacity(self : DecodeOutput, additional : Int) -> Unit {
+/// Use caller-owned storage for a one-shot decode. Capacity exhaustion becomes
+/// the existing public `OutputLimitExceeded` failure instead of reallocating.
+fn DecodeOutput::into(storage : FixedArray[Byte]) -> DecodeOutput {
+  { storage, length: 0, fixed_capacity: true, }
+}
+
+///|
+fn DecodeOutput::ensure_capacity(
+  self : DecodeOutput,
+  additional : Int,
+) -> Unit raise InflateError {
   let required = self.length + additional
   guard required > self.storage.length() else { return }
+  guard !self.fixed_capacity else {
+    raise InflateError(
+      OutputLimitExceeded,
+      "decoded output exceeds output buffer",
+    )
+  }
   let current = self.storage.length()
   let capacity = if required < self.length {
     abort("DEFLATE output size overflow")
@@ -36,7 +57,10 @@ fn DecodeOutput::ensure_capacity(self : DecodeOutput, additional : Int) -> Unit 
 }
 
 ///|
-fn DecodeOutput::append_byte(self : DecodeOutput, byte : Byte) -> Unit {
+fn DecodeOutput::append_byte(
+  self : DecodeOutput,
+  byte : Byte,
+) -> Unit raise InflateError {
   self.ensure_capacity(1)
   self.storage[self.length] = byte
   self.length = self.length + 1
@@ -48,7 +72,7 @@ fn DecodeOutput::append_bytes(
   source : Bytes,
   source_offset : Int,
   length : Int,
-) -> Unit {
+) -> Unit raise InflateError {
   guard length > 0 else { return }
   self.ensure_capacity(length)
   self.storage.blit_from_bytes(self.length, source, source_offset, length)
@@ -63,7 +87,7 @@ fn DecodeOutput::append_repeated_suffix(
   self : DecodeOutput,
   distance : Int,
   length : Int,
-) -> Unit {
+) -> Unit raise InflateError {
   guard length > 0 else { return }
   self.ensure_capacity(length)
   let start = self.length
@@ -98,12 +122,12 @@ fn DecodeOutput::to_bytes(self : DecodeOutput) -> Bytes {
 ///|
 /// In-memory DEFLATE decoder. Reads from a `Bytes` and appends to `out`.
 priv struct MemDecoder {
-  input : Bytes
+  mut input : Bytes
   mut pos : Int // next input byte
   mut bitbuf : UInt // LSB-first bit accumulator
   mut bit_count : Int // valid bits in `bitbuf`
-  out : DecodeOutput
-  cancelled : () -> Bool // polled every `CANCEL_GRANULARITY` produced bytes
+  mut out : DecodeOutput
+  mut cancelled : () -> Bool // polled every `CANCEL_GRANULARITY` produced bytes
   mut next_cancel : Int // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
   dyn_dist : HuffmanDecoder // distance
@@ -143,6 +167,25 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
     clbits: Array::make(MAX_NUM_LIT + MAX_NUM_DIST, 0),
     codebits: Array::make(NUM_CODES, 0),
   }
+}
+
+///|
+/// Reinitialize an in-memory decoder over a new stream while retaining its
+/// Huffman and dynamic-header workspace. `output` becomes the complete
+/// back-reference history, so no secondary output allocation is needed.
+fn MemDecoder::reset_into(
+  self : MemDecoder,
+  input : Bytes,
+  output : FixedArray[Byte],
+  cancelled : () -> Bool,
+) -> Unit {
+  self.input = input
+  self.pos = 0
+  self.bitbuf = 0
+  self.bit_count = 0
+  self.out = DecodeOutput::into(output)
+  self.cancelled = cancelled
+  self.next_cancel = 0
 }
 
 ///|
@@ -442,6 +485,48 @@ pub fn inflate_all(
   let d = MemDecoder(input, cancelled)
   d.run()
   d.out.to_bytes()
+}
+
+///|
+/// A reusable, whole-buffer raw DEFLATE decompressor. It decodes directly into
+/// caller-owned storage while retaining Huffman and dynamic-header workspace
+/// across streams.
+pub struct Decompressor {
+  priv decoder : MemDecoder
+}
+
+///|
+/// Create a reusable whole-buffer decompressor.
+pub fn Decompressor::Decompressor() -> Decompressor {
+  { decoder: MemDecoder(b"", () => false), }
+}
+
+///|
+/// Decompress `input` into `output`, returning the number of bytes written.
+/// The complete output must fit in `output`; otherwise this raises
+/// `InflateError(OutputLimitExceeded, _)`. As with `inflate_all`, bytes after
+/// the final DEFLATE block are ignored. Reuse one `Decompressor` and output
+/// buffer to avoid per-stream decoder and result-buffer allocation.
+pub fn Decompressor::decompress_into(
+  self : Decompressor,
+  input : Bytes,
+  output : FixedArray[Byte],
+  cancelled? : () -> Bool = () => false,
+) -> Int raise InflateError {
+  self.decoder.reset_into(input, output, cancelled)
+  self.decoder.run()
+  self.decoder.out.length
+}
+
+///|
+/// One-shot convenience form of `Decompressor::decompress_into`. It creates a
+/// decompressor for this call; use `Decompressor` when decoding many streams.
+pub fn inflate_into(
+  input : Bytes,
+  output : FixedArray[Byte],
+  cancelled? : () -> Bool = () => false,
+) -> Int raise InflateError {
+  Decompressor().decompress_into(input, output, cancelled~)
 }
 
 ///|

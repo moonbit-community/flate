@@ -36,13 +36,16 @@ static void die(const char *message) {
 static void usage(const char *program) {
   fprintf(
     stderr,
-    "Usage: %s [-l level] [-n iterations] [-f raw|zlib|gzip] INPUT\n"
+    "Usage: %s [-l level] [-n iterations] [-f raw|zlib|gzip]"
+    " [--write-compressed FILE] [--decompress-fixture FILE] INPUT\n"
     "\n"
     "Measures libdeflate compression and decompression over INPUT.\n"
     "The default iteration count processes about 256 MiB, clamped to 10..100000.\n"
     "-l, --level       Compression level 0..12 (default: 6)\n"
     "-n, --iterations  Timed iterations per phase\n"
-    "-f, --format      Stream format: raw, zlib, or gzip (default: raw)\n",
+    "-f, --format      Stream format: raw, zlib, or gzip (default: raw)\n"
+    "    --write-compressed FILE   Write libdeflate's fixture before timing\n"
+    "    --decompress-fixture FILE  Decode FILE instead of the generated stream\n",
     program
   );
 }
@@ -127,6 +130,23 @@ static uint8_t *read_file(const char *path, size_t *size_out) {
   }
   *size_out = size;
   return data;
+}
+
+static void write_file(const char *path, const uint8_t *data, size_t size) {
+  FILE *file = fopen(path, "wb");
+  if (file == NULL) {
+    perror(path);
+    exit(EXIT_FAILURE);
+  }
+  if (size != 0 && fwrite(data, 1, size, file) != size) {
+    perror(path);
+    fclose(file);
+    exit(EXIT_FAILURE);
+  }
+  if (fclose(file) != 0) {
+    perror(path);
+    exit(EXIT_FAILURE);
+  }
 }
 
 static size_t compress_bound(
@@ -264,6 +284,8 @@ int main(int argc, char **argv) {
   size_t iterations = 0;
   enum stream_format format = FORMAT_RAW;
   const char *input_path = NULL;
+  const char *write_compressed_path = NULL;
+  const char *decompress_fixture_path = NULL;
 
   for (int i = 1; i < argc; i++) {
     const char *arg = argv[i];
@@ -288,6 +310,18 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
       }
       format = parse_format(argv[i]);
+    } else if (strcmp(arg, "--write-compressed") == 0) {
+      if (++i == argc) {
+        usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      write_compressed_path = argv[i];
+    } else if (strcmp(arg, "--decompress-fixture") == 0) {
+      if (++i == argc) {
+        usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      decompress_fixture_path = argv[i];
     } else if (arg[0] == '-') {
       usage(argv[0]);
       return EXIT_FAILURE;
@@ -330,12 +364,23 @@ int main(int argc, char **argv) {
   if (compressed_size == 0) {
     die("compression did not fit in its documented bound");
   }
+  if (write_compressed_path != NULL) {
+    write_file(write_compressed_path, compressed, compressed_size);
+  }
+
+  uint8_t *decompress_input = compressed;
+  size_t decompress_input_size = compressed_size;
+  uint8_t *fixture = NULL;
+  if (decompress_fixture_path != NULL) {
+    fixture = read_file(decompress_fixture_path, &decompress_input_size);
+    decompress_input = fixture;
+  }
   size_t decoded_size = 0;
   enum libdeflate_result result = decompress_once(
     format,
     decompressor,
-    compressed,
-    compressed_size,
+    decompress_input,
+    decompress_input_size,
     decoded,
     input_size,
     &decoded_size
@@ -355,8 +400,8 @@ int main(int argc, char **argv) {
     result = decompress_once(
       format,
       decompressor,
-      compressed,
-      compressed_size,
+      decompress_input,
+      decompress_input_size,
       decoded,
       input_size,
       &decoded_size
@@ -383,8 +428,8 @@ int main(int argc, char **argv) {
     result = decompress_once(
       format,
       decompressor,
-      compressed,
-      compressed_size,
+      decompress_input,
+      decompress_input_size,
       decoded,
       input_size,
       &decoded_size
@@ -413,10 +458,18 @@ int main(int argc, char **argv) {
     compressed_size,
     ratio
   );
+  if (decompress_fixture_path != NULL) {
+    printf(
+      "decompression fixture: %s (%zu bytes)\n",
+      decompress_fixture_path,
+      decompress_input_size
+    );
+  }
   print_rate("compress", input_size, iterations, compression_seconds);
   print_rate("decompress", input_size, iterations, decompression_seconds);
   printf("sink: %zu\n", sink);
 
+  free(fixture);
   free(decoded);
   free(compressed);
   libdeflate_free_decompressor(decompressor);

@@ -19,3 +19,7 @@ keywords = [
 ]
 
 description = "Pure-MoonBit, runtime-agnostic DEFLATE (RFC 1951) engine with gzip/zlib/zip wrappers — suspendable and io-free."
+
+import {
+  "moonbitlang/x@0.5.1",
+}

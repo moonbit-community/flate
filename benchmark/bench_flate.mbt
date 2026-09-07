@@ -6,17 +6,13 @@
 // build bytes in memory; the generators are deterministic. MoonBit reports
 // mean time per operation; divide 256 KiB by that time in seconds to obtain
 // the C runner's MiB/s unit.
-// Raw parity tests reuse a streaming codec and fixed output buffer, matching
-// the C runner's allocation boundary. One-shot and wrapper tests below retain
-// their allocation-inclusive API throughput as separate measurements.
+// Raw parity tests reuse whole-buffer codecs and fixed output buffers, matching
+// the C runner's direct input/output shape and allocation boundary. One-shot
+// and wrapper tests below retain their allocation-inclusive API throughput as
+// separate measurements.
 
 ///|
 const BENCH_INPUT_SIZE : Int = 262144
-
-///|
-// Enough room for a 256 KiB raw stream even when stored blocks win, plus space
-// for the streaming decoder to consume the final EOB after its payload fills.
-const BENCH_CORE_OUTPUT_SLACK : Int = 1024
 
 ///|
 /// Highly compressible: a phrase repeated to fill `size` bytes.
@@ -73,98 +69,87 @@ pub fn bench_mixed(size : Int) -> Bytes {
 }
 
 ///|
-/// Drive a resettable streaming compressor into a caller-owned output buffer.
-/// Both the reset and the state-machine work are part of each codec operation;
-/// allocating the compressor and buffer is deliberately left to benchmark setup.
+/// Run a reusable whole-buffer compressor into a caller-owned output buffer.
+/// Workspace and output allocation are deliberately left to benchmark setup.
 #coverage.skip
-fn bench_deflate_core(
-  deflater : @flate.Deflater,
+fn bench_deflate_direct(
+  compressor : @flate.Compressor,
   input : Bytes,
   output : FixedArray[Byte],
 ) -> Int {
-  deflater.reset()
-  let mut input_pos = 0
-  let mut output_pos = 0
-  for ;; {
-    let status = deflater.step(
-      input[input_pos:],
-      output.mut_view(start=output_pos),
-      action=Finish,
-    )
-    input_pos = input_pos + deflater.last_consumed()
-    output_pos = output_pos + deflater.last_produced()
-    if status is Done {
-      return output_pos
-    }
+  guard compressor.compress_into(input, output) is Some(written) else {
+    abort("benchmark output buffer was too small")
   }
+  written
 }
 
 ///|
-/// Drive a resettable streaming decompressor into a caller-owned output buffer.
+/// Run a reusable whole-buffer decompressor into a caller-owned output buffer.
 /// Valid benchmark fixtures must finish; an error aborts instead of turning an
 /// invalid zero-length result into an apparently valid sample.
 #coverage.skip
-fn bench_inflate_core(
-  inflater : @flate.Inflater,
+fn bench_inflate_direct(
+  decompressor : @flate.Decompressor,
   input : Bytes,
   output : FixedArray[Byte],
 ) -> Int {
-  inflater.reset()
-  let mut input_pos = 0
-  let mut output_pos = 0
-  for ;; {
-    let status = inflater.step(
-      input[input_pos:],
-      output.mut_view(start=output_pos),
-      end=true,
-    ) catch {
-      _ => abort("benchmark fixture failed to inflate")
-    }
-    input_pos = input_pos + inflater.last_consumed()
-    output_pos = output_pos + inflater.last_produced()
-    if status is Done {
-      return output_pos
-    }
+  decompressor.decompress_into(input, output) catch {
+    _ => abort("benchmark fixture failed to inflate")
   }
 }
 
 ///|
-/// Raw DEFLATE allocation-reuse parity cases for `bench_libdeflate.c -f raw`.
-/// Codec objects and output buffers are created once per case outside the timed
-/// closure, then reset and reused for each sample.
+/// Read a cross-decoder fixture before timing. The raw benchmark intentionally
+/// keeps fixture I/O outside its closure.
 #coverage.skip
-test "bench parity raw deflate reusable compression" (b : @bench.T) {
+fn read_fixture(path : String) -> Bytes {
+  @fs.read_file_to_bytes(path) catch {
+    _ => abort("could not read DEFLATE fixture: \{path}")
+  }
+}
+
+///|
+/// Raw DEFLATE direct-buffer parity cases for `bench_libdeflate.c -f raw`.
+/// Codec objects and output buffers are created once per case outside the timed
+/// closure, then reused for each sample.
+#coverage.skip
+test "bench parity raw deflate direct compression" (b : @bench.T) {
   for level in [1, 6, 9] {
     for t in bench_corpora(BENCH_INPUT_SIZE) {
       let (name, data) = t
-      let deflater = @flate.Deflater(level~)
+      let compressor = @flate.Compressor(level~)
       let output = FixedArray::make(
-        data.length() + BENCH_CORE_OUTPUT_SLACK,
+        @flate.deflate_bound(data.length()),
         b'\x00',
       )
-      b.bench(name="raw reusable compress L\{level} 256KiB \{name}", () => {
-        b.keep(bench_deflate_core(deflater, data, output))
+      b.bench(name="raw direct compress L\{level} 256KiB \{name}", () => {
+        b.keep(bench_deflate_direct(compressor, data, output))
       })
     }
   }
 }
 
 ///|
-/// Raw DEFLATE allocation-reuse decompression parity cases. Fixture compression,
+/// Raw DEFLATE direct-buffer decompression parity cases. Fixture compression,
 /// decoder allocation, and output-buffer allocation all occur before timing.
 #coverage.skip
-test "bench parity raw deflate reusable decompression" (b : @bench.T) {
+test "bench parity raw deflate direct decompression" (b : @bench.T) {
   for level in [1, 6, 9] {
     for t in bench_corpora(BENCH_INPUT_SIZE) {
       let (name, data) = t
-      let compressed = @flate.deflate_all(data, level~)
-      let inflater = @flate.Inflater()
-      let output = FixedArray::make(
-        data.length() + BENCH_CORE_OUTPUT_SLACK,
+      let fixture_compressor = @flate.Compressor(level~)
+      let fixture_buffer = FixedArray::make(
+        @flate.deflate_bound(data.length()),
         b'\x00',
       )
-      b.bench(name="raw reusable decompress L\{level} 256KiB \{name}", () => {
-        b.keep(bench_inflate_core(inflater, compressed, output))
+      let fixture_len = bench_deflate_direct(
+        fixture_compressor, data, fixture_buffer,
+      )
+      let compressed = Bytes::from_array(fixture_buffer[:fixture_len])
+      let decompressor = @flate.Decompressor()
+      let output = FixedArray::make(data.length(), b'\x00')
+      b.bench(name="raw direct decompress L\{level} 256KiB \{name}", () => {
+        b.keep(bench_inflate_direct(decompressor, compressed, output))
       })
     }
   }
@@ -193,6 +178,37 @@ test "bench parity zlib and gzip wrappers" (b : @bench.T) {
         b.keep(@gzip.gunzip(gzip_compressed) catch { _ => b"" })
       })
     }
+  }
+}
+
+///|
+/// Cross-decoder case: set `FLATE_C_FIXTURE` to a libdeflate stream and
+/// `FLATE_C_FIXTURE_SOURCE` to its original 256 KiB corpus. The fixture is
+/// decoded and checked byte-for-byte before timing, then repeatedly through
+/// the direct caller-buffer API. Omit both variables to leave this optional
+/// benchmark empty.
+#coverage.skip
+test "bench cross raw C fixture decompression" (b : @bench.T) {
+  if @env.get_env_var("FLATE_C_FIXTURE") is Some(path) {
+    guard @env.get_env_var("FLATE_C_FIXTURE_SOURCE") is Some(source_path) else {
+      abort("FLATE_C_FIXTURE_SOURCE is required with FLATE_C_FIXTURE")
+    }
+    let fixture = read_fixture(path)
+    let expected = read_fixture(source_path)
+    let decompressor = @flate.Decompressor()
+    let output = FixedArray::make(expected.length(), b'\x00')
+    let decoded_len = bench_inflate_direct(decompressor, fixture, output)
+    guard decoded_len == expected.length() else {
+      abort("C DEFLATE fixture decoded to an unexpected length")
+    }
+    for i in 0..<decoded_len {
+      guard output[i] == expected[i] else {
+        abort("C DEFLATE fixture decoded to unexpected bytes")
+      }
+    }
+    b.bench(name="raw direct decompress C fixture \{decoded_len}B", () => {
+      b.keep(bench_inflate_direct(decompressor, fixture, output))
+    })
   }
 }
 

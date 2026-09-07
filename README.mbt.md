@@ -23,6 +23,38 @@ test "README raw DEFLATE round-trip" {
 }
 ```
 
+For whole-buffer callers that already own their output storage, use the direct
+buffer API. `deflate_bound` supplies a conservative DEFLATE capacity;
+compression returns `None` if the supplied buffer is smaller, while decompression
+raises `OutputLimitExceeded`. Reuse `Compressor` and `Decompressor` for many
+streams so their parser and Huffman workspace stays allocated:
+
+```mbt check
+///|
+test "README caller-buffer DEFLATE" {
+  let source = b"direct input and caller-owned output"
+  let compressor = @flate.Compressor(level=6)
+  let compressed_buffer = FixedArray::make(
+    @flate.deflate_bound(source.length()),
+    b'\x00',
+  )
+  guard compressor.compress_into(source, compressed_buffer)
+    is Some(compressed_len) else {
+    fail("deflate_bound was too small")
+  }
+  let compressed = Bytes::from_array(compressed_buffer[:compressed_len])
+  let decompressor = @flate.Decompressor()
+  let output = FixedArray::make(source.length(), b'\x00')
+  let decoded_len = decompressor.decompress_into(compressed, output)
+  assert_eq(Bytes::from_array(output[:decoded_len]), source)
+}
+```
+
+`deflate_into` and `inflate_into` are single-use convenience forms of those
+methods. They retain `deflate_all` / `inflate_all`'s complete-stream prefix
+semantics: trailing raw bytes after a valid final block are ignored. Use the
+streaming APIs when input or output must suspend under backpressure.
+
 The streaming API is a pure push state machine. It owns no I/O object, so both
 an async event loop and a future synchronous reader/writer adapter can feed and
 drain the same engine with whatever buffers their runtime provides:
@@ -161,9 +193,10 @@ without materializing an oversized candidate.
 ENCODE: bytes → raw DEFLATE
 ═══════════════════════════
 
- deflate_all     Deflater::step             deflate_all_split(input)   deflate_all_optimal(input)
-  one-shot         streaming, suspendable;    one-shot, adaptive         one-shot, offline
-  fixed 16 KB      sync flush, preset dict    block splitting            (zopfli-style)
+ deflate_all /    Deflater::step             deflate_all_split(input)   deflate_all_optimal(input)
+ Compressor::      streaming, suspendable;    one-shot, adaptive         one-shot, offline
+ compress_into     sync flush, preset dict    block splitting            (zopfli-style)
+ one-shot, 16 KB
   blocks
         │              │                           │                        │
         └──────┬───────┘                           │                        │
@@ -201,9 +234,9 @@ DECODE: raw DEFLATE → bytes
                     │
         ┌───────────┴─────────────┐
         ▼                         ▼
- Inflater::step             inflate_all
+ Inflater::step             inflate_all / Decompressor::decompress_into
  (inflate.mbt)              (inflate_all.mbt)
- streaming, suspendable     one-shot, growable output —
+ streaming, suspendable     one-shot, growable or caller-owned output —
  (internal atomic staging); trusted input only
  32 KB window, 1-byte
  output progress,
