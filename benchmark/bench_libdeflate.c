@@ -279,7 +279,160 @@ static void print_rate(
   );
 }
 
+// Paired runner protocol. The legacy CLI below remains available for old reports.
+struct sample_context {
+  enum stream_format format;
+  int level;
+  int allocating;
+  int decoding;
+  const uint8_t *input;
+  size_t input_size;
+  const uint8_t *fixture;
+  size_t fixture_size;
+  uint8_t *output;
+  size_t capacity;
+  size_t expected_output_size;
+  struct libdeflate_compressor *compressor;
+  struct libdeflate_decompressor *decompressor;
+};
+
+static size_t sample_once(struct sample_context *s, int validate) {
+  struct libdeflate_compressor *compressor = s->compressor;
+  struct libdeflate_decompressor *decompressor = s->decompressor;
+  uint8_t *output = s->output;
+  size_t capacity = s->capacity;
+  if (s->allocating) {
+    if (s->decoding) {
+      decompressor = libdeflate_alloc_decompressor();
+      if (decompressor == NULL) die("could not allocate decompressor");
+    } else {
+      compressor = libdeflate_alloc_compressor(s->level);
+      if (compressor == NULL) die("could not allocate compressor");
+      capacity = compress_bound(s->format, compressor, s->input_size);
+    }
+    output = malloc(capacity == 0 ? 1 : capacity);
+    if (output == NULL) die("could not allocate output");
+  }
+  size_t written = 0;
+  if (s->decoding) {
+    enum libdeflate_result result = decompress_once(
+      s->format, decompressor, s->fixture, s->fixture_size,
+      output, capacity, &written
+    );
+    if (result != LIBDEFLATE_SUCCESS || written != s->input_size)
+      die("sample decompression failed");
+  } else {
+    written = compress_once(s->format, compressor, s->input, s->input_size,
+                            output, capacity);
+    if (written == 0 || written != s->expected_output_size)
+      die("sample compression failed or changed size");
+  }
+  sink += written + (written == 0 ? 0 : output[written - 1]);
+  if (validate) {
+    if (s->decoding) {
+      if (memcmp(output, s->input, s->input_size) != 0)
+        die("allocated decode payload mismatch");
+    } else {
+      uint8_t *check = malloc(s->input_size == 0 ? 1 : s->input_size);
+      size_t actual = 0;
+      if (check == NULL) die("validation allocation failed");
+      if (decompress_once(s->format, s->decompressor, output, written,
+          check, s->input_size, &actual) != LIBDEFLATE_SUCCESS ||
+          actual != s->input_size || memcmp(check, s->input, s->input_size) != 0)
+        die("allocated compression payload mismatch");
+      free(check);
+    }
+  }
+  if (s->allocating) {
+    free(output);
+    if (s->decoding) libdeflate_free_decompressor(decompressor);
+    else libdeflate_free_compressor(compressor);
+  }
+  return written;
+}
+
+static int sample_main(int argc, char **argv) {
+  if (argc != 9)
+    die("--sample export|compress|decompress direct|oneshot raw|zlib|gzip LEVEL INPUT FIXTURE MILLISECONDS");
+  const char *operation = argv[2];
+  struct sample_context s = {0};
+  s.allocating = strcmp(argv[3], "oneshot") == 0;
+  s.format = parse_format(argv[4]);
+  if (!s.allocating && (strcmp(argv[3], "direct") != 0 || s.format != FORMAT_RAW))
+    die("direct mode supports only raw DEFLATE");
+  s.level = parse_level(argv[5]);
+  uint8_t *input = read_file(argv[6], &s.input_size);
+  s.input = input;
+  size_t milliseconds = parse_size(argv[8], "milliseconds");
+  if (milliseconds == 0) die("duration must be positive");
+  s.decoding = strcmp(operation, "decompress") == 0;
+  int exporting = strcmp(operation, "export") == 0;
+  if (!s.decoding && !exporting && strcmp(operation, "compress") != 0)
+    die("invalid operation");
+  s.compressor = libdeflate_alloc_compressor(s.level);
+  s.decompressor = libdeflate_alloc_decompressor();
+  if (s.compressor == NULL || s.decompressor == NULL) die("codec allocation failed");
+  size_t compressed_capacity = compress_bound(s.format, s.compressor, s.input_size);
+  uint8_t *compressed = malloc(compressed_capacity);
+  uint8_t *decoded = malloc(s.input_size == 0 ? 1 : s.input_size);
+  if (compressed == NULL || decoded == NULL) die("buffer allocation failed");
+  size_t compressed_size = compress_once(s.format, s.compressor, input,
+    s.input_size, compressed, compressed_capacity);
+  if (compressed_size == 0) die("fixture compression failed");
+  uint8_t *external_fixture = NULL;
+  s.fixture = compressed;
+  s.fixture_size = compressed_size;
+  if (s.decoding) {
+    external_fixture = read_file(argv[7], &s.fixture_size);
+    s.fixture = external_fixture;
+  }
+  size_t decoded_size = 0;
+  if (decompress_once(s.format, s.decompressor, s.fixture, s.fixture_size,
+      decoded, s.input_size, &decoded_size) != LIBDEFLATE_SUCCESS ||
+      decoded_size != s.input_size || memcmp(decoded, input, s.input_size) != 0)
+    die("fixture payload mismatch");
+  if (exporting) {
+    write_file(argv[7], compressed, compressed_size);
+  } else {
+    s.output = s.decoding ? decoded : compressed;
+    s.capacity = s.decoding ? s.input_size : compressed_capacity;
+    s.expected_output_size = s.decoding ? s.input_size : compressed_size;
+    sample_once(&s, 1);
+    for (int i = 0; i < 3; i++) sample_once(&s, 0);
+    size_t iterations = 1;
+    double seconds;
+    size_t written = 0;
+    for (;;) {
+      double started = monotonic_seconds();
+      for (size_t i = 0; i < iterations; i++) written = sample_once(&s, 0);
+      seconds = monotonic_seconds() - started;
+      if (seconds * 1000 >= milliseconds) break;
+      if (iterations >= 536870912) die("calibration iteration limit");
+      iterations *= 2;
+    }
+    // Validate the direct output after timing; allocating calls have freed theirs.
+    if (s.allocating) written = sample_once(&s, 1);
+    if (!s.allocating && !s.decoding) {
+      if (decompress_once(s.format, s.decompressor, compressed, written,
+          decoded, s.input_size, &decoded_size) != LIBDEFLATE_SUCCESS ||
+          decoded_size != s.input_size) die("post-sample decompression failed");
+    }
+    if (memcmp(decoded, input, s.input_size) != 0) die("post-sample payload mismatch");
+    printf("{\"iterations\":%zu,\"seconds\":%.9f,\"output_bytes\":%zu,\"sink\":%zu}\n",
+           iterations, seconds, written, sink);
+  }
+  free(external_fixture);
+  free(decoded);
+  free(compressed);
+  free(input);
+  libdeflate_free_compressor(s.compressor);
+  libdeflate_free_decompressor(s.decompressor);
+  return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv) {
+  if (argc > 1 && strcmp(argv[1], "--sample") == 0)
+    return sample_main(argc, argv);
   int level = 6;
   size_t iterations = 0;
   enum stream_format format = FORMAT_RAW;

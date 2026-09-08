@@ -420,9 +420,7 @@ fn write_stored(
     w.write_byte(((chunk >> 8) & 0xFF).to_byte())
     w.write_byte((nlen & 0xFF).to_byte())
     w.write_byte(((nlen >> 8) & 0xFF).to_byte())
-    for i in p..<(p + chunk) {
-      w.write_byte(data[i])
-    }
+    w.write_bytes(data, p, chunk)
     p = p + chunk
     if last {
       break

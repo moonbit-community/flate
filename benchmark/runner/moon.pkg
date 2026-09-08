@@ -1,0 +1,11 @@
+import {
+  "moonbit-community/flate",
+  "moonbit-community/flate/gzip",
+  "moonbit-community/flate/zlib",
+  "moonbitlang/core/bench",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+  "moonbitlang/x/fs",
+}
+
+pkgtype(kind: "executable")

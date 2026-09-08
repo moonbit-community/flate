@@ -1,5 +1,114 @@
 # Benchmarks
 
+## Paired Suite (Recommended)
+
+Run from the repository root. Requires Python 3.10+, the MoonBit toolchain,
+a C compiler, `pkg-config`, and an installed libdeflate development package.
+No Python packages or corpus downloads are needed.
+
+```sh
+python3 benchmark/run.py                    # quick: 3 rounds, >=40 ms per sample
+python3 benchmark/run.py --profile smoke    # validation only, 1 round, >=2 ms
+python3 benchmark/run.py --profile full     # 7 rounds, >=150 ms, broader coverage
+python3 benchmark/run.py --corpus /path/to/application-data.bin
+python3 benchmark/run.py --rounds 5 --milliseconds 100
+```
+
+Each run builds fresh native release executables into a unique
+`.local/bench/<UTC timestamp>/` directory and prints progress. `--output DIR`
+selects a different **new** directory; existing results are never overwritten.
+Quick is intended for approximately one to a few minutes on a development
+laptop, including compilation. Full can take several minutes or longer.
+Large external files and slow codecs can exceed the nominal per-sample budget.
+
+The suite runs no timed workloads concurrently. Each configuration contains
+compression plus decoding **both producers' exact fixtures**, by both decoders.
+Implementation and operation order alternate across rounds. Input loading,
+fixture generation, validation, process startup and compilation are outside
+the timed batch. Three warmup calls precede geometric batch calibration;
+only the final batch at or above the requested duration becomes a sample.
+There is no per-operation timer. Codec-internal allocation remains measured.
+
+### Measurement Boundaries
+
+| Group | flate | libdeflate | Interpretation |
+| --- | --- | --- | --- |
+| raw direct | Reused `Compressor` / `Decompressor`, caller-owned output | Reused codecs, caller-owned output | Primary implementation comparison |
+| one-shot raw/zlib/gzip compression | Public convenience API; result created/released per operation | Codec and result buffer allocated/freed per operation | Application cost; includes allocation |
+| one-shot raw/zlib/gzip decompression | Public grow-output API; allocation and release per operation | Codec and exact-size result allocated/freed per operation | C requires known output size; application comparison, not equal information |
+
+Only raw direct has a multiplier column populated. Compression still compares
+the same **numeric level**, not equal quality: read compressed byte counts
+alongside speed and compare neighboring levels. There is no aggregate multiplier.
+Smoke or runs with fewer than three rounds suppress multipliers entirely.
+Wrapper fixtures have one member, no dictionary and no trailing bytes; both
+implementations verify checksums. This does not compare every streaming or
+multi-member API feature. Direct raw and convenience raw fixtures are generated
+separately, so a future difference between the encoder paths stays visible.
+
+All fixtures are validated against the full source bytes by Python zlib,
+including end-of-stream and absence of trailing data. Each decoder runner also
+validates before and after timing. Direct buffers are checked after the timed
+loop; one-shot results are released inside it, with an additional untimed
+validation. Decode errors terminate the run instead of becoming empty results.
+An incomplete run has raw samples but no final report; do not treat it as complete.
+
+### Coverage
+
+Quick includes 256 KiB repeated text, deterministic SHAKE-generated random
+bytes, half-text/half-random, actual repository source (up to 256 KiB), synthetic
+JSON, and precompressed source. Their direct compression levels are 1, 6 and 9.
+It adds L6 cases at 512 bytes, 4 KiB and 1 MiB, and L0 stored baselines for random
+and source. One-shot raw/zlib/gzip L6 runs cover repeated text, random and source.
+Source and precompressed sizes are recorded exactly, not padded with repetitions.
+JSON is a byte prefix of structured records, intended to model byte distribution;
+it is not guaranteed to end at a complete JSON document boundary.
+
+Full adds random data at 4 KiB and 1 MiB, source at 64 KiB, distance-one data,
+L0 for all direct cases, and one-shot formats for all corpora. Smoke covers empty,
+single-byte, 4 KiB source and 256 KiB mixed data with L0/L6 direct and L6 one-shot.
+`--corpus` can be repeated; external inputs are copied into the result directory
+and use the profile's level policy. Synthetic inputs are diagnostic cases, not a
+claim to represent every application's data.
+
+### Results and Limitations
+
+- `report.md`: median throughput, compressed sizes, fixture producer and spread.
+- `samples.jsonl`: every measured batch, seconds, iterations, round and identity.
+- `summary.json`: median/min/max seconds per operation, throughput and spread.
+- `metadata.json`: versions, platform, build commands, binary/library/source hashes.
+- `build-*.log`: compilation logs and Moon's actual planned compiler commands.
+- `source/`, `source.diff`: source snapshot (including new runner files) and tracked diff.
+- `corpus.json`, `fixtures.json`, `corpus/`, `fixtures/`: exact bytes and SHA-256 hashes.
+
+Spread is `(max - min) / median` of per-operation times, not a confidence
+interval. Above 10% the report marks `NOISY`; rerun with longer samples before
+using those rows to prioritize work. A single round cannot establish stability.
+The CPU is not pinned, thermal state is not controlled, and buffers are warm;
+these are development comparisons, not cold-cache or DRAM bandwidth limits.
+The Moon native compiler's defaults and the installed libdeflate build can
+differ; recorded build commands make this visible rather than claiming identical
+compiler optimization settings. On macOS, machine metadata uses `sysctl` and
+`otool`, which require permission in some sandboxes.
+
+The suite tests no JS/Wasm throughput, peak memory, standalone checksums,
+streaming chunk-size sensitivity, split/optimal parser curves, or multi-member
+gzip. Those need dedicated experiments. In particular, do not attribute the
+wrapper difference entirely to checksums or the same-level compression
+difference entirely to implementation overhead.
+
+Harness checks:
+
+```sh
+python3 -m unittest discover -s benchmark -p '*_test.py'
+python3 benchmark/run.py --profile smoke
+```
+
+## Historical and Individual Benchmarks
+
+The measurements and commands below predate the paired suite. Keep their stated
+boundaries when interpreting them; do not combine their ratios with a new run.
+
 This directory contains the MoonBit benchmark and the standalone C runner used
 to compare raw DEFLATE throughput with `libdeflate`:
 

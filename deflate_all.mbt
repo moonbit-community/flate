@@ -56,7 +56,6 @@ pub fn Compressor::compress_into(
 ) -> Int? {
   let w = BitWriter::into(output)
   let n = input.length()
-  self.finder.reset()
   // Level 0 (and the empty input it subsumes): one stored pass, no parsing.
   guard self.level != 0 else {
     write_stored(w, input, 0, n, is_final=true)
@@ -67,6 +66,7 @@ pub fn Compressor::compress_into(
       Some(w.direct_pos)
     }
   }
+  self.finder.reset()
   // Each non-final block covers up to `DEFLATE_BLOCK_SIZE` tokenizable bytes; a
   // boundary match may overhang, so `processed` (not `target`) sets the next
   // start.

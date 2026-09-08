@@ -1,4 +1,35 @@
 ///|
+test "direct stored blocks preserve boundaries and handle partial output" {
+  let compressor = @flate.Compressor(level=0)
+  for size in [0, 1, 65534, 65535, 65536, 131070, 131071] {
+    let source = Bytes::from_array(
+      Array::makei(size, i => (i * 73 + i / 19).to_byte()),
+    )
+    let expected = @flate.deflate_all(source, level=0)
+    for capacity in [0, 1, 4, 5, expected.length() - 1] {
+      if capacity < expected.length() {
+        @test.assert_eq(
+          compressor.compress_into(source, FixedArray::make(capacity, b'\x00')),
+          None,
+        )
+      }
+    }
+    // Reuse after exhaustion, with both exact capacity and trailing canaries.
+    for extra in [0, 13] {
+      let output = FixedArray::make(expected.length() + extra, b'\xA5')
+      @test.assert_eq(
+        compressor.compress_into(source, output),
+        Some(expected.length()),
+      )
+      @test.assert_eq(direct_bytes(output, expected.length()), expected)
+      for i in expected.length()..<output.length() {
+        @test.assert_eq(output[i], b'\xA5')
+      }
+    }
+  }
+}
+
+///|
 fn direct_bytes(buffer : FixedArray[Byte], length : Int) -> Bytes {
   Bytes::from_array(buffer[:length])
 }

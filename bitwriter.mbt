@@ -56,6 +56,31 @@ fn BitWriter::write_byte(self : BitWriter, byte : Byte) -> Unit {
 }
 
 ///|
+/// Write a byte-aligned payload. Preserve the direct writer's overflow count
+/// even if a previous header or payload already exhausted the output buffer.
+fn BitWriter::write_bytes(
+  self : BitWriter,
+  input : Bytes,
+  offset : Int,
+  length : Int,
+) -> Unit {
+  if self.direct_output is Some(output) {
+    let count = length.min((output.length() - self.direct_pos).max(0))
+    if count > 0 {
+      output.blit_from_bytes(self.direct_pos, input, offset, count)
+    }
+    self.direct_pos = self.direct_pos + length
+    if count < length {
+      self.overflowed = true
+    }
+  } else {
+    for i in offset..<(offset + length) {
+      self.out.push(input[i])
+    }
+  }
+}
+
+///|
 fn BitWriter::write_bit(self : BitWriter, bit : Int) -> Unit {
   self.bitbuf = self.bitbuf | (bit << self.bit_count)
   self.bit_count = self.bit_count + 1
