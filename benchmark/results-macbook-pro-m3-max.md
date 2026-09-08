@@ -1,6 +1,97 @@
 # MacBook Pro M3 Max Results
 
-These measurements were collected on 2026-09-08 using the paired native
+The checksum rerun below records the latest zlib/gzip changes. The subsequent
+full-suite baseline is retained with its original source and toolchain metadata.
+
+## Checksum Optimization Rerun (2026-09-08)
+
+This section is the latest measurement of the changed zlib/gzip paths.
+The raw tables below remain the earlier baseline and were not rerun here.
+
+- Source: `823123b` plus uncommitted Adler-32 block reduction and CRC-32
+  slice-by-8 changes. The before executable predates both checksum changes.
+- Both MoonBit executables use Moon `0.1.20260908 (b898b74)`,
+  moonc `0.10.12+cb3c45ca7-nightly`, native release defaults.
+  The before executable was retained at `.local/adler-before/`;
+  the after executable was freshly built at `.local/checksum-final/`.
+  The retained libdeflate 1.25 runner was executed again in this session.
+- Run: `checksum-20260908T172046`. Metadata, executable hashes, corpus/fixture
+  hashes and all 216 batch samples are in
+  `.local/bench/checksum-20260908T172046/`.
+- L6 one-shot, three rounds, at least 100 ms per final batch. Implementation
+  order rotates between rounds; runs are sequential. The existing runner
+  handles warmup, calibration and full-payload checks outside timing.
+- Fixed inputs are from `20260908T035831.029182Z/corpus/`, including the
+  unchanged source snapshot. Both MoonBit versions produce byte-identical
+  zlib/gzip fixtures; Python zlib also validated all generated fixtures.
+- Each decode row uses one shared fixture for all three implementations.
+  `flate` means the optimized MoonBit fixture (identical to before);
+  `C` means the libdeflate fixture.
+- Rates below are median MiB/s. Gain is **after / before MoonBit**, not a
+  libdeflate parity multiplier. C still knows the output size while MoonBit
+  grows output; all one-shot implementations include allocation/release.
+- Spread is (max-min)/median of seconds per operation. The three spread values
+  are before / after / C. Above 10% is marked NOISY. These warm-buffer
+  measurements have no CPU pinning or thermal isolation.
+- Do not compare these rates directly with the older toolchain's tables.
+  Streaming wrappers that use `update_byte` do not gain the new bulk checksum
+  algorithms automatically; streaming and cold-start costs were not measured.
+
+### Compression
+
+| Corpus / format | Before | After | Gain | C reference | Compressed bytes flate / C | Spread before / after / C |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| source / zlib | 23.7 | 25.5 | 1.07x | 120.9 | 65030 / 64801 | 2.9% / 0.7% / 3.7% |
+| source / gzip | 25.1 | 26.4 | 1.05x | 124.4 | 65042 / 64813 | 1.1% / 1.0% / 0.9% |
+| json-256k / zlib | 42.6 | 49.6 | 1.16x | 158.1 | 41121 / 37088 | 0.4% / 1.2% / 0.5% |
+| json-256k / gzip | 45.0 | 49.4 | 1.10x | 158.3 | 41133 / 37100 | 1.0% / 0.7% / 0.9% |
+| repetitive-256k / zlib | 176.4 | 421.0 | 2.39x | 1167.1 | 1039 / 839 | 0.9% / 0.4% / 1.1% |
+| repetitive-256k / gzip | 231.5 | 411.7 | 1.78x | 1168.1 | 1051 / 851 | 0.4% / 0.5% / 0.6% |
+| random-256k / zlib | 38.1 | 41.8 | 1.10x | 142.5 | 262230 / 262175 | 1.1% / 5.3% / 1.6% |
+| random-256k / gzip | 38.9 | 41.7 | 1.07x | 142.0 | 262242 / 262187 | 3.5% / 5.7% / 2.7% |
+
+### Decompression
+
+| Corpus / format | Shared fixture | Before | After | Gain | C reference | Spread before / after / C |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| source / zlib | flate | 100.5 | 154.4 | 1.54x | 1632.0 | 3.8% / 2.9% / 3.8% |
+| source / zlib | C | 104.3 | 158.7 | 1.52x | 1818.8 | 0.5% / 1.7% / 0.8% |
+| source / gzip | flate | 113.6 | 145.0 | 1.28x | 1676.8 | 4.3% / 0.9% / 1.3% |
+| source / gzip | C | 114.8 | 146.5 | 1.28x | 1844.0 | 3.1% / 0.7% / 1.1% |
+| json-256k / zlib | flate | 135.8 | 246.3 | 1.81x | 2390.0 | 0.3% / 0.6% / 0.5% |
+| json-256k / zlib | C | 137.2 | 255.1 | 1.86x | 2930.9 | 1.0% / 3.0% / 1.7% |
+| json-256k / gzip | flate | 153.3 | 216.2 | 1.41x | 2404.3 | 0.8% / 1.0% / 0.3% |
+| json-256k / gzip | C | 156.1 | 223.9 | 1.43x | 2946.5 | 0.5% / 2.3% / 1.1% |
+| repetitive-256k / zlib | flate | 192.1 | 529.9 | 2.76x | 5909.9 | 0.4% / 0.6% / 0.7% |
+| repetitive-256k / zlib | C | 195.3 | 552.7 | 2.83x | 11444.9 | 0.3% / 1.1% / 0.9% |
+| repetitive-256k / gzip | flate | 231.1 | 409.7 | 1.77x | 6017.0 | 0.7% / 0.7% / 1.0% |
+| repetitive-256k / gzip | C | 235.1 | 422.1 | 1.80x | 11558.5 | 0.9% / 0.2% / 0.6% |
+| random-256k / zlib | flate | 202.7 | 610.4 | 3.01x | 30408.1 | 0.8% / 0.2% / 1.0% |
+| random-256k / zlib | C | 201.8 | 610.1 | 3.02x | 30428.2 | 0.6% / 0.5% / 0.9% |
+| random-256k / gzip | flate | 244.7 | 456.8 | 1.87x | 29146.0 | 0.3% / 0.4% / 1.6% |
+| random-256k / gzip | C | 246.2 | 457.9 | 1.86x | 28930.2 | 0.6% / 0.6% / 1.0% |
+
+On flate fixtures, source/JSON zlib decompression improves 1.54x/1.81x and
+gzip improves 1.28x/1.41x. Random zlib/gzip decompression improves 3.01x/1.87x.
+These are end-to-end convenience API gains with unchanged compressed bytes,
+not standalone checksum speedups. Remaining decoder and output-copy work limits
+the application gain even when checksum work is greatly reduced.
+
+To repeat an individual after sample with the retained fixture (repeat in
+alternating before/after/C order for comparisons):
+
+```sh
+moon run --release --target native benchmark/runner \
+  decompress oneshot zlib 6 \
+  .local/bench/20260908T035831.029182Z/corpus/source.bin \
+  .local/bench/checksum-20260908T172046/source-zlib-after.bin 100
+```
+
+## Earlier Full-Suite Baseline
+
+The following sections describe the earlier pre-checksum run only.
+
+These baseline measurements were collected on 2026-09-08 using the paired native
 benchmark suite. Both implementations were measured in the same run.
 They supersede the 2026-09-06/07 tables previously in this file; the old
 LCG-based corpus and allocation boundaries are not directly comparable.

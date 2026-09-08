@@ -2,13 +2,22 @@
 /// CRC-32 (IEEE 802.3 / ISO 3309, polynomial 0xEDB88320 reflected) as used by
 /// gzip and ZIP. Shared primitive: `@checksum.crc32`.
 fn build_crc32_table() -> FixedArray[UInt] {
-  let t = FixedArray::make(256, 0U)
+  let t = FixedArray::make(8 * 256, 0U)
   for n in 0..<256 {
     let mut c = n.reinterpret_as_uint()
     for _k in 0..<8 {
       c = if (c & 1) != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 }
     }
     t[n] = c
+  }
+  // Slice k is the remainder after k further zero bytes. Keep slice zero
+  // compatible with the byte-at-a-time tail and incremental update_byte.
+  for slice in 1..<8 {
+    for n in 0..<256 {
+      let previous = t[(slice - 1) * 256 + n]
+      t[slice * 256 + n] = t[(previous & 0xFF).reinterpret_as_int()] ^
+        (previous >> 8)
+    }
   }
   t
 }
@@ -31,11 +40,30 @@ pub fn Crc32::Crc32() -> Crc32 {
 }
 
 ///|
-/// Fold `data` into the running checksum.
+/// Fold eight bytes at a time using independent table lookups, then handle
+/// the remaining bytes with the scalar recurrence. Explicit byte assembly
+/// supports unaligned views and every backend without host-endian assumptions.
 pub fn Crc32::update(self : Crc32, data : BytesView) -> Unit {
   let mut crc = self.state
-  for b in data {
-    crc = crc32_table[((crc ^ b.to_uint()) & 0xFF).reinterpret_as_int()] ^
+  let mut position = 0
+  while data.length() - position >= 8 {
+    let first = crc ^
+      data[position].to_uint() ^
+      (data[position + 1].to_uint() << 8) ^
+      (data[position + 2].to_uint() << 16) ^
+      (data[position + 3].to_uint() << 24)
+    crc = crc32_table[1792 + (first & 0xFF).reinterpret_as_int()] ^
+      crc32_table[1536 + ((first >> 8) & 0xFF).reinterpret_as_int()] ^
+      crc32_table[1280 + ((first >> 16) & 0xFF).reinterpret_as_int()] ^
+      crc32_table[1024 + (first >> 24).reinterpret_as_int()] ^
+      crc32_table[768 + data[position + 4].to_int()] ^
+      crc32_table[512 + data[position + 5].to_int()] ^
+      crc32_table[256 + data[position + 6].to_int()] ^
+      crc32_table[data[position + 7].to_int()]
+    position = position + 8
+  }
+  for i in position..<data.length() {
+    crc = crc32_table[((crc ^ data[i].to_uint()) & 0xFF).reinterpret_as_int()] ^
       (crc >> 8)
   }
   self.state = crc

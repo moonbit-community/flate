@@ -3,6 +3,12 @@
 const ADLER_MODULUS : Int = 65521
 
 ///|
+/// With reduced a,b <= 65520 and bytes <= 255, after n bytes:
+/// b <= 65520 + n*65520 + 255*n*(n+1)/2.
+/// At n=3800 this is 2090626020, below signed Int's 2147483647 limit.
+const ADLER_BLOCK_SIZE : Int = 3800
+
+///|
 /// Incremental Adler-32 accumulator (RFC 1950 §9), the streaming counterpart to
 /// `adler32`. Feed bytes with `update`, read with `finish`.
 pub struct Adler32 {
@@ -21,9 +27,16 @@ pub fn Adler32::Adler32() -> Adler32 {
 pub fn Adler32::update(self : Adler32, data : BytesView) -> Unit {
   let mut a = self.a
   let mut b = self.b
-  for byte in data {
-    a = (a + byte.to_int()) % ADLER_MODULUS
-    b = (b + a) % ADLER_MODULUS
+  let mut start = 0
+  while start < data.length() {
+    let end = start + (data.length() - start).min(ADLER_BLOCK_SIZE)
+    for i in start..<end {
+      a = a + data[i].to_int()
+      b = b + a
+    }
+    a = a % ADLER_MODULUS
+    b = b % ADLER_MODULUS
+    start = end
   }
   self.a = a
   self.b = b
