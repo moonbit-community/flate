@@ -1,4 +1,62 @@
 ///|
+test "lazy parsers keep hash chains strictly backward across block boundaries" {
+  let input = b"abcabcXabcabcYabcabcZabcabcXabcabcY"
+  let window = FixedArray::make(STREAM_RING_STORAGE_SIZE, b'\x00')
+  for i in 0..<input.length() {
+    window[i] = input[i]
+    window[i + STREAM_RING_SIZE] = input[i]
+  }
+  for level in [1, 4, 6, 9] {
+    for block_size in [4, input.length()] {
+      let direct = MatchFinder()
+      let streaming = MatchFinder()
+      let direct_tokens : Array[Int] = []
+      let streaming_tokens : Array[Int] = []
+      let direct_ll = Array::make(MAX_NUM_LIT, 0)
+      let direct_dist = Array::make(MAX_NUM_DIST, 0)
+      let streaming_ll = Array::make(MAX_NUM_LIT, 0)
+      let streaming_dist = Array::make(MAX_NUM_DIST, 0)
+      let mut start = 0
+      while start < input.length() {
+        let end = (start + block_size).min(input.length())
+        let processed = tokenize(
+          input,
+          direct,
+          start,
+          end,
+          level_configs[level],
+          direct_tokens,
+          direct_ll,
+          direct_dist,
+        )
+        let streamed = tokenize_window(
+          window,
+          streaming,
+          start,
+          end,
+          input.length(),
+          level_configs[level],
+          streaming_tokens,
+          streaming_ll,
+          streaming_dist,
+        )
+        @test.assert_eq(processed, streamed)
+        for position in 0..<processed.min(input.length() - 2) {
+          // Every eligible position is inserted exactly once, even when a
+          // deferred match overhangs a block boundary.
+          @test.assert_eq(direct.prev[position] < position, true)
+          @test.assert_eq(streaming.prev[position] < position, true)
+        }
+        @test.assert_eq(direct.head, streaming.head)
+        @test.assert_eq(direct.prev, streaming.prev)
+        start = processed
+      }
+      @test.assert_eq(direct_tokens, streaming_tokens)
+    }
+  }
+}
+
+///|
 fn match_len_fixture(mismatch? : Int) -> Bytes {
   let data = Array::make(516, b'\x00')
   for i in 0..<258 {

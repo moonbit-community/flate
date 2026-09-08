@@ -463,7 +463,6 @@ fn tokenize(
     }
     let cur_len = match_info >> 16
     let cur_dist = match_info & 0xFFFF
-    insert_pos(data, finder, i, n)
     // The deferred match (starting at i-1) wins: emit it.
     guard !have_prev || cur_dist > 0 else {
       i = commit_match(
@@ -480,6 +479,9 @@ fn tokenize(
       have_prev = false
       continue
     }
+    // A deferred commit inserts i as an interior position. Insert it here
+    // only when that commit did not happen, so prev never links to itself.
+    insert_pos(data, finder, i, n)
     // A longer match starts at i: emit a literal for i-1, keep deferring.
     guard !have_prev else {
       emit_literal(tokens, ll_freq, data[i - 1].to_int())
@@ -554,7 +556,6 @@ fn tokenize_window(
     }
     let cur_len = match_info >> 16
     let cur_dist = match_info & 0xFFFF
-    insert_window_pos(data, finder, i, available_end)
     guard !have_prev || cur_dist > 0 else {
       i = commit_window_match(
         data,
@@ -570,6 +571,8 @@ fn tokenize_window(
       have_prev = false
       continue
     }
+    // The deferred commit above already inserts its interior positions.
+    insert_window_pos(data, finder, i, available_end)
     guard !have_prev else {
       emit_literal(tokens, ll_freq, data[(i - 1) & STREAM_RING_MASK].to_int())
       prev_len = cur_len

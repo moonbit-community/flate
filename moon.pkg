@@ -5,6 +5,10 @@ import {
   "moonbitlang/core/v128",
 }
 
+import {
+  "moonbitlang/core/test",
+} for "wbtest"
+
 // v128 is currently marked experimental in moonbitlang/core. This package
 // intentionally accepts that alert for its internal SIMD hot paths.
 
