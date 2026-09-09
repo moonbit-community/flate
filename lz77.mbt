@@ -199,9 +199,8 @@ fn match_len_in_window(
 }
 
 ///|
-/// Cheaply reject a hash-chain candidate that cannot improve `best_len` before
-/// paying for a wide comparison. For an existing match, zlib-style probes at
-/// both ends of the known prefix catch most collisions without scanning it.
+/// Scalar candidate probe retained for the optimal parser. The regular
+/// match finders cache their current-position probes across the search loop.
 #inline
 fn match_candidate_can_beat(
   data : Bytes,
@@ -211,30 +210,6 @@ fn match_candidate_can_beat(
   limit : Int,
 ) -> Bool {
   guard best_len < limit else { return false }
-  if best_len < 3 {
-    data[candidate] == data[position] &&
-    data[candidate + 1] == data[position + 1] &&
-    data[candidate + 2] == data[position + 2]
-  } else {
-    data[candidate] == data[position] &&
-    data[candidate + 1] == data[position + 1] &&
-    data[candidate + best_len - 1] == data[position + best_len - 1] &&
-    data[candidate + best_len] == data[position + best_len]
-  }
-}
-
-///|
-#inline
-fn window_match_candidate_can_beat(
-  data : FixedArray[Byte],
-  candidate : Int,
-  position : Int,
-  best_len : Int,
-  limit : Int,
-) -> Bool {
-  guard best_len < limit else { return false }
-  let candidate = candidate & STREAM_RING_MASK
-  let position = position & STREAM_RING_MASK
   if best_len < 3 {
     data[candidate] == data[position] &&
     data[candidate + 1] == data[position + 1] &&
@@ -268,13 +243,30 @@ fn find_match(
   let mut best_len = base
   let mut best_dist = 0
   let limit = if n - i < 258 { n - i } else { 258 }
+  guard base < limit else { return base << 16 }
   let mut budget = cfg.max_chain
   if base >= cfg.good_length {
     budget = budget >> 2
   }
+  guard cand >= 0 && i - cand <= WINDOW_SIZE && budget > 0 else {
+    return base << 16
+  }
+  let prefix = data[i].to_int() | (data[i + 1].to_int() << 8)
+  let prev = finder.prev
+  // Probe the end first, as in libdeflate's longer-match search. Keep the
+  // current-position bytes in locals and refresh them only after improvement.
+  // With no three-byte match yet, offset 2 checks the same three prefix bytes.
+  // Pack adjacent bytes into 16-bit values to combine equality branches;
+  // ordinary byte indexing keeps the same bounds guarantees on every target.
+  let mut probe = base.max(2)
+  let mut suffix = data[i + probe - 1].to_int() |
+    (data[i + probe].to_int() << 8)
   let mut steps = 0
-  while cand >= 0 && steps < budget && i - cand <= 32768 {
-    let l = if match_candidate_can_beat(data, cand, i, best_len, limit) {
+  while cand >= 0 && steps < budget && i - cand <= WINDOW_SIZE {
+    let candidate_suffix = data[cand + probe - 1].to_int() |
+      (data[cand + probe].to_int() << 8)
+    let l = if candidate_suffix == suffix &&
+      (data[cand].to_int() | (data[cand + 1].to_int() << 8)) == prefix {
       match_len_up_to(data, cand, i, limit)
     } else {
       best_len
@@ -282,11 +274,13 @@ fn find_match(
     if l > best_len {
       best_len = l
       best_dist = i - cand
-      if l >= cfg.nice_length {
+      if l >= cfg.nice_length || l == limit {
         break
       }
+      probe = l
+      suffix = data[i + probe - 1].to_int() | (data[i + probe].to_int() << 8)
     }
-    cand = finder.prev[cand & WINDOW_MASK]
+    cand = prev[cand & WINDOW_MASK]
     steps = steps + 1
   }
   (best_len << 16) | best_dist
@@ -306,13 +300,27 @@ fn find_window_match(
   let mut best_len = base
   let mut best_dist = 0
   let limit = if end - i < 258 { end - i } else { 258 }
+  guard base < limit else { return base << 16 }
   let mut budget = cfg.max_chain
   if base >= cfg.good_length {
     budget = budget >> 2
   }
+  guard cand >= 0 && i - cand <= WINDOW_SIZE && budget > 0 else {
+    return base << 16
+  }
+  let position = i & STREAM_RING_MASK
+  let prefix = data[position].to_int() | (data[position + 1].to_int() << 8)
+  let prev = finder.prev
+  let mut probe = base.max(2)
+  let mut suffix = data[position + probe - 1].to_int() |
+    (data[position + probe].to_int() << 8)
   let mut steps = 0
   while cand >= 0 && steps < budget && i - cand <= WINDOW_SIZE {
-    let l = if window_match_candidate_can_beat(data, cand, i, best_len, limit) {
+    let candidate = cand & STREAM_RING_MASK
+    let candidate_suffix = data[candidate + probe - 1].to_int() |
+      (data[candidate + probe].to_int() << 8)
+    let l = if candidate_suffix == suffix &&
+      (data[candidate].to_int() | (data[candidate + 1].to_int() << 8)) == prefix {
       match_len_in_window(data, cand, i, limit)
     } else {
       best_len
@@ -320,11 +328,14 @@ fn find_window_match(
     if l > best_len {
       best_len = l
       best_dist = i - cand
-      if l >= cfg.nice_length {
+      if l >= cfg.nice_length || l == limit {
         break
       }
+      probe = l
+      suffix = data[position + probe - 1].to_int() |
+        (data[position + probe].to_int() << 8)
     }
-    cand = finder.prev[cand & WINDOW_MASK]
+    cand = prev[cand & WINDOW_MASK]
     steps = steps + 1
   }
   (best_len << 16) | best_dist
@@ -351,6 +362,56 @@ fn insert_window_pos(
     let h = hash3_window(data, i)
     finder.prev[i & WINDOW_MASK] = finder.head[h]
     finder.head[h] = i
+  }
+}
+
+///|
+/// Batch the interior of a committed match, as in libdeflate's skip_bytes
+/// path. Check the available lookahead once and carry the overlapping bytes
+/// between hashes. Every position is still inserted in the original order.
+fn insert_positions(
+  data : Bytes,
+  finder : MatchFinder,
+  start : Int,
+  end : Int,
+  available_end : Int,
+) -> Unit {
+  let end = end.min(available_end - 2)
+  guard start < end else { return }
+  let head = finder.head
+  let prev = finder.prev
+  for position = start, a = data[start].to_int(), b = data[start + 1].to_int() {
+    guard position < end else { break }
+    let c = data[position + 2].to_int()
+    let hash = (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
+    prev[position & WINDOW_MASK] = head[hash]
+    head[hash] = position
+    continue position + 1, b, c
+  }
+}
+
+///|
+/// Streaming counterpart: carry bytes across the mirrored ring boundary,
+/// while retaining absolute positions in the hash chains.
+fn insert_window_positions(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  start : Int,
+  end : Int,
+  available_end : Int,
+) -> Unit {
+  let end = end.min(available_end - 2)
+  guard start < end else { return }
+  let head = finder.head
+  let prev = finder.prev
+  let offset = start & STREAM_RING_MASK
+  for position = start, a = data[offset].to_int(), b = data[offset + 1].to_int() {
+    guard position < end else { break }
+    let c = data[(position & STREAM_RING_MASK) + 2].to_int()
+    let hash = (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
+    prev[position & WINDOW_MASK] = head[hash]
+    head[hash] = position
+    continue position + 1, b, c
   }
 }
 
@@ -386,9 +447,7 @@ fn commit_match(
   ll_freq[257 + len_to_idx[length]] += 1
   d_freq[dist_index(dist)] += 1
   let match_end = start + length
-  for j in (start + 1)..<match_end {
-    insert_pos(data, finder, j, n)
-  }
+  insert_positions(data, finder, start + 1, match_end, n)
   match_end
 }
 
@@ -409,9 +468,7 @@ fn commit_window_match(
   ll_freq[257 + len_to_idx[length]] += 1
   d_freq[dist_index(dist)] += 1
   let match_end = start + length
-  for j in (start + 1)..<match_end {
-    insert_window_pos(data, finder, j, end)
-  }
+  insert_window_positions(data, finder, start + 1, match_end, end)
   match_end
 }
 

@@ -89,12 +89,29 @@ fn build_distance_code_info_table() -> FixedArray[Int] {
 let distance_code_info_table : FixedArray[Int] = build_distance_code_info_table()
 
 ///|
-fn dist_index(d : Int) -> Int {
-  let mut idx = 0
-  while idx + 1 < 30 && dist_base[idx + 1] <= d {
-    idx = idx + 1
+fn build_dist_to_idx() -> FixedArray[Byte] {
+  let slots = FixedArray::make(256, b'\x00')
+  for symbol in 0..<16 {
+    for distance in dist_base[symbol]..<dist_base[symbol + 1] {
+      slots[distance - 1] = symbol.to_byte()
+    }
   }
-  idx
+  slots
+}
+
+///|
+/// Distance minus one to symbol for distances 1..256.
+let dist_to_idx : FixedArray[Byte] = build_dist_to_idx()
+
+///|
+/// Requires 1 <= distance <= WINDOW_SIZE. Like libdeflate's small offset map,
+/// reuse the first 256 entries for larger distances by scaling down by 128
+/// and adding 14 symbols. Unsigned subtraction and shift select 0 or 7 without
+/// a branch; a signed right shift would give the wrong result above 256.
+#inline
+fn dist_index(distance : Int) -> Int {
+  let shift = ((256U - distance.reinterpret_as_uint()) >> 29).reinterpret_as_int()
+  dist_to_idx[(distance - 1) >> shift].to_int() + (shift << 1)
 }
 
 // ---- fixed Huffman literal/length codes (MSB-first) ----
