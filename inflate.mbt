@@ -113,6 +113,7 @@ pub struct Inflater {
   priv mut in_pos : Int
   priv mut out_pos : Int
   priv mut out : MutArrayView[Byte]
+  priv mut fixed_out : FixedArray[Byte]?
   priv mut out_end : Int // one past the last writable index in `out`
   priv empty_out : FixedArray[Byte]
 }
@@ -151,6 +152,7 @@ pub fn Inflater::Inflater(dictionary? : BytesView) -> Inflater {
     in_pos: 0,
     out_pos: 0,
     out: empty_out.mut_view(),
+    fixed_out: None,
     out_end: 0,
     empty_out,
   }
@@ -225,6 +227,7 @@ pub fn Inflater::reset(self : Inflater, dictionary? : BytesView) -> Unit {
   self.in_pos = 0
   self.out_pos = 0
   self.out = self.empty_out.mut_view()
+  self.fixed_out = None
   self.out_end = 0
   if dictionary is Some(dict) {
     self.preload_dictionary(dict)
@@ -453,6 +456,7 @@ fn Inflater::release_step_views(self : Inflater) -> Unit {
   self.in_pos = 0
   self.out_pos = 0
   self.out = self.empty_out.mut_view()
+  self.fixed_out = None
   self.out_end = 0
 }
 
@@ -468,16 +472,20 @@ fn Inflater::advance_window(self : Inflater, count : Int) -> Unit {
 
 ///|
 /// Drain a contiguous window segment into the caller's output view. The caller
-/// proves both ranges fit, so the unchecked view write avoids a bounds check for
-/// every byte while retaining the public `MutArrayView` API.
+/// proves both ranges fit. Fixed-array callers use a bulk copy; arbitrary
+/// mutable views retain the scalar fallback because core exposes no view blit.
 #inline
 fn Inflater::write_window_to_output(
   self : Inflater,
   start : Int,
   length : Int,
 ) -> Unit {
-  for i in 0..<length {
-    self.out.unsafe_set(self.out_pos + i, self.window[start + i])
+  if self.fixed_out is Some(output) {
+    FixedArray::unsafe_blit(output, self.out_pos, self.window, start, length)
+  } else {
+    for i in 0..<length {
+      self.out.unsafe_set(self.out_pos + i, self.window[start + i])
+    }
   }
   self.out_pos = self.out_pos + length
 }
@@ -750,6 +758,31 @@ pub fn Inflater::step(
   output : MutArrayView[Byte],
   end? : Bool = false,
 ) -> Status raise InflateError {
+  self.step_output(input, output, None, end~)
+}
+
+///|
+/// Advance the streaming decoder into a complete fixed output array. This has
+/// the same consumption, backpressure and EOF semantics as `step`, with bulk
+/// window copies. The array is borrowed only for this call; inspect
+/// `last_consumed` and `last_produced` after a successful step.
+pub fn Inflater::step_into(
+  self : Inflater,
+  input : BytesView,
+  output : FixedArray[Byte],
+  end? : Bool = false,
+) -> Status raise InflateError {
+  self.step_output(input, output.mut_view(), Some(output), end~)
+}
+
+///|
+fn Inflater::step_output(
+  self : Inflater,
+  input : BytesView,
+  output : MutArrayView[Byte],
+  fixed_output : FixedArray[Byte]?,
+  end~ : Bool,
+) -> Status raise InflateError {
   self.step_consumed = 0
   self.step_produced = 0
   if self.failure_kind is Some(kind) {
@@ -762,6 +795,7 @@ pub fn Inflater::step(
   self.in_pos = 0
   self.out_pos = 0
   self.out = output
+  self.fixed_out = fixed_output
   self.out_end = output.length()
   let status = self.run_step() catch {
     InflateError(kind, message) => {

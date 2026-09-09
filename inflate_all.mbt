@@ -550,7 +550,7 @@ fn inflate_streaming_all(
   let decoded : Array[Byte] = []
   let mut input_pos = 0
   for ;; {
-    let status = inflater.step(input[input_pos:], scratch.mut_view())
+    let status = inflater.step_into(input[input_pos:], scratch)
     let consumed = inflater.last_consumed()
     let produced = inflater.last_produced()
     input_pos = input_pos + consumed
@@ -563,9 +563,7 @@ fn inflate_streaming_all(
         "decoded output exceeds max_output",
       )
     }
-    for i in 0..<produced {
-      decoded.push(scratch[i])
-    }
+    decoded.append(scratch[:produced])
     match status {
       Done => {
         if exact && input_pos != input.length() {
@@ -631,7 +629,7 @@ fn inflate_drive(
   let mut total = 0
   let mut input_pos = 0
   for ;; {
-    let status = inflater.step(input[input_pos:], scratch.mut_view(), end=true)
+    let status = inflater.step_into(input[input_pos:], scratch, end=true)
     let consumed = inflater.last_consumed()
     let produced = inflater.last_produced()
     input_pos = input_pos + consumed
@@ -692,9 +690,7 @@ fn inflate_preallocated(
   let mut filled = 0
   ignore(
     inflate_drive(inflater, input, None, true, cancelled, (scratch, produced) => {
-      for i in 0..<produced {
-        buf[filled + i] = scratch[i]
-      }
+      scratch[:produced].blit_to(buf, dst_offset=filled)
       filled = filled + produced
     }),
   )

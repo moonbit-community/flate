@@ -1,11 +1,125 @@
 # MacBook Pro M3 Max Results
 
-The checksum rerun below records the latest zlib/gzip changes. The subsequent
-full-suite baseline is retained with its original source and toolchain metadata.
+The bulk-copy rerun below records the latest zlib/gzip output-path changes.
+Earlier checksum and full-suite runs retain their original metadata.
+
+## Bulk Output Copy Rerun (2026-09-08)
+
+This is the latest rerun of the changed output paths. Earlier checksum and raw
+results below retain their original versions and measurement boundaries.
+
+- Source: `5d53101` plus the uncommitted fixed-array streaming output,
+  bulk scratch accumulation and zlib/gzip framing/member-copy changes.
+- Before and after both include the Adler-32 and CRC-32 optimizations.
+  Before: `.local/copy-before/`; freshly built after: `.local/copy-final/`.
+- Moon `0.1.20260908 (b898b74)`, moonc `0.10.12+cb3c45ca7-nightly`;
+  native release defaults. The retained Homebrew libdeflate 1.25 runner
+  was executed again in this session.
+- Run: `copy-20260908T180502`. All 216 batch samples, metadata, executable
+  hashes, implementation diff and fixtures are retained locally under
+  `.local/bench/copy-20260908T180502/` (ignored by Git).
+- Fixed source, JSON, repetitive and random inputs are from
+  `20260908T035831.029182Z/corpus/`. Both MoonBit versions produced
+  byte-identical compressed fixtures, independently validated with Python zlib.
+- L6 one-shot, three rounds, rotating before/after/C execution order, at least
+  100 ms per final calibrated batch. Compilation and fixture I/O are outside
+  timing; codec/output allocation and release are inside each operation.
+- Every decode row uses the same exact fixture for all three runners.
+  C knows the output capacity; MoonBit grows its output. C rates are application
+  references, not equal-information decoder comparisons.
+- Rates are median MiB/s. Gain is after/before MoonBit. Spread values are
+  before/after/C, calculated as (max-min)/median seconds per operation.
+  Values above 10% are marked NOISY. CPU affinity and thermal state are not
+  controlled; these are warm-buffer measurements.
+- These changes accelerate the fixed-array output path used by one-shot wrappers.
+  The original arbitrary `MutArrayView` output interface retains its fallback;
+  these results do not claim that all streaming callers gain the same speedup.
+
+### Compression
+
+| Corpus / format | Before | After | Gain | C reference | Compressed bytes flate / C | Spread before / after / C |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| source / zlib | 25.3 | 25.1 | 0.99x | 114.8 | 65030 / 64801 | 2.1% / 0.9% / 1.7% |
+| source / gzip | 25.0 | 25.0 | 1.00x | 114.1 | 65042 / 64813 | 1.6% / 2.4% / 0.8% |
+| json-256k / zlib | 47.5 | 48.4 | 1.02x | 152.6 | 41121 / 37088 | 3.1% / 0.8% / 3.3% |
+| json-256k / gzip | 47.8 | 48.3 | 1.01x | 153.1 | 41133 / 37100 | 0.9% / 2.6% / 0.7% |
+| repetitive-256k / zlib | 412.5 | 411.1 | 1.00x | 1136.3 | 1039 / 839 | 0.6% / 1.3% / 1.1% |
+| repetitive-256k / gzip | 399.2 | 399.1 | 1.00x | 1143.4 | 1051 / 851 | 1.1% / 1.7% / 1.1% |
+| random-256k / zlib | 42.6 | 43.3 | 1.02x | 139.7 | 262230 / 262175 | 5.7% / 1.5% / 2.2% |
+| random-256k / gzip | 42.1 | 43.0 | 1.02x | 138.8 | 262242 / 262187 | 6.6% / 2.5% / 2.6% |
+
+### Decompression
+
+`flate` denotes the identical before/after MoonBit fixture; `C` denotes the libdeflate fixture.
+
+| Corpus / format | Shared fixture | Before | After | Gain | C reference | Spread before / after / C |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| source / zlib | flate | 153.5 | 165.6 | 1.08x | 1634.1 | 1.2% / 3.8% / 2.8% |
+| source / zlib | C | 152.8 | 170.4 | 1.12x | 1757.5 | 2.9% / 2.9% / 1.8% |
+| source / gzip | flate | 138.9 | 160.8 | 1.16x | 1607.1 | 0.8% / 2.0% / 1.2% |
+| source / gzip | C | 140.8 | 164.0 | 1.16x | 1757.0 | 1.2% / 2.0% / 1.9% |
+| json-256k / zlib | flate | 233.5 | 282.6 | 1.21x | 2305.3 | 2.5% / 1.1% / 0.4% |
+| json-256k / zlib | C | 247.4 | 298.9 | 1.21x | 2859.7 | 2.2% / 1.9% / 0.7% |
+| json-256k / gzip | flate | 211.1 | 274.6 | 1.30x | 2347.1 | 0.7% / 1.7% / 1.3% |
+| json-256k / gzip | C | 216.0 | 291.3 | 1.35x | 2873.0 | 2.1% / 1.5% / 0.3% |
+| repetitive-256k / zlib | flate | 513.4 | 1153.5 | 2.25x | 5786.7 | 0.6% / 0.5% / 0.8% |
+| repetitive-256k / zlib | C | 534.7 | 1269.1 | 2.37x | 10955.0 | 1.2% / 0.5% / 1.8% |
+| repetitive-256k / gzip | flate | 394.9 | 1022.2 | 2.59x | 5821.9 | 1.2% / 0.4% / 1.9% |
+| repetitive-256k / gzip | C | 409.3 | 1123.2 | 2.74x | 11142.7 | 1.9% / 1.3% / 2.1% |
+| random-256k / zlib | flate | 594.4 | 2191.6 | 3.69x | 29677.3 | 2.2% / 0.6% / 0.7% |
+| random-256k / zlib | C | 586.7 | 2186.5 | 3.73x | 29405.6 | 1.1% / 1.0% / 0.9% |
+| random-256k / gzip | flate | 443.5 | 1754.0 | 3.96x | 28987.8 | 0.4% / 2.1% / 1.8% |
+| random-256k / gzip | C | 443.4 | 1773.7 | 4.00x | 28584.4 | 0.2% / 0.9% / 1.0% |
+
+On flate fixtures, source/JSON zlib decompression improves 1.08x/1.21x;
+gzip improves 1.16x/1.30x. Repetitive data improves 2.25x/2.59x and random
+data improves 3.69x/3.96x for zlib/gzip respectively. Compressed bytes are
+unchanged. The gains are relative to the already optimized checksums;
+they must not be multiplied by older ratios to claim a controlled cumulative gain.
+
+### Raw Streaming Helpers: Current Performance Only
+
+The existing `inflate_exact` grow/preallocated benchmark was rerun on the
+same current toolchain after the paired wrapper runs, without concurrent
+timed workloads. It uses 256 KiB synthetic fixtures generated by
+`bench_flate.mbt` (including the older LCG mixed corpus), not the paired
+suite's SHAKE corpus. These mean times are not medians from the table above.
+No before or C comparison was collected for this helper group.
+
+| Path | Mean time | Standard deviation | Min–max |
+| --- | ---: | ---: | --- |
+| repetitive grow | 136.91 µs | 0.89 µs | 135.60–138.28 µs |
+| repetitive preallocated | 256.08 µs | 1.67 µs | 253.97–258.78 µs |
+| mixed grow | 95.60 µs | 0.84 µs | 94.70–97.23 µs |
+| mixed preallocated | 172.02 µs | 1.25 µs | 170.06–173.78 µs |
+
+Each row uses ten batches; iterations per batch are 733, 388, 1044 and 586
+respectively. Preallocated mode performs a size/validation pass before
+decoding, so its extra pass must be considered when interpreting the timings.
+
+### Reproduction
+
+Example current wrapper sample using the retained fixture:
+
+```sh
+moon run --release --target native benchmark/runner \
+  decompress oneshot zlib 6 \
+  .local/bench/20260908T035831.029182Z/corpus/source.bin \
+  .local/bench/copy-20260908T180502/source-zlib-after.bin 100
+
+moon bench --package moonbit-community/flate/benchmark \
+  --release --target native --no-parallelize \
+  --file bench_flate.mbt --index 4
+```
+
+For before/after/C comparisons repeat the saved executables in rotating order
+using the exact shared fixture and the one-shot runner protocol described in
+the [benchmark README](./README.md). Local artifacts must be retained to repeat
+the original source snapshot comparison.
 
 ## Checksum Optimization Rerun (2026-09-08)
 
-This section is the latest measurement of the changed zlib/gzip paths.
+This earlier section measures the checksum changes before bulk output copying.
 The raw tables below remain the earlier baseline and were not rerun here.
 
 - Source: `823123b` plus uncommitted Adler-32 block reduction and CRC-32

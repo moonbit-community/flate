@@ -106,6 +106,10 @@ test "README streaming Deflater" {
   `consumed < input.length()`, re-present that suffix with the same action. Once
   the complete view is accepted, the request remains latched across output
   backpressure.
+- `Inflater::step_into(input, output)` accepts a complete `FixedArray[Byte]`
+  and uses bulk window copies. It has the same consumption and backpressure
+  semantics as `step`, which accepts arbitrary mutable output views. Both
+  release caller buffers after each call.
 - Raw `Inflater::step(..., end=true)` and the container decoders turn physical
   EOF before `Done` into a stable truncation error. After any decoder error,
   discard or reset the raw engine; container decoder instances stably rethrow

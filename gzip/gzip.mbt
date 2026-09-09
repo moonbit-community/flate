@@ -66,9 +66,7 @@ fn gzip_frame(input : Bytes, deflated : Bytes) -> Bytes {
   for b in [0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF] {
     out.write_byte(b.to_byte())
   }
-  for b in deflated {
-    out.write_byte(b)
-  }
+  out.write_bytes(deflated)
   put_u32_le(out, @checksum.crc32(input))
   put_u32_le(out, input.length().reinterpret_as_uint())
   out.to_bytes()
@@ -103,19 +101,17 @@ fn inflate_member(
   consumed : FixedArray[Int],
 ) -> Bytes raise GzipError {
   let inf = @flate.Inflater()
-  let out = Buffer()
+  let out : Array[Byte] = []
   let buf = FixedArray::make(65536, b'\x00')
   let mut used = 0
   for ;; {
-    let st = inf.step(input[q + used:], buf.mut_view()) catch {
+    let st = inf.step_into(input[q + used:], buf) catch {
       err => raise wrap_inflate_error(err)
     }
     let c = inf.last_consumed()
     let produced = inf.last_produced()
     used = used + c
-    for i in 0..<produced {
-      out.write_byte(buf[i])
-    }
+    out.append(buf[:produced])
     if st is Done {
       break
     }
@@ -126,7 +122,7 @@ fn inflate_member(
     // NeedMoreOutput: drain `buf` and continue over the unconsumed tail.
   }
   consumed[0] = used
-  out.to_bytes()
+  Bytes::from_array(out)
 }
 
 ///|
@@ -227,9 +223,7 @@ pub fn gunzip(input : Bytes) -> Bytes raise GzipError {
       raise GzipError(InvalidHeader, "gzip: bad magic")
     }
     let (payload, next_p) = gunzip_decode_member(input, p, n, member_consumed)
-    for b in payload {
-      out.write_byte(b)
-    }
+    out.write_bytes(payload)
     p = next_p
   }
   out.to_bytes()

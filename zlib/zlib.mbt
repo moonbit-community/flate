@@ -50,10 +50,10 @@ fn u32_be(data : Bytes, off : Int) -> UInt {
 fn inflate_exact(input : BytesView) -> Bytes raise ZlibError {
   let inf = @flate.Inflater()
   let scratch = FixedArray::make(32768, b'\x00')
-  let out = Buffer()
+  let out : Array[Byte] = []
   let mut pos = 0
   for ;; {
-    let status = inf.step(input[pos:], scratch.mut_view()) catch {
+    let status = inf.step_into(input[pos:], scratch) catch {
       InflateError(_, message) =>
         raise ZlibError(
           InvalidDeflate,
@@ -63,9 +63,7 @@ fn inflate_exact(input : BytesView) -> Bytes raise ZlibError {
     let consumed = inf.last_consumed()
     let produced = inf.last_produced()
     pos = pos + consumed
-    for i in 0..<produced {
-      out.write_byte(scratch[i])
-    }
+    out.append(scratch[:produced])
     match status {
       Done => {
         if pos != input.length() {
@@ -74,7 +72,7 @@ fn inflate_exact(input : BytesView) -> Bytes raise ZlibError {
             "zlib: data between DEFLATE stream and trailer",
           )
         }
-        return out.to_bytes()
+        return Bytes::from_array(out)
       }
       NeedMoreOutput => continue
       NeedMoreInput =>
@@ -93,9 +91,7 @@ fn zlib_frame(input : Bytes, deflated : Bytes) -> Bytes {
   // 16-bit header a multiple of 31 with FLEVEL=0 and no preset dictionary.
   out.write_byte(b'\x78')
   out.write_byte(b'\x01')
-  for b in deflated {
-    out.write_byte(b)
-  }
+  out.write_bytes(deflated)
   let adler = @checksum.adler32(input)
   out.write_byte(((adler >> 24) & 0xFF).reinterpret_as_int().to_byte())
   out.write_byte(((adler >> 16) & 0xFF).reinterpret_as_int().to_byte())
