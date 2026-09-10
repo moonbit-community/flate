@@ -1,16 +1,20 @@
 # MacBook Pro M3 Max Results
 
-Latest paired run: **2026-09-10**. This page replaces the historical tables with
-a current snapshot; older reports remain in Git history.
+Latest paired run: **2026-09-10 07:47 UTC** (15:47 Asia/Shanghai).
+This is a snapshot of the current worktree, including the match-copy and Huffman
+optimizations. Older results remain in Git history.
 
 ## Environment and method
 
 - Apple M3 Max, 16 CPU cores, macOS 26.6.2 arm64.
-- flate `065f737`, clean source at build time; native release.
+- flate `8316883` **plus uncommitted changes** in `inflate_all.mbt`
+  and `huffman_build.mbt`, and their new tests; native release. The run saves
+  the source diff, exact source files and hashes, including untracked tests.
 - Moon `0.1.20260904`; moonc `0.10.12+1634b282e`.
-- Homebrew libdeflate `1.25`; C runner built with Apple Clang 21, `-O3 -DNDEBUG`.
+- Homebrew libdeflate `1.25`; C runner built with Apple Clang 21,
+  `-O3 -DNDEBUG`.
 - Quick suite, **5 rounds, >=100 ms per final batch**, alternating execution order.
-  32 configurations, 960 samples; elapsed 290.6 seconds.
+  32 configurations, 960 samples; elapsed 287.4 seconds.
 - Both decoders validated both producers' fixtures; Python zlib independently
   validated complete streams. No timed workloads ran concurrently.
 
@@ -19,62 +23,69 @@ python3 benchmark/run.py --profile quick --rounds 5 --milliseconds 100
 ```
 
 Rates below are median **MiB/s**. Compression levels are numerically equal,
-not necessarily equal quality. These are current flate/libdeflate comparisons,
-not isolated before/after measurements of the latest optimization.
+not necessarily equal quality. `NOISY` marks a measurement pair where either
+implementation exceeds 10% spread; those rates need a repeat before drawing
+conclusions. Spread is `(max - min) / median` of seconds per operation.
+
+These are current flate/libdeflate comparisons. The source corpus was regenerated
+from the current worktree, so differences from the previous device report do
+not isolate optimization gains. For a fixed-corpus before/after comparison, see
+[match copying and Huffman construction](./optimization-20260910.md).
 
 ## Raw direct — level 6
 
 Both implementations reuse codecs and caller-owned output buffers.
-Inputs below are 262144 bytes except precompressed (67938 bytes).
+Inputs below are 262144 bytes except precompressed (69223 bytes).
 
 ### Compression
 
 | Corpus | flate | libdeflate | Compressed bytes flate / libdeflate | Spread flate / libdeflate |
 | --- | ---: | ---: | ---: | ---: |
-| repetitive-256k | 811.8 | 1155.1 | 1033 / 833 | 1.7% / 8.1% |
-| random-256k | 54.1 | 136.0 | 262224 / 262169 | 1.1% / 2.0% |
-| mixed-256k | 102.6 | 264.3 | 131739 / 131646 | 1.1% / 2.8% |
-| source | 41.4 | 115.5 | 65225 / 65145 | 1.0% / 1.8% |
-| json-256k | 76.5 | 151.0 | 41115 / 37082 | 1.7% / 2.4% |
-| precompressed | 60.9 | 177.2 | 67963 / 67948 | 0.1% / 1.5% |
+| repetitive-256k | 811.7 | 1156.4 | 1033 / 833 | 0.7% / 0.9% |
+| random-256k | 56.5 | 136.8 | 262224 / 262169 | 1.0% / 1.0% |
+| mixed-256k | 107.6 | 263.6 | 131739 / 131646 | 2.8% / 3.4% |
+| source | 41.6 | 116.1 | 65565 / 65435 | 0.6% / 1.2% |
+| json-256k | 78.2 | 152.2 | 41115 / 37082 | 1.3% / 0.5% |
+| precompressed | 63.8 | 176.2 | 69248 / 69233 | 1.4% / 1.7% |
 
 ### Decompression
 
-Each cell is **flate / libdeflate** throughput decoding the same exact fixture.
-Maximum spread among these decode measurements: 6.4%.
+Each throughput cell is **flate / libdeflate** decoding the same exact fixture.
+The adjacent spread column follows the same implementation order.
 
-| Corpus | flate-produced fixture | libdeflate-produced fixture |
-| --- | ---: | ---: |
-| repetitive-256k | 4304.2 / 6265.6 | 6190.2 / 13685.3 |
-| random-256k | 38593.3 / 68749.1 | 38035.6 / 67924.8 |
-| mixed-256k | 6276.8 / 11319.1 | 8742.5 / 21723.2 |
-| source | 268.0 / 1656.0 | 273.0 / 1778.8 |
-| json-256k | 538.5 / 2410.8 | 599.6 / 2962.8 |
-| precompressed | 53219.6 / 90678.8 | 50828.7 / 92416.1 |
+| Corpus | flate-produced fixture | Spread flate / libdeflate | libdeflate-produced fixture | Spread flate / libdeflate |
+| --- | ---: | ---: | ---: | ---: |
+| repetitive-256k | 6273.1 / 6294.3 | 1.0% / 0.6% | 10643.6 / 14113.4 | 1.3% / 0.7% |
+| random-256k | 38320.8 / 68602.2 | 2.1% / 1.0% | 37965.6 / 67865.7 | 0.5% / 1.7% |
+| mixed-256k | 8026.8 / 11308.5 | 0.7% / 0.9% | 12463.5 / 21705.8 | 0.4% / 0.5% |
+| source | 304.1 / 1646.2 | 1.5% / 1.0% | 306.3 / 1763.7 | 1.1% / 0.3% |
+| json-256k | 609.6 / 2411.5 | 1.0% / 0.6% | 663.6 / 2970.4 | 0.6% / 0.4% |
+| precompressed | 49845.5 / 86206.8 | 1.8% / 3.6% | 47224.7 / 87075.6 | 7.0% / 4.3% |
 
 ## One-shot wrappers — source, level 6
 
 Each throughput cell is **flate / libdeflate**. Decode columns use the
 libdeflate-produced fixture. Allocation/release is included; libdeflate knows
 the output size while flate grows its output, so this is an application-cost
-comparison. Maximum spread in these selected measurements is 7.1%.
+comparison. Both implementations verify checksums.
 
-| Format | Compression | Decompression | Compressed bytes flate / libdeflate |
-| --- | ---: | ---: | ---: |
-| zlib | 40.4 / 114.5 | 168.4 / 1712.2 | 65231 / 65151 |
-| gzip | 39.8 / 112.9 | 164.4 / 1709.9 | 65243 / 65163 |
+| Format | Compression | Spread flate / libdeflate | Decompression | Spread flate / libdeflate | Compressed bytes flate / libdeflate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| zlib | 40.7 / 115.0 | 0.7% / 1.1% | 167.0 / 1707.1 | 0.4% / 0.3% | 65571 / 65441 |
+| gzip | 40.3 / 114.9 | 0.5% / 3.2% | 164.0 / 1715.8 | 0.4% / 0.5% | 65583 / 65453 |
 
 ## Notes and artifacts
 
 - Complete results also include L0/L1/L9, small/large inputs and other one-shot
-  cases. Of 192 implementation/workload summaries, 23 exceed 10% spread
-  (`NOISY`); none of the selected measurements above do. Spread is
-  `(max - min) / median`, not a confidence interval.
-- Warm buffers; no CPU affinity or thermal control. No JS/Wasm or streaming
-  throughput claims. See [benchmark methodology](./README.md).
+  cases. All 192 implementation/workload summaries are below 10% spread
+  (maximum 9.7%). Spread is not a confidence interval.
+- Warm buffers; no CPU affinity or thermal control. No JS/Wasm, peak-memory or
+  streaming throughput claims. See [benchmark methodology](./README.md).
 - Source corpus SHA-256:
-  `2a0a7de7aea6ec2ccdbc0f3cd8671fca1e780ca703a6c42142ab0959644d6e98`.
-  Repository-derived inputs and toolchains differ from older runs; do not
-  infer an optimization speedup from those tables.
+  `cf1e62e2fae8f95cc7b94018abb0648a130f83e7f307fc7b8f03ac64e64cffec`.
+- Precompressed corpus SHA-256 (69223 bytes):
+  `e2aa3ce54481208808b746ce0cca45445a9ad696894c5dac812da83b111b5fda`.
+  These repository-derived corpora differ from the prior run. Compare corpus
+  hashes before using historical throughput or compressed-size differences.
 - Full report, samples, metadata, source snapshot and exact corpus/fixtures:
-  `.local/bench/20260910T063727.794212Z/` (local, ignored by Git).
+  `.local/bench/20260910T074714.890399Z/` (local, ignored by Git).

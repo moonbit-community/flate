@@ -80,9 +80,8 @@ fn DecodeOutput::append_bytes(
 }
 
 ///|
-/// Append a DEFLATE match. The first copy is non-overlapping; subsequent copies
-/// double the generated prefix so `distance < length` has the required
-/// forward-expanding semantics instead of ordinary memmove semantics.
+/// Check capacity, then append a match without writing beyond its exact length.
+/// The one-shot driver splits matches at cancellation boundaries.
 fn DecodeOutput::append_repeated_suffix(
   self : DecodeOutput,
   distance : Int,
@@ -91,27 +90,81 @@ fn DecodeOutput::append_repeated_suffix(
   guard length > 0 else { return }
   self.ensure_capacity(length)
   let start = self.length
+  let storage = self.storage
+  if length <= 8 {
+    // Keep the common short-text match in the caller to avoid an extra
+    // helper call. Forward byte copies also handle overlapping history.
+    for i in 0..<length {
+      storage[start + i] = storage[start + i - distance]
+    }
+  } else if distance == 1 {
+    storage.fill(storage[start - 1], start~, end=start + length)
+  } else {
+    copy_match_bytes(storage, start, distance, length)
+  }
+  self.length = start + length
+}
+
+///|
+/// Each vector load precedes its store and distance >= 16 keeps them disjoint.
+/// The final vector may rewrite the preceding output bytes, but ends exactly
+/// at the match boundary and only reads history that has already been produced.
+#cfg(any(target="native", target="wasm"))
+fn copy_match_bytes(
+  storage : FixedArray[Byte],
+  start : Int,
+  distance : Int,
+  length : Int,
+) -> Unit {
+  if distance >= 16 && length >= 16 {
+    for offset = 0; offset + 16 <= length; offset = offset + 16 {
+      @v128.v128_store(
+        storage,
+        start + offset,
+        @v128.v128_load(storage, start + offset - distance),
+      )
+    }
+    if (length & 15) != 0 {
+      let offset = length - 16
+      @v128.v128_store(
+        storage,
+        start + offset,
+        @v128.v128_load(storage, start + offset - distance),
+      )
+    }
+  } else {
+    copy_match_bytes_scalar(storage, start, distance, length)
+  }
+}
+
+///|
+#cfg(not(any(target="native", target="wasm")))
+fn copy_match_bytes(
+  storage : FixedArray[Byte],
+  start : Int,
+  distance : Int,
+  length : Int,
+) -> Unit {
+  copy_match_bytes_scalar(storage, start, distance, length)
+}
+
+///|
+/// Longer overlapping matches double their generated prefix. This is also
+/// the fallback on targets without native SIMD; the caller handles short matches.
+fn copy_match_bytes_scalar(
+  storage : FixedArray[Byte],
+  start : Int,
+  distance : Int,
+  length : Int,
+) -> Unit {
   let first = distance.min(length)
-  FixedArray::unsafe_blit(
-    self.storage,
-    start,
-    self.storage,
-    start - distance,
-    first,
-  )
+  FixedArray::unsafe_blit(storage, start, storage, start - distance, first)
   let mut copied = first
   while copied < length {
     let chunk = copied.min(length - copied)
-    FixedArray::unsafe_blit(
-      self.storage,
-      start + copied,
-      self.storage,
-      start,
-      chunk,
-    )
+    FixedArray::unsafe_blit(storage, start + copied, storage, start, chunk)
     copied = copied + chunk
   }
-  self.length = self.length + length
 }
 
 ///|

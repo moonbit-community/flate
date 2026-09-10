@@ -1,4 +1,7 @@
+// Benchmark CLI plumbing is outside the library coverage gate.
+
 ///|
+#coverage.skip
 fn read_input(path : String) -> Bytes {
   @fs.read_file_to_bytes(path) catch {
     _ => abort("cannot read input")
@@ -6,6 +9,7 @@ fn read_input(path : String) -> Bytes {
 }
 
 ///|
+#coverage.skip
 fn parse_number(value : String) -> Int {
   @string.parse_int(value) catch {
     _ => abort("invalid integer argument")
@@ -13,6 +17,7 @@ fn parse_number(value : String) -> Int {
 }
 
 ///|
+#coverage.skip
 fn compress(input : Bytes, format : String, level : Int) -> Bytes {
   match format {
     "raw" => @flate.deflate_all(input, level~)
@@ -23,6 +28,7 @@ fn compress(input : Bytes, format : String, level : Int) -> Bytes {
 }
 
 ///|
+#coverage.skip
 fn decompress(input : Bytes, format : String) -> Bytes {
   match format {
     "raw" =>
@@ -42,6 +48,7 @@ fn decompress(input : Bytes, format : String) -> Bytes {
 }
 
 ///|
+#coverage.skip
 fn compress_direct(
   codec : @flate.Compressor,
   input : Bytes,
@@ -53,6 +60,7 @@ fn compress_direct(
 }
 
 ///|
+#coverage.skip
 fn decompress_direct(
   codec : @flate.Decompressor,
   input : Bytes,
@@ -66,12 +74,14 @@ fn decompress_direct(
 }
 
 ///|
+#coverage.skip
 fn verify(expected : Bytes, actual : Bytes) -> Unit {
   guard expected == actual else { abort("decoded payload mismatch") }
 }
 
 ///|
 // The result dies before returning, so allocation and reclamation are timed.
+#coverage.skip
 fn consume_result(bytes : Bytes, expected_size : Int) -> Int {
   guard bytes.length() == expected_size else { abort("output length changed") }
   let last = if bytes.length() == 0 {
@@ -83,6 +93,7 @@ fn consume_result(bytes : Bytes, expected_size : Int) -> Int {
 }
 
 ///|
+#coverage.skip
 fn measure(
   operation : () -> Int,
   milliseconds : Int,
@@ -111,6 +122,7 @@ fn measure(
 }
 
 ///|
+#coverage.skip
 fn main {
   let args = @env.args()
   guard args.length() == 8 else {

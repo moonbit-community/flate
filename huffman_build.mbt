@@ -41,14 +41,14 @@ fn bit_counts(
     max_bits = n - 1
   }
   let levels = FixedArray::makei(17, _ => LevelInfo())
-  let leaf_counts = FixedArray::makei(17, _ => FixedArray::make(17, 0))
+  let leaf_counts = FixedArray::make(17 * 17, 0)
   for level in 1..<=max_bits {
     levels[level].level = level
     levels[level].last_freq = nodes[1].freq
     levels[level].next_char_freq = nodes[2].freq
     levels[level].next_pair_freq = nodes[0].freq + nodes[1].freq
     levels[level].needed = 0
-    leaf_counts[level][level] = 2
+    leaf_counts[level * 17 + level] = 2
     if level == 1 {
       levels[level].next_pair_freq = maxi
     }
@@ -65,14 +65,14 @@ fn bit_counts(
     }
     let prev_freq = lv.last_freq
     if lv.next_char_freq < lv.next_pair_freq {
-      let nn = leaf_counts[level][level] + 1
+      let nn = leaf_counts[level * 17 + level] + 1
       lv.last_freq = lv.next_char_freq
-      leaf_counts[level][level] = nn
+      leaf_counts[level * 17 + level] = nn
       lv.next_char_freq = if nn < n { nodes[nn].freq } else { maxi }
     } else {
       lv.last_freq = lv.next_pair_freq
       for i in 0..<level {
-        leaf_counts[level][i] = leaf_counts[level - 1][i]
+        leaf_counts[level * 17 + i] = leaf_counts[(level - 1) * 17 + i]
       }
       levels[lv.level - 1].needed = 2
     }
@@ -90,7 +90,7 @@ fn bit_counts(
     }
   }
   let bit_count = FixedArray::make(max_bits + 1, 0)
-  let counts = leaf_counts[max_bits]
+  let counts = leaf_counts[max_bits * 17:(max_bits + 1) * 17]
   let mut bits = 1
   for lvl = max_bits; lvl > 0; lvl = lvl - 1 {
     bit_count[bits] = counts[lvl] - counts[lvl - 1]
@@ -106,27 +106,27 @@ fn assign_codes(
   code_len : FixedArray[Int],
   code_val : FixedArray[UInt]?,
 ) -> Unit {
-  let mut code = 0
+  // Assign lengths in frequency order, then generate canonical codes in
+  // symbol order. No per-length arrays or sorting are needed.
   let mut rem = nodes.length()
-  for nlen in 0..<bit_count.length() {
-    code = code << 1
+  for nlen in 1..<bit_count.length() {
     let bits = bit_count[nlen]
-    if nlen == 0 || bits == 0 {
-      continue
-    }
-    let chunk = FixedArray::makei(bits, k => nodes[rem - bits + k])
-    chunk.sort_by((a, b) => a.lit - b.lit)
-    for node in chunk {
-      if code_val is Some(values) {
-        values[node.lit] = reverse_bits(
-          code.reinterpret_as_uint() & 0xFFFF,
-          nlen,
-        )
-      }
-      code_len[node.lit] = nlen
-      code = code + 1
+    for k in (rem - bits)..<rem {
+      code_len[nodes[k].lit] = nlen
     }
     rem = rem - bits
+  }
+  guard code_val is Some(values) else { return }
+  let next_code = FixedArray::make(bit_count.length(), 0)
+  for nlen in 1..<bit_count.length() {
+    next_code[nlen] = (next_code[nlen - 1] + bit_count[nlen - 1]) << 1
+  }
+  for symbol in 0..<code_len.length() {
+    let nlen = code_len[symbol]
+    if nlen > 0 {
+      values[symbol] = reverse_bits(next_code[nlen].reinterpret_as_uint(), nlen)
+      next_code[nlen] += 1
+    }
   }
 }
 

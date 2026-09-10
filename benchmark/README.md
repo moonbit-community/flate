@@ -1,7 +1,15 @@
 # Benchmarks
 
 Paired native-release benchmarks for flate and libdeflate.
-Latest results: [MacBook Pro M3 Max](./results-macbook-pro-m3-max.md).
+Latest paired run: **2026-09-10 07:47 UTC** — quick suite, 5 rounds, >=100 ms,
+32 configurations and 960 samples. See [MacBook Pro M3 Max results](./results-macbook-pro-m3-max.md)
+for throughput, compressed sizes and spread; all 192 summaries are below 10% spread.
+This run includes the current uncommitted match-copy and Huffman optimizations,
+with exact sources preserved in the run artifacts.
+
+The [focused before/after study](./optimization-20260910.md) uses frozen inputs
+to isolate those optimizations. The latest paired run regenerates repository
+source inputs and compares the current worktree with libdeflate.
 
 ## Run
 

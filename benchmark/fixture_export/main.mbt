@@ -1,4 +1,7 @@
+// Benchmark CLI plumbing is outside the library coverage gate.
+
 ///|
+#coverage.skip
 fn fixture_args() -> ArrayView[String] {
   match @env.args() {
     [_, .. args] => args
@@ -7,6 +10,7 @@ fn fixture_args() -> ArrayView[String] {
 }
 
 ///|
+#coverage.skip
 fn parse_fixture_level(value : String) -> Int {
   @string.parse_int(value) catch {
     _ => abort("fixture level must be an integer")
@@ -14,6 +18,7 @@ fn parse_fixture_level(value : String) -> Int {
 }
 
 ///|
+#coverage.skip
 fn main {
   let args = fixture_args()
   guard args.length() == 3 else {
