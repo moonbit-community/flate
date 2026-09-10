@@ -1,4 +1,65 @@
 ///|
+test "fresh reusable decoder rejects missing input before its first reset" {
+  let decoder = Decompressor()
+  let err = @test.expect_error(() => decoder.decoder.run())
+  guard err is InflateError(kind, _)
+  @test.assert_eq(kind, Truncated)
+  @test.assert_eq(decoder.decoder.out.length, 0)
+}
+
+///|
+test "decoded output sizes reject overflow before allocation or mutation" {
+  let maximum = MAX_DECODE_OUTPUT_SIZE
+  for entry in [(0, 0), (0, maximum), (maximum, 0), (maximum - 1, 1)] {
+    let (length, additional) = entry
+    @test.assert_eq(
+      checked_decode_output_length(length, additional),
+      length + additional,
+    )
+  }
+  for entry in [(maximum, 1), (1, maximum), (maximum - 1, 2)] {
+    let (length, additional) = entry
+    let err = @test.expect_error(() => {
+      checked_decode_output_length(length, additional)
+    })
+    guard err is InflateError(kind, _)
+    @test.assert_eq(kind, OutputLimitExceeded)
+  }
+  for out in [DecodeOutput(1), DecodeOutput::into([b'\x00'])] {
+    out.append_byte(b'a')
+    let err = @test.expect_error(() => out.ensure_capacity(maximum))
+    guard err is InflateError(kind, _)
+    @test.assert_eq(kind, OutputLimitExceeded)
+    @test.assert_eq(out.length, 1)
+    @test.assert_eq(out.storage.length(), 1)
+    @test.assert_eq(out.to_bytes(), b"a")
+  }
+}
+
+///|
+test "decoded output growth stays representable at the doubling boundary" {
+  @test.assert_eq(grown_decode_output_capacity(4, 5), 8)
+  @test.assert_eq(grown_decode_output_capacity(4, 9), 9)
+  let half = MAX_DECODE_OUTPUT_SIZE / 2
+  @test.assert_eq(
+    grown_decode_output_capacity(half, half + 1),
+    MAX_DECODE_OUTPUT_SIZE - 1,
+  )
+  @test.assert_eq(
+    grown_decode_output_capacity(half, MAX_DECODE_OUTPUT_SIZE),
+    MAX_DECODE_OUTPUT_SIZE,
+  )
+  @test.assert_eq(grown_decode_output_capacity(half + 1, half + 2), half + 2)
+  @test.assert_eq(
+    grown_decode_output_capacity(
+      MAX_DECODE_OUTPUT_SIZE - 1,
+      MAX_DECODE_OUTPUT_SIZE,
+    ),
+    MAX_DECODE_OUTPUT_SIZE,
+  )
+}
+
+///|
 test "rebasing preserves live match distances and pending ring bytes" {
   let d = Deflater()
   let position = (1 << 30) + 17

@@ -1,5 +1,9 @@
 # Benchmarks
 
+A subsequent [complete-match decode study](./decode-fastloop-20260910.md)
+compares the next optimization against a frozen baseline. The paired libdeflate
+tables below retain their original run and do not include that later change.
+
 Paired native-release benchmarks for flate and libdeflate.
 Latest paired run: **2026-09-10 07:47 UTC** — quick suite, 5 rounds, >=100 ms,
 32 configurations and 960 samples. See [MacBook Pro M3 Max results](./results-macbook-pro-m3-max.md)

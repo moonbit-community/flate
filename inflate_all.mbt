@@ -25,11 +25,40 @@ fn DecodeOutput::into(storage : FixedArray[Byte]) -> DecodeOutput {
 }
 
 ///|
+/// Byte counts use signed 32-bit Int on every backend.
+const MAX_DECODE_OUTPUT_SIZE : Int = 0x7FFFFFFF
+
+///|
+/// Both counts are non-negative. Check the remaining range before adding so
+/// overflow cannot bypass the capacity check or reach an array write.
+fn checked_decode_output_length(
+  length : Int,
+  additional : Int,
+) -> Int raise InflateError {
+  guard additional <= MAX_DECODE_OUTPUT_SIZE - length else {
+    raise InflateError(OutputLimitExceeded, "DEFLATE output size overflow")
+  }
+  length + additional
+}
+
+///|
+/// Retain geometric growth when doubling fits; otherwise allocate only the
+/// required size. Keeping this arithmetic separate permits allocation-free
+/// tests at the integer limit.
+fn grown_decode_output_capacity(current : Int, required : Int) -> Int {
+  if current <= MAX_DECODE_OUTPUT_SIZE / 2 {
+    (current * 2).max(required)
+  } else {
+    required
+  }
+}
+
+///|
 fn DecodeOutput::ensure_capacity(
   self : DecodeOutput,
   additional : Int,
 ) -> Unit raise InflateError {
-  let required = self.length + additional
+  let required = checked_decode_output_length(self.length, additional)
   guard required > self.storage.length() else { return }
   guard !self.fixed_capacity else {
     raise InflateError(
@@ -37,17 +66,7 @@ fn DecodeOutput::ensure_capacity(
       "decoded output exceeds output buffer",
     )
   }
-  let current = self.storage.length()
-  let capacity = if required < self.length {
-    abort("DEFLATE output size overflow")
-  } else {
-    let doubled = current * 2
-    if doubled > current && doubled >= required {
-      doubled
-    } else {
-      required
-    }
-  }
+  let capacity = grown_decode_output_capacity(self.storage.length(), required)
   self.storage = FixedArray::make_and_blit(
     self.storage,
     allocate_len=capacity,
@@ -396,7 +415,26 @@ fn MemDecoder::decode_match(
     back_reference_distance_is_valid(dist, available_history) else {
     raise InflateError(Corrupt, "corrupt: distance too far back")
   }
-  self.copy_match(dist, length)
+  // Copy a complete match here when capacity and the cancellation interval
+  // permit it. Subtract before comparing so the output bound cannot overflow.
+  // Short text matches use forward byte copies, including overlapping history.
+  let out = self.out
+  let start = out.length
+  if length <= out.storage.length() - start && length < self.next_cancel - start {
+    let storage = out.storage
+    if length <= 16 {
+      for i in 0..<length {
+        storage[start + i] = storage[start + i - dist]
+      }
+    } else if dist == 1 {
+      storage.fill(storage[start - 1], start~, end=start + length)
+    } else {
+      copy_match_bytes(storage, start, dist, length)
+    }
+    out.length = start + length
+  } else {
+    self.copy_match(dist, length)
+  }
 }
 
 ///|

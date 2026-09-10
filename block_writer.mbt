@@ -242,16 +242,16 @@ fn choose_block_encoding(
 ///|
 fn write_huffman_block(
   w : BitWriter,
-  encoding : BlockEncoding,
+  dynamic_codes : DynamicCodes?,
   tokens : ArrayView[Int],
   is_final : Bool,
 ) -> Unit {
   w.write_bit(if is_final { 1 } else { 0 }) // BFINAL
-  match encoding {
-    Fixed => write_fixed_block(w, tokens)
-    Dynamic(codes) => write_dynamic_block(w, codes, tokens)
-    Stored => ()
+  guard dynamic_codes is Some(codes) else {
+    write_fixed_block(w, tokens)
+    return
   }
+  write_dynamic_block(w, codes, tokens)
 }
 
 ///|
@@ -387,7 +387,8 @@ fn emit_block(
   let encoding = choose_block_encoding(end - start, ll_freq, d_freq)
   match encoding {
     Stored => write_stored(w, data, start, end, is_final~)
-    Fixed | Dynamic(_) => write_huffman_block(w, encoding, tokens, is_final)
+    Fixed => write_huffman_block(w, None, tokens, is_final)
+    Dynamic(codes) => write_huffman_block(w, Some(codes), tokens, is_final)
   }
 }
 
@@ -480,6 +481,7 @@ fn emit_window_block(
   let encoding = choose_block_encoding(end - start, ll_freq, d_freq)
   match encoding {
     Stored => write_stored_window(w, data, start, end, is_final~)
-    Fixed | Dynamic(_) => write_huffman_block(w, encoding, tokens, is_final)
+    Fixed => write_huffman_block(w, None, tokens, is_final)
+    Dynamic(codes) => write_huffman_block(w, Some(codes), tokens, is_final)
   }
 }

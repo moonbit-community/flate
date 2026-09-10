@@ -1,5 +1,9 @@
 # MacBook Pro M3 Max Results
 
+A subsequent [complete-match decode study](./decode-fastloop-20260910.md)
+compares the next optimization against a frozen baseline. The paired libdeflate
+tables below retain their original run and do not include that later change.
+
 Latest paired run: **2026-09-10 07:47 UTC** (15:47 Asia/Shanghai).
 This is a snapshot of the current worktree, including the match-copy and Huffman
 optimizations. Older results remain in Git history.

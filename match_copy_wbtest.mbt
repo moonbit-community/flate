@@ -42,3 +42,64 @@ test "optimized matches stop exactly at cancellation boundaries" {
     @test.assert_eq(decoder.out.to_bytes(), source[:4096].to_owned())
   }
 }
+
+///|
+test "decoded matches preserve exact capacity overlap and cancellation cadence" {
+  for code in 257..<286 {
+    let info = length_code_info_table[code - 257]
+    let extra_bits = info & 7
+    for extra in [0, (1 << extra_bits) - 1] {
+      let length = (info >> 3) + extra
+      for pair in [(1, 0), (2, 16), (3, 8), (4, 24)] {
+        let (distance, distance_bits) = pair
+        for cancel_after in [1, length, length + 1] {
+          for spare in [0, 7] {
+            let storage = FixedArray::make(4 + length + spare, b'\xA5')
+            storage.blit_from_bytes(0, b"abcd", 0, 4)
+            let mut calls = 0
+            let d = MemDecoder(b"", () => {
+              calls += 1
+              false
+            })
+            d.out = DecodeOutput::into(storage)
+            d.out.length = 4
+            d.next_cancel = 4 + cancel_after
+            d.bitbuf = (extra | (distance_bits << extra_bits)).reinterpret_as_uint()
+            d.bit_count = extra_bits + 5
+            d.decode_match(code, None)
+            @test.assert_eq(d.out.length, 4 + length)
+            @test.assert_eq(calls, if cancel_after <= length { 1 } else { 0 })
+            for i in 0..<length {
+              @test.assert_eq(
+                storage[4 + i],
+                b"abcd"[4 - distance + i % distance],
+              )
+            }
+            for i in (4 + length)..<storage.length() {
+              @test.assert_eq(storage[i], b'\xA5')
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+test "decoded short matches reject insufficient capacity before copying" {
+  for length in 3..<=10 {
+    let storage = FixedArray::make(length, b'x')
+    let d = MemDecoder(b"", () => false)
+    d.out = DecodeOutput::into(storage)
+    d.out.length = 1
+    d.next_cancel = 4096
+    d.bit_count = 5 // fixed distance symbol 0: distance 1
+    let err = @test.expect_error(() => d.decode_match(length + 254, None))
+    guard err is InflateError(kind, _)
+    @test.assert_eq(kind, OutputLimitExceeded)
+    @test.assert_eq(d.out.length, 1)
+    for byte in storage {
+      @test.assert_eq(byte, b'x')
+    }
+  }
+}
