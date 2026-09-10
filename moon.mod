@@ -1,6 +1,6 @@
 name = "moonbit-community/flate"
 
-version = "0.7.3"
+version = "0.8.0"
 
 readme = "README.mbt.md"
 
