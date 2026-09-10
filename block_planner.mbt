@@ -65,8 +65,8 @@ fn Deflater::record_chained_positions(self : Deflater, processed : Int) -> Unit 
 fn Deflater::emit_capped(self : Deflater) -> Unit {
   let target = (self.parse_pos + DEFLATE_BLOCK_SIZE).min(self.pending_end)
   let tokens : Array[Int] = []
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
+  let ll_freq = FixedArray::make(286, 0)
+  let d_freq = FixedArray::make(30, 0)
   self.chain_ready_history()
   let processed = tokenize_window(
     self.pending,
@@ -117,8 +117,8 @@ fn Deflater::emit_one(self : Deflater) -> Unit {
 /// the non-final lookahead restriction while preserving the same parse policy.
 fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
   let tokens : Array[Int] = []
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
+  let ll_freq = FixedArray::make(286, 0)
+  let d_freq = FixedArray::make(30, 0)
   self.chain_ready_history()
   let processed = tokenize_window(
     self.pending,

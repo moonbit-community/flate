@@ -24,8 +24,8 @@ priv struct MatchRange {
 // the greedy/lazy session matchfinder's lifecycle.
 fn insert_optimal_pos(
   data : Bytes,
-  head : Array[Int],
-  prev : Array[Int],
+  head : FixedArray[Int],
+  prev : FixedArray[Int],
   i : Int,
   n : Int,
   seed_from : Int,
@@ -52,15 +52,24 @@ fn collect_matches(
   data : Bytes,
   start : Int,
   end : Int,
-) -> Array[Array[MatchRange]] {
+) -> FixedArray[Array[MatchRange]] {
   let seed_from = if start > WINDOW_SIZE { start - WINDOW_SIZE } else { 0 }
-  let head = Array::make(1 << HASH_BITS, -1)
-  let prev = Array::make(if end > seed_from { end - seed_from } else { 1 }, -1)
+  let head = FixedArray::make(1 << HASH_BITS, -1)
+  let prev = FixedArray::make(
+    if end > seed_from {
+      end - seed_from
+    } else {
+      1
+    },
+    -1,
+  )
   let n = data.length()
   for j in seed_from..<start {
     insert_optimal_pos(data, head, prev, j, n, seed_from)
   }
-  let out : Array[Array[MatchRange]] = []
+  // The shared empty placeholder is never mutated: each slot is replaced
+  // with its own frontier before the completed table is read.
+  let out : FixedArray[Array[MatchRange]] = FixedArray::make(end - start, [])
   for i in start..<end {
     let frontier : Array[MatchRange] = []
     let limit = if end - i < 258 { end - i } else { 258 }
@@ -87,7 +96,7 @@ fn collect_matches(
       }
     }
     insert_optimal_pos(data, head, prev, i, n, seed_from)
-    out.push(frontier)
+    out[i - start] = frontier
   }
   out
 }
@@ -100,11 +109,11 @@ fn replay_tokens(
   data : Bytes,
   start : Int,
   m : Int,
-  len_choice : Array[Int],
-  dist_choice : Array[Int],
+  len_choice : FixedArray[Int],
+  dist_choice : FixedArray[Int],
   tokens : Array[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Unit {
   let steps : Array[Int] = []
   let mut o = m
@@ -137,18 +146,18 @@ fn squeeze_parse(
   data : Bytes,
   start : Int,
   end : Int,
-  matches : Array[Array[MatchRange]],
-  ll_cost : Array[Int],
-  d_cost : Array[Int],
+  matches : FixedArray[Array[MatchRange]],
+  ll_cost : FixedArray[Int],
+  d_cost : FixedArray[Int],
   tokens : Array[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Unit {
   let m = end - start
   let inf = 0x3FFFFFFF
-  let costs = Array::make(m + 1, inf)
-  let len_choice = Array::make(m + 1, 0)
-  let dist_choice = Array::make(m + 1, 0)
+  let costs = FixedArray::make(m + 1, inf)
+  let len_choice = FixedArray::make(m + 1, 0)
+  let dist_choice = FixedArray::make(m + 1, 0)
   costs[0] = 0
   for o in 0..<m {
     let base = costs[o]
@@ -188,19 +197,19 @@ fn squeeze_parse(
 /// uses), with unused symbols priced at the maximum length so the parse may
 /// still explore them.
 fn stats_to_costs(
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
-  ll_cost : Array[Int],
-  d_cost : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
+  ll_cost : FixedArray[Int],
+  d_cost : FixedArray[Int],
 ) -> Unit {
-  let ll_freq_eob = Array::make(286, 0)
+  let ll_freq_eob = FixedArray::make(286, 0)
   for s in 0..<286 {
     ll_freq_eob[s] = ll_freq[s]
   }
   ll_freq_eob[256] += 1
-  let ll_len = Array::make(286, 0)
+  let ll_len = FixedArray::make(286, 0)
   gen_huffman(ll_freq_eob, 286, 15, ll_len)
-  let dd_len = Array::make(30, 0)
+  let dd_len = FixedArray::make(30, 0)
   gen_huffman(d_freq, 30, 15, dd_len)
   for s in 0..<286 {
     ll_cost[s] = if ll_len[s] == 0 { 15 } else { ll_len[s] }
@@ -221,17 +230,17 @@ fn tokenize_optimal(
   iterations : Int,
 ) -> Array[Int] {
   let matches = collect_matches(data, start, end)
-  let mut ll_cost = Array::make(286, 0)
+  let mut ll_cost = FixedArray::make(286, 0)
   for s in 0..<286 {
     ll_cost[s] = fixed_litlen_info[s] & 0xF
   }
-  let mut d_cost = Array::make(30, 5)
+  let mut d_cost = FixedArray::make(30, 5)
   let mut best_bits = 0x3FFFFFFF
   let mut best_tokens : Array[Int]? = None
   for _it in 0..<iterations {
     let toks : Array[Int] = []
-    let ll_freq = Array::make(286, 0)
-    let d_freq = Array::make(30, 0)
+    let ll_freq = FixedArray::make(286, 0)
+    let d_freq = FixedArray::make(30, 0)
     squeeze_parse(
       data, start, end, matches, ll_cost, d_cost, toks, ll_freq, d_freq,
     )
@@ -240,8 +249,8 @@ fn tokenize_optimal(
       best_bits = bits
       best_tokens = Some(toks)
     }
-    let nl = Array::make(286, 0)
-    let nd = Array::make(30, 0)
+    let nl = FixedArray::make(286, 0)
+    let nd = FixedArray::make(30, 0)
     stats_to_costs(ll_freq, d_freq, nl, nd)
     ll_cost = nl
     d_cost = nd

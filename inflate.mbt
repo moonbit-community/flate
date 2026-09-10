@@ -90,8 +90,8 @@ pub struct Inflater {
   priv mut filled : Bool // window has held >= 32 KB, so any distance <= 32768 is valid
   priv dyn_litlen : HuffmanDecoder // dynamic literal/length (and code-length) table
   priv dyn_dist : HuffmanDecoder // dynamic distance table
-  priv clbits : Array[Int]
-  priv codebits : Array[Int]
+  priv clbits : FixedArray[Int]
+  priv codebits : FixedArray[Int]
   // A match copy in progress, suspended because the output filled mid-copy.
   // `copy_remaining` bytes are still owed at back-distance `copy_dist`; the
   // next `step` drains them before decoding any new unit. This is what lets
@@ -137,8 +137,8 @@ pub fn Inflater::Inflater(dictionary? : BytesView) -> Inflater {
     filled: false,
     dyn_litlen: HuffmanDecoder(),
     dyn_dist: HuffmanDecoder(),
-    clbits: Array::make(MAX_NUM_LIT + MAX_NUM_DIST, 0),
-    codebits: Array::make(NUM_CODES, 0),
+    clbits: FixedArray::make(MAX_NUM_LIT + MAX_NUM_DIST, 0),
+    codebits: FixedArray::make(NUM_CODES, 0),
     copy_remaining: 0,
     copy_dist: 0,
     staged_input: [],

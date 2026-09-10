@@ -30,20 +30,18 @@ fn reverse_bits(number : UInt, bit_length : Int) -> UInt {
 ///|
 /// Number of codes assigned to each bit length (index = length). Requires
 /// `nodes` sorted by ascending frequency, with `n >= 3`.
-fn bit_counts(nodes : Array[Node], n : Int, max_bits_in : Int) -> Array[Int] {
+fn bit_counts(
+  nodes : Array[Node],
+  n : Int,
+  max_bits_in : Int,
+) -> FixedArray[Int] {
   let maxi = 2147483647
   let mut max_bits = max_bits_in
   if max_bits > n - 1 {
     max_bits = n - 1
   }
-  let levels : Array[LevelInfo] = []
-  for _i in 0..<17 {
-    levels.push(LevelInfo())
-  }
-  let leaf_counts : Array[Array[Int]] = []
-  for _i in 0..<17 {
-    leaf_counts.push(Array::make(17, 0))
-  }
+  let levels = FixedArray::makei(17, _ => LevelInfo())
+  let leaf_counts = FixedArray::makei(17, _ => FixedArray::make(17, 0))
   for level in 1..<=max_bits {
     levels[level].level = level
     levels[level].last_freq = nodes[1].freq
@@ -91,7 +89,7 @@ fn bit_counts(nodes : Array[Node], n : Int, max_bits_in : Int) -> Array[Int] {
       }
     }
   }
-  let bit_count = Array::make(max_bits + 1, 0)
+  let bit_count = FixedArray::make(max_bits + 1, 0)
   let counts = leaf_counts[max_bits]
   let mut bits = 1
   for lvl = max_bits; lvl > 0; lvl = lvl - 1 {
@@ -103,10 +101,10 @@ fn bit_counts(nodes : Array[Node], n : Int, max_bits_in : Int) -> Array[Int] {
 
 ///|
 fn assign_codes(
-  bit_count : Array[Int],
+  bit_count : FixedArray[Int],
   nodes : Array[Node],
-  code_len : Array[Int],
-  code_val : Array[UInt]?,
+  code_len : FixedArray[Int],
+  code_val : FixedArray[UInt]?,
 ) -> Unit {
   let mut code = 0
   let mut rem = nodes.length()
@@ -116,10 +114,7 @@ fn assign_codes(
     if nlen == 0 || bits == 0 {
       continue
     }
-    let chunk : Array[Node] = []
-    for k in (rem - bits)..<rem {
-      chunk.push(nodes[k])
-    }
+    let chunk = FixedArray::makei(bits, k => nodes[rem - bits + k])
     chunk.sort_by((a, b) => a.lit - b.lit)
     for node in chunk {
       if code_val is Some(values) {
@@ -140,11 +135,11 @@ fn assign_codes(
 /// frequencies into caller-owned arrays. Omit `code_val` when only lengths are
 /// needed; this avoids both the unused code array and a tuple return allocation.
 fn gen_huffman(
-  freq : Array[Int],
+  freq : FixedArray[Int],
   size : Int,
   max_bits : Int,
-  code_len : Array[Int],
-  code_val? : Array[UInt],
+  code_len : FixedArray[Int],
+  code_val? : FixedArray[UInt],
 ) -> Unit {
   let nodes : Array[Node] = []
   for i in 0..<size {

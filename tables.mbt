@@ -142,8 +142,8 @@ let fixed_litlen_info : FixedArray[Int] = build_fixed_litlen_info()
 ///|
 /// Unpacked fixed literal/length tables (bit-reversed code words and code
 /// lengths) for the unified token writer.
-fn build_fixed_ll_val() -> Array[UInt] {
-  let t = Array::make(288, 0U)
+fn build_fixed_ll_val() -> FixedArray[UInt] {
+  let t = FixedArray::make(288, 0U)
   for s in 0..<288 {
     t[s] = reverse_bits(
       (fixed_litlen_info[s] >> 4).reinterpret_as_uint(),
@@ -154,11 +154,11 @@ fn build_fixed_ll_val() -> Array[UInt] {
 }
 
 ///|
-let fixed_ll_val : Array[UInt] = build_fixed_ll_val()
+let fixed_ll_val : FixedArray[UInt] = build_fixed_ll_val()
 
 ///|
-fn build_fixed_ll_len() -> Array[Int] {
-  let t = Array::make(288, 0)
+fn build_fixed_ll_len() -> FixedArray[Int] {
+  let t = FixedArray::make(288, 0)
   for s in 0..<288 {
     t[s] = fixed_litlen_info[s] & 0xF
   }
@@ -166,12 +166,12 @@ fn build_fixed_ll_len() -> Array[Int] {
 }
 
 ///|
-let fixed_ll_len : Array[Int] = build_fixed_ll_len()
+let fixed_ll_len : FixedArray[Int] = build_fixed_ll_len()
 
 ///|
 /// Bit-reversed 5-bit fixed distance codes (code = distance symbol).
-fn build_fixed_dist_val() -> Array[UInt] {
-  let t = Array::make(MAX_NUM_DIST, 0U)
+fn build_fixed_dist_val() -> FixedArray[UInt] {
+  let t = FixedArray::make(MAX_NUM_DIST, 0U)
   for d in 0..<MAX_NUM_DIST {
     t[d] = reverse_bits(d.reinterpret_as_uint(), 5)
   }
@@ -179,11 +179,11 @@ fn build_fixed_dist_val() -> Array[UInt] {
 }
 
 ///|
-let fixed_dist_val : Array[UInt] = build_fixed_dist_val()
+let fixed_dist_val : FixedArray[UInt] = build_fixed_dist_val()
 
 ///|
 /// The fixed distance codes are all 5 bits.
-let fixed_dist_len : Array[Int] = Array::make(MAX_NUM_DIST, 5)
+let fixed_dist_len : FixedArray[Int] = FixedArray::make(MAX_NUM_DIST, 5)
 
 // ---- bit reversal ----
 

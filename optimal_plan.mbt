@@ -26,10 +26,10 @@ const OPTIMAL_MAX_BLOCKS : Int = 15
 /// can never drift from what the writer actually emits.
 fn block_cost_bits(
   byte_len : Int,
-  ll_freq_in : Array[Int],
-  d_freq : Array[Int],
+  ll_freq_in : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Int {
-  let ll_freq = Array::make(286, 0)
+  let ll_freq = FixedArray::make(286, 0)
   for s in 0..<286 {
     ll_freq[s] = ll_freq_in[s]
   }
@@ -45,8 +45,8 @@ fn range_freqs(
   tokens : Array[Int],
   lo : Int,
   hi : Int,
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Unit {
   for s in 0..<286 {
     ll_freq[s] = 0
@@ -74,8 +74,8 @@ fn split_range_cost(
   lo : Int,
   hi : Int,
   byte_len : Int,
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Int {
   range_freqs(tokens, lo, hi, ll_freq, d_freq)
   block_cost_bits(byte_len, ll_freq, d_freq)
@@ -84,12 +84,12 @@ fn split_range_cost(
 ///|
 fn split_candidate_cost(
   tokens : Array[Int],
-  tok_pos : Array[Int],
+  tok_pos : FixedArray[Int],
   lo : Int,
   hi : Int,
   k : Int,
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Int {
   split_range_cost(tokens, lo, k, tok_pos[k] - tok_pos[lo], ll_freq, d_freq) +
   split_range_cost(tokens, k, hi, tok_pos[hi] - tok_pos[k], ll_freq, d_freq)
@@ -104,12 +104,12 @@ fn split_candidate_cost(
 /// pair so each candidate search does not allocate a return tuple.
 fn find_best_split(
   tokens : Array[Int],
-  tok_pos : Array[Int],
+  tok_pos : FixedArray[Int],
   lo : Int,
   hi : Int,
   result : FixedArray[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Unit {
   let sample = 9
   let mut plo = lo + 1
@@ -154,11 +154,14 @@ fn find_best_split(
 /// Greedily insert split points (token indices) while a split still lowers
 /// the exact total cost, up to `OPTIMAL_MAX_BLOCKS` blocks. `tok_pos[k]` is
 /// the byte offset where token k starts (with `tok_pos[m]` = chunk end).
-fn plan_split_points(tokens : Array[Int], tok_pos : Array[Int]) -> Array[Int] {
+fn plan_split_points(
+  tokens : Array[Int],
+  tok_pos : FixedArray[Int],
+) -> Array[Int] {
   let bounds : Array[Int] = [0, tokens.length()]
   let split_result = FixedArray::make(2, 0)
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
+  let ll_freq = FixedArray::make(286, 0)
+  let d_freq = FixedArray::make(30, 0)
   while bounds.length() - 1 < OPTIMAL_MAX_BLOCKS {
     let mut best_gain = 0
     let mut best_seg = -1
@@ -198,12 +201,12 @@ fn plan_split_points(tokens : Array[Int], tok_pos : Array[Int]) -> Array[Int] {
 /// Total exact cost of a grouping (consecutive bounds over `tokens`).
 fn grouping_cost(
   tokens : Array[Int],
-  tok_pos : Array[Int],
+  tok_pos : FixedArray[Int],
   bounds : Array[Int],
 ) -> Int {
   let mut total = 0
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
+  let ll_freq = FixedArray::make(286, 0)
+  let d_freq = FixedArray::make(30, 0)
   for s in 0..<(bounds.length() - 1) {
     let lo = bounds[s]
     let hi = bounds[s + 1]
@@ -223,8 +226,12 @@ fn grouping_cost(
 ///|
 /// Byte offset where each token starts, with `positions[tokens.length()]`
 /// pinned to `end`. A literal advances one byte; a match advances its length.
-fn token_positions(tokens : Array[Int], start : Int, end : Int) -> Array[Int] {
-  let positions = Array::make(tokens.length() + 1, 0)
+fn token_positions(
+  tokens : Array[Int],
+  start : Int,
+  end : Int,
+) -> FixedArray[Int] {
+  let positions = FixedArray::make(tokens.length() + 1, 0)
   let mut p = start
   for k in 0..<tokens.length() {
     positions[k] = p
@@ -256,8 +263,8 @@ fn optimal_parse_chunk(
   iterations : Int,
 ) -> OptimalChunk {
   let gtoks : Array[Int] = []
-  let greedy_ll_freq = Array::make(286, 0)
-  let greedy_d_freq = Array::make(30, 0)
+  let greedy_ll_freq = FixedArray::make(286, 0)
+  let greedy_d_freq = FixedArray::make(30, 0)
   let processed = tokenize(
     input,
     finder,
@@ -308,8 +315,8 @@ fn emit_optimal_chunk(
   for s in 0..<(bounds.length() - 1) {
     let lo = bounds[s]
     let hi = bounds[s + 1]
-    let ll_freq = Array::make(286, 0)
-    let d_freq = Array::make(30, 0)
+    let ll_freq = FixedArray::make(286, 0)
+    let d_freq = FixedArray::make(30, 0)
     range_freqs(all, lo, hi, ll_freq, d_freq)
     emit_block(
       w,

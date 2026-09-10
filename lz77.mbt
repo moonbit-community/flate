@@ -76,13 +76,16 @@ fn hash3_window(data : FixedArray[Byte], i : Int) -> Int {
 // only while it remains within the DEFLATE window, so overwriting its slot on
 // the next lap cannot hide a valid match.
 priv struct MatchFinder {
-  head : Array[Int]
-  prev : Array[Int]
+  head : FixedArray[Int]
+  prev : FixedArray[Int]
 }
 
 ///|
 fn MatchFinder::MatchFinder() -> MatchFinder {
-  { head: Array::make(1 << HASH_BITS, -1), prev: Array::make(WINDOW_SIZE, -1), }
+  {
+    head: FixedArray::make(1 << HASH_BITS, -1),
+    prev: FixedArray::make(WINDOW_SIZE, -1),
+  }
 }
 
 ///|
@@ -440,8 +443,8 @@ fn commit_match(
   length : Int,
   dist : Int,
   tokens : Array[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Int {
   tokens.push(pack_match_token(length, dist))
   ll_freq[257 + len_to_idx[length]] += 1
@@ -461,8 +464,8 @@ fn commit_window_match(
   length : Int,
   dist : Int,
   tokens : Array[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Int {
   tokens.push(pack_match_token(length, dist))
   ll_freq[257 + len_to_idx[length]] += 1
@@ -475,7 +478,11 @@ fn commit_window_match(
 ///|
 /// Record one literal token: push its byte value and tally its symbol.
 #inline
-fn emit_literal(tokens : Array[Int], ll_freq : Array[Int], b : Int) -> Unit {
+fn emit_literal(
+  tokens : Array[Int],
+  ll_freq : FixedArray[Int],
+  b : Int,
+) -> Unit {
   tokens.push(b)
   ll_freq[b] += 1
 }
@@ -497,8 +504,8 @@ fn tokenize(
   end : Int,
   cfg : LevelConfig,
   tokens : Array[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Int {
   let n = data.length()
   // LZ77 with hash chains: head[hash] is the most recent position with a
@@ -595,8 +602,8 @@ fn tokenize_window(
   available_end : Int,
   cfg : LevelConfig,
   tokens : Array[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> Int {
   let mut i = start
   let mut prev_len = 0

@@ -90,8 +90,8 @@ test "lazy match pending at a block boundary is committed" {
   // `end=4` commits that pending match in tokenize's boundary epilogue.
   let data = b"abcabcabc"
   let tokens : Array[Int] = []
-  let ll_freq = Array::make(286, 0)
-  let d_freq = Array::make(30, 0)
+  let ll_freq = FixedArray::make(286, 0)
+  let d_freq = FixedArray::make(30, 0)
   let finder = MatchFinder()
   for i in 0..<3 {
     insert_pos(data, finder, i, data.length())
@@ -145,8 +145,8 @@ test "optimal planner crosses its master-block boundary" {
 ///|
 fn second_split_is_cheaper_for_coverage(input : Bytes) -> Bool {
   let greedy : Array[Int] = []
-  let greedy_ll_freq = Array::make(286, 0)
-  let greedy_d_freq = Array::make(30, 0)
+  let greedy_ll_freq = FixedArray::make(286, 0)
+  let greedy_d_freq = FixedArray::make(30, 0)
   let finder = MatchFinder()
   let chunk_end = tokenize(
     input,
@@ -158,7 +158,7 @@ fn second_split_is_cheaper_for_coverage(input : Bytes) -> Bool {
     greedy_ll_freq,
     greedy_d_freq,
   )
-  let greedy_pos = Array::make(greedy.length() + 1, 0)
+  let greedy_pos = FixedArray::make(greedy.length() + 1, 0)
   let mut byte_pos = 0
   for i in 0..<greedy.length() {
     greedy_pos[i] = byte_pos
@@ -181,7 +181,7 @@ fn second_split_is_cheaper_for_coverage(input : Bytes) -> Bool {
     }
     first_joins.push(optimal.length())
   }
-  let optimal_pos = Array::make(optimal.length() + 1, 0)
+  let optimal_pos = FixedArray::make(optimal.length() + 1, 0)
   byte_pos = 0
   for i in 0..<optimal.length() {
     optimal_pos[i] = byte_pos

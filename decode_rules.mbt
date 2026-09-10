@@ -95,8 +95,8 @@ fn decode_dynamic_header(
   read_bits : (Int) -> Int raise InflateError,
   huff_sym : () -> Int raise InflateError,
   dyn_litlen : HuffmanDecoder,
-  codebits : Array[Int],
-  clbits : Array[Int],
+  codebits : FixedArray[Int],
+  clbits : FixedArray[Int],
 ) -> (Int, Int) raise InflateError {
   let nlit = dynamic_literal_count(read_bits(5))
   let ndist = dynamic_distance_count(read_bits(5))

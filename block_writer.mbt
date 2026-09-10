@@ -26,17 +26,17 @@ fn stored_block_count(byte_len : Int) -> Int {
 /// Run-length-encode the concatenated literal/length and distance code lengths
 /// into code-length symbols (RFC 1951 §3.2.7), using 16/17/18.
 fn build_codelen_syms(
-  ll_len : Array[Int],
+  ll_len : FixedArray[Int],
   hlit : Int,
-  dd_len : Array[Int],
+  dd_len : FixedArray[Int],
   hdist : Int,
 ) -> Array[CodeLenSym] {
-  let comb : Array[Int] = []
+  let comb = FixedArray::make(hlit + hdist, 0)
   for i in 0..<hlit {
-    comb.push(ll_len[i])
+    comb[i] = ll_len[i]
   }
   for i in 0..<hdist {
-    comb.push(dd_len[i])
+    comb[hlit + i] = dd_len[i]
   }
   let out : Array[CodeLenSym] = []
   let m = comb.length()
@@ -94,15 +94,15 @@ priv struct BlockCost {
 /// cost estimation and `emit_block`'s write path so both always see the same
 /// `hlit`/`hdist`/`hclen`, code lengths, and code words.
 priv struct DynamicCodes {
-  dll_len : Array[Int]
-  dll_val : Array[UInt]
-  dd_len : Array[Int]
-  dd_val : Array[UInt]
+  dll_len : FixedArray[Int]
+  dll_val : FixedArray[UInt]
+  dd_len : FixedArray[Int]
+  dd_val : FixedArray[UInt]
   hlit : Int
   hdist : Int
   codelen_syms : Array[CodeLenSym]
-  codelen_code_len : Array[Int]
-  codelen_code_val : Array[UInt]
+  codelen_code_len : FixedArray[Int]
+  codelen_code_val : FixedArray[UInt]
   hclen : Int
 }
 
@@ -117,14 +117,14 @@ priv enum BlockEncoding {
 /// Build the dynamic-Huffman code tables for one block from its symbol
 /// frequencies. `ll_freq` must already include the end-of-block symbol.
 fn build_dynamic_codes(
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> DynamicCodes {
-  let dll_len = Array::make(286, 0)
-  let dll_val = Array::make(286, 0U)
+  let dll_len = FixedArray::make(286, 0)
+  let dll_val = FixedArray::make(286, 0U)
   gen_huffman(ll_freq, 286, 15, dll_len, code_val=dll_val)
-  let dd_len = Array::make(30, 0)
-  let dd_val = Array::make(30, 0U)
+  let dd_len = FixedArray::make(30, 0)
+  let dd_val = FixedArray::make(30, 0U)
   gen_huffman(d_freq, 30, 15, dd_len, code_val=dd_val)
   let mut have_dist = false
   for d in 0..<30 {
@@ -145,12 +145,12 @@ fn build_dynamic_codes(
     hdist = hdist - 1
   }
   let codelen_syms = build_codelen_syms(dll_len, hlit, dd_len, hdist)
-  let codelen_freq = Array::make(19, 0)
+  let codelen_freq = FixedArray::make(19, 0)
   for it in codelen_syms {
     codelen_freq[it.sym] += 1
   }
-  let codelen_code_len = Array::make(19, 0)
-  let codelen_code_val = Array::make(19, 0U)
+  let codelen_code_len = FixedArray::make(19, 0)
+  let codelen_code_val = FixedArray::make(19, 0U)
   gen_huffman(codelen_freq, 19, 7, codelen_code_len, code_val=codelen_code_val)
   let mut hclen = 19
   while hclen > 4 && codelen_code_len[code_order[hclen - 1]] == 0 {
@@ -178,8 +178,8 @@ fn build_dynamic_codes(
 fn estimate_block_cost(
   codes : DynamicCodes,
   byte_len : Int,
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> BlockCost {
   // Length/distance extra bits are shared by fixed and dynamic but absent
   // from stored, so they join the comparison.
@@ -224,8 +224,8 @@ fn estimate_block_cost(
 // retain their contiguous `Bytes` fast path.
 fn choose_block_encoding(
   byte_len : Int,
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
 ) -> BlockEncoding {
   ll_freq[256] += 1 // end-of-block
   let codes = build_dynamic_codes(ll_freq, d_freq)
@@ -273,10 +273,10 @@ fn write_length_extras(w : BitWriter, length : Int) -> Unit {
 fn write_match_token(
   w : BitWriter,
   tok : Int,
-  ll_val : Array[UInt],
-  ll_len : Array[Int],
-  dd_val : Array[UInt],
-  dd_len : Array[Int],
+  ll_val : FixedArray[UInt],
+  ll_len : FixedArray[Int],
+  dd_val : FixedArray[UInt],
+  dd_len : FixedArray[Int],
 ) -> Unit {
   let length = tok >> 16
   let dist = tok & 0xFFFF
@@ -296,10 +296,10 @@ fn write_match_token(
 fn write_tokens(
   w : BitWriter,
   tokens : ArrayView[Int],
-  ll_val : Array[UInt],
-  ll_len : Array[Int],
-  dd_val : Array[UInt],
-  dd_len : Array[Int],
+  ll_val : FixedArray[UInt],
+  ll_len : FixedArray[Int],
+  dd_val : FixedArray[UInt],
+  dd_len : FixedArray[Int],
 ) -> Unit {
   for tok in tokens {
     if tok < 256 {
@@ -361,9 +361,9 @@ fn write_fixed_block(w : BitWriter, tokens : ArrayView[Int]) -> Unit {
 /// Write one empty final block (no tokens) — the one-shot drivers' encoding of
 /// an empty input.
 fn emit_empty_block(w : BitWriter, input : Bytes) -> Unit {
-  let ll_freq = Array::make(MAX_NUM_LIT, 0)
-  let d_freq = Array::make(MAX_NUM_DIST, 0)
-  let none : Array[Int] = []
+  let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
+  let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
+  let none : FixedArray[Int] = []
   emit_block(w, input, 0, 0, none[:], ll_freq, d_freq, is_final=true)
 }
 
@@ -380,8 +380,8 @@ fn emit_block(
   start : Int,
   end : Int,
   tokens : ArrayView[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
   is_final~ : Bool,
 ) -> Unit {
   let encoding = choose_block_encoding(end - start, ll_freq, d_freq)
@@ -473,8 +473,8 @@ fn emit_window_block(
   start : Int,
   end : Int,
   tokens : ArrayView[Int],
-  ll_freq : Array[Int],
-  d_freq : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
   is_final~ : Bool,
 ) -> Unit {
   let encoding = choose_block_encoding(end - start, ll_freq, d_freq)

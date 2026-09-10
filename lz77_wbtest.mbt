@@ -209,10 +209,10 @@ test "lazy parsers keep hash chains strictly backward across block boundaries" {
       let streaming = MatchFinder()
       let direct_tokens : Array[Int] = []
       let streaming_tokens : Array[Int] = []
-      let direct_ll = Array::make(MAX_NUM_LIT, 0)
-      let direct_dist = Array::make(MAX_NUM_DIST, 0)
-      let streaming_ll = Array::make(MAX_NUM_LIT, 0)
-      let streaming_dist = Array::make(MAX_NUM_DIST, 0)
+      let direct_ll = FixedArray::make(MAX_NUM_LIT, 0)
+      let direct_dist = FixedArray::make(MAX_NUM_DIST, 0)
+      let streaming_ll = FixedArray::make(MAX_NUM_LIT, 0)
+      let streaming_dist = FixedArray::make(MAX_NUM_DIST, 0)
       let mut start = 0
       while start < input.length() {
         let end = (start + block_size).min(input.length())

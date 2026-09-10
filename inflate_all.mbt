@@ -131,8 +131,8 @@ priv struct MemDecoder {
   mut next_cancel : Int // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
   dyn_dist : HuffmanDecoder // distance
-  clbits : Array[Int] // decoded literal+distance code lengths
-  codebits : Array[Int] // code-length code lengths
+  clbits : FixedArray[Int] // decoded literal+distance code lengths
+  codebits : FixedArray[Int] // code-length code lengths
 }
 
 ///|
@@ -164,8 +164,8 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
     next_cancel: 0,
     dyn_litlen: HuffmanDecoder(),
     dyn_dist: HuffmanDecoder(),
-    clbits: Array::make(MAX_NUM_LIT + MAX_NUM_DIST, 0),
-    codebits: Array::make(NUM_CODES, 0),
+    clbits: FixedArray::make(MAX_NUM_LIT + MAX_NUM_DIST, 0),
+    codebits: FixedArray::make(NUM_CODES, 0),
   }
 }
 
@@ -686,11 +686,11 @@ fn inflate_preallocated(
     _produced,
   ) => ())
   inflater.reset()
-  let buf = Array::make(size, b'\x00')
+  let buf = FixedArray::make(size, b'\x00')
   let mut filled = 0
   ignore(
     inflate_drive(inflater, input, None, true, cancelled, (scratch, produced) => {
-      scratch[:produced].blit_to(buf, dst_offset=filled)
+      scratch.blit_to(buf, len=produced, dst_offset=filled)
       filled = filled + produced
     }),
   )

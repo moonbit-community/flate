@@ -18,14 +18,14 @@ pub const HUFFMAN_VALUE_SHIFT : Int = 4
 /// chase from the decode hot path.
 priv struct HuffmanDecoder {
   mut min : Int
-  mut chunks : Array[UInt]
-  mut links : Array[UInt]
+  mut chunks : FixedArray[UInt]
+  mut links : FixedArray[UInt]
   mut link_mask : UInt
 }
 
 ///|
 fn HuffmanDecoder::HuffmanDecoder() -> HuffmanDecoder {
-  { min: 0, chunks: Array::make(512, 0U), links: [], link_mask: 0, }
+  { min: 0, chunks: FixedArray::make(512, 0U), links: [], link_mask: 0, }
 }
 
 ///|
@@ -37,11 +37,11 @@ fn HuffmanDecoder::initialize(
 ) -> Bool {
   if self.min != 0 {
     self.min = 0
-    self.chunks = Array::make(512, 0U)
+    self.chunks = FixedArray::make(512, 0U)
     self.links = []
     self.link_mask = 0
   }
-  let count = Array::make(MAX_CODE_LEN, 0)
+  let count = FixedArray::make(MAX_CODE_LEN, 0)
   let mut min = 0
   let mut max = 0
   for n in lengths {
@@ -58,7 +58,7 @@ fn HuffmanDecoder::initialize(
   }
   guard max != 0 else { return true }
   let mut code = 0
-  let nextcode = Array::make(MAX_CODE_LEN, 0)
+  let nextcode = FixedArray::make(MAX_CODE_LEN, 0)
   for i in min..<=max {
     code = code << 1
     nextcode[i] = code
@@ -70,7 +70,7 @@ fn HuffmanDecoder::initialize(
     let num_links = 1 << (max - HUFFMAN_CHUNK_BITS)
     self.link_mask = (num_links - 1).reinterpret_as_uint()
     let link = nextcode[HUFFMAN_CHUNK_BITS + 1] >> 1
-    self.links = Array::make((512 - link) * num_links, 0U)
+    self.links = FixedArray::make((512 - link) * num_links, 0U)
     for j in link..<512 {
       let mut reverse = reverse16((j & 0xffff).reinterpret_as_uint()).reinterpret_as_int()
       reverse = reverse >> (16 - HUFFMAN_CHUNK_BITS)
@@ -112,7 +112,7 @@ fn HuffmanDecoder::initialize(
 /// The fixed literal/length Huffman table (RFC 1951 §3.2.6), built from its
 /// canonical code lengths so we never transcribe a precomputed table.
 fn make_fixed_huffman_decoder() -> HuffmanDecoder {
-  let lengths = Array::make(288, 0)
+  let lengths = FixedArray::make(288, 0)
   for i in 0..<144 {
     lengths[i] = 8
   }

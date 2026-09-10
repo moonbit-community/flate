@@ -536,11 +536,8 @@ priv struct EntryPlan {
 /// (its source records are dropped for re-encoding, but its ordering hint
 /// survives), so a byte-preserving rewrite never silently moves an edited part
 /// to the end of the archive.
-fn archive_local_order(archive : Archive) -> Array[Int] {
-  let order = []
-  for index in 0..<archive.entries.length() {
-    order.push(index)
-  }
+fn archive_local_order(archive : Archive) -> FixedArray[Int] {
+  let order = FixedArray::makei(archive.entries.length(), index => index)
   order.sort_by((left, right) => {
     match
       (
@@ -563,8 +560,8 @@ fn archive_local_order(archive : Archive) -> Array[Int] {
 fn emit_archive(
   out : Output,
   archive : Archive,
-  order : Array[Int],
-  plans : Array[EntryPlan],
+  order : FixedArray[Int],
+  plans : FixedArray[EntryPlan],
   preserve : Bool,
   level : Int,
   force_zip64 : Bool,
@@ -685,7 +682,7 @@ fn write_impl(
   max_output : Int?,
 ) -> Bytes raise ZipError {
   let order = archive_local_order(archive)
-  let plans = Array::make(archive.entries.length(), {
+  let plans = FixedArray::make(archive.entries.length(), {
     local_offset: 0,
     compressed_size: 0,
   })

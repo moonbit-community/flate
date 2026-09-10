@@ -84,9 +84,9 @@ fn split_token_bytes(tok : Int) -> Int {
 /// at least ~39% probability mass (less for long blocks). Integer-only; the
 /// caller guarantees `old_tot > 0`.
 fn split_end_block_check(
-  old : Array[Int],
+  old : FixedArray[Int],
   old_tot : Int,
-  new : Array[Int],
+  new : FixedArray[Int],
   new_tot : Int,
   block_bytes : Int,
 ) -> Bool {
@@ -114,9 +114,9 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
   for tok in tokens {
     total_bytes = total_bytes + split_token_bytes(tok)
   }
-  let old = Array::make(SPLIT_NUM_CLASSES, 0)
+  let old = FixedArray::make(SPLIT_NUM_CLASSES, 0)
   let mut old_tot = 0
-  let new = Array::make(SPLIT_NUM_CLASSES, 0)
+  let new = FixedArray::make(SPLIT_NUM_CLASSES, 0)
   let mut new_tot = 0
   let mut block_bytes = 0
   let mut done_bytes = 0
@@ -168,7 +168,7 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
 /// regress the fixed-cadence ratio.
 fn fixed_cadence_cuts(
   tokens : Array[Int],
-  all_pos : Array[Int],
+  all_pos : FixedArray[Int],
   pos : Int,
 ) -> Array[Int] {
   let m = tokens.length()
@@ -192,22 +192,22 @@ fn fixed_cadence_cuts(
 /// grouping exactly, so the cheaper partition is never larger on the wire.
 fn partition_cost(
   tokens : Array[Int],
-  all_pos : Array[Int],
+  all_pos : FixedArray[Int],
   cuts : Array[Int],
 ) -> Int {
   let m = tokens.length()
   let mut total = 0
   let mut lo = 0
   for cut in cuts {
-    let ll_freq = Array::make(MAX_NUM_LIT, 0)
-    let d_freq = Array::make(MAX_NUM_DIST, 0)
+    let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
+    let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     range_freqs(tokens, lo, cut, ll_freq, d_freq)
     total = total + block_cost_bits(all_pos[cut] - all_pos[lo], ll_freq, d_freq)
     lo = cut
   }
   if lo < m {
-    let ll_freq = Array::make(MAX_NUM_LIT, 0)
-    let d_freq = Array::make(MAX_NUM_DIST, 0)
+    let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
+    let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     range_freqs(tokens, lo, m, ll_freq, d_freq)
     total = total + block_cost_bits(all_pos[m] - all_pos[lo], ll_freq, d_freq)
   }
@@ -222,15 +222,15 @@ fn emit_split_blocks(
   w : BitWriter,
   data : Bytes,
   tokens : Array[Int],
-  all_pos : Array[Int],
+  all_pos : FixedArray[Int],
   cuts : Array[Int],
   n : Int,
 ) -> Unit {
   let m = tokens.length()
   let mut lo = 0
   for cut in cuts {
-    let ll_freq = Array::make(MAX_NUM_LIT, 0)
-    let d_freq = Array::make(MAX_NUM_DIST, 0)
+    let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
+    let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     range_freqs(tokens, lo, cut, ll_freq, d_freq)
     emit_block(
       w,
@@ -245,8 +245,8 @@ fn emit_split_blocks(
     lo = cut
   }
   if lo < m {
-    let ll_freq = Array::make(MAX_NUM_LIT, 0)
-    let d_freq = Array::make(MAX_NUM_DIST, 0)
+    let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
+    let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     range_freqs(tokens, lo, m, ll_freq, d_freq)
     emit_block(
       w,
@@ -287,8 +287,8 @@ pub fn deflate_all_split(input : Bytes, level? : Int = 6) -> Bytes {
   for ;; {
     let target = (pos + SPLIT_MASTER_CHUNK).min(n)
     let tokens : Array[Int] = []
-    let ll_freq = Array::make(MAX_NUM_LIT, 0)
-    let d_freq = Array::make(MAX_NUM_DIST, 0)
+    let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
+    let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     let processed = tokenize(
       input, finder, pos, target, cfg, tokens, ll_freq, d_freq,
     )

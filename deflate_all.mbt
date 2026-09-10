@@ -11,8 +11,8 @@ pub struct Compressor {
   priv cfg : LevelConfig
   priv finder : MatchFinder
   priv tokens : Array[Int]
-  priv ll_freq : Array[Int]
-  priv d_freq : Array[Int]
+  priv ll_freq : FixedArray[Int]
+  priv d_freq : FixedArray[Int]
 }
 
 ///|
@@ -25,8 +25,8 @@ pub fn Compressor::Compressor(level? : Int = 6) -> Compressor {
     cfg: level_configs[level],
     finder: MatchFinder(),
     tokens: [],
-    ll_freq: Array::make(MAX_NUM_LIT, 0),
-    d_freq: Array::make(MAX_NUM_DIST, 0),
+    ll_freq: FixedArray::make(MAX_NUM_LIT, 0),
+    d_freq: FixedArray::make(MAX_NUM_DIST, 0),
   }
 }
 
@@ -128,8 +128,8 @@ pub fn deflate_all(input : Bytes, level? : Int = 6) -> Bytes {
   for ;; {
     let target = (pos + DEFLATE_BLOCK_SIZE).min(n)
     let tokens : Array[Int] = []
-    let ll_freq = Array::make(286, 0)
-    let d_freq = Array::make(30, 0)
+    let ll_freq = FixedArray::make(286, 0)
+    let d_freq = FixedArray::make(30, 0)
     let processed = tokenize(
       input, finder, pos, target, cfg, tokens, ll_freq, d_freq,
     )
