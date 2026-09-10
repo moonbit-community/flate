@@ -90,6 +90,37 @@ test "match search agrees with scalar candidates across budgets tails and ring b
 }
 
 ///|
+test "match search cutoff includes distance 32768 and excludes stale history" {
+  let input = Bytes::from_array(FixedArray::make(WINDOW_SIZE + 260, b'a'))
+  let window = FixedArray::make(STREAM_RING_STORAGE_SIZE, b'a')
+  for position in [WINDOW_SIZE - 1, WINDOW_SIZE, WINDOW_SIZE + 1] {
+    let finder = MatchFinder()
+    insert_pos(input, finder, 0, input.length())
+    for budget in [0, 1, 2] {
+      let cfg = {
+        good_length: 4,
+        max_lazy: 0,
+        nice_length: 258,
+        max_chain: budget,
+      }
+      let expected = if position <= WINDOW_SIZE && budget > 0 {
+        (8 << 16) | position
+      } else {
+        2 << 16
+      }
+      @test.assert_eq(
+        find_match(input, finder, position, position + 8, 2, cfg),
+        expected,
+      )
+      @test.assert_eq(
+        find_window_match(window, finder, position, position + 8, 2, cfg),
+        expected,
+      )
+    }
+  }
+}
+
+///|
 test "match probes refresh after improvements and retain the nearest equal match" {
   let bytes = Array::make(1800, b'\xFF')
   let position = 1500

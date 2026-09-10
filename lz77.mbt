@@ -251,9 +251,8 @@ fn find_match(
   if base >= cfg.good_length {
     budget = budget >> 2
   }
-  guard cand >= 0 && i - cand <= WINDOW_SIZE && budget > 0 else {
-    return base << 16
-  }
+  let cutoff = (i - WINDOW_SIZE).max(0)
+  guard cand >= cutoff && budget > 0 else { return base << 16 }
   let prefix = data[i].to_int() | (data[i + 1].to_int() << 8)
   let prev = finder.prev
   // Probe the end first, as in libdeflate's longer-match search. Keep the
@@ -264,27 +263,36 @@ fn find_match(
   let mut probe = base.max(2)
   let mut suffix = data[i + probe - 1].to_int() |
     (data[i + probe].to_int() << 8)
-  let mut steps = 0
-  while cand >= 0 && steps < budget && i - cand <= WINDOW_SIZE {
-    let candidate_suffix = data[cand + probe - 1].to_int() |
-      (data[cand + probe].to_int() << 8)
-    let l = if candidate_suffix == suffix &&
-      (data[cand].to_int() | (data[cand + 1].to_int() << 8)) == prefix {
-      match_len_up_to(data, cand, i, limit)
-    } else {
-      best_len
-    }
-    if l > best_len {
-      best_len = l
-      best_dist = i - cand
-      if l >= cfg.nice_length || l == limit {
+  let nice_length = cfg.nice_length.min(limit)
+  // Like libdeflate's longest_match, keep rejection in a tight inner loop.
+  // The cutoff folds both sentinel and window checks into one comparison.
+  for ;; {
+    for ;; {
+      let candidate_suffix = data[cand + probe - 1].to_int() |
+        (data[cand + probe].to_int() << 8)
+      if candidate_suffix == suffix &&
+        (data[cand].to_int() | (data[cand + 1].to_int() << 8)) == prefix {
         break
       }
-      probe = l
+      budget = budget - 1
+      cand = prev[cand & WINDOW_MASK]
+      guard budget > 0 && cand >= cutoff else {
+        return (best_len << 16) | best_dist
+      }
+    }
+    let length = match_len_up_to(data, cand, i, limit)
+    if length > best_len {
+      best_len = length
+      best_dist = i - cand
+      if length >= nice_length {
+        break
+      }
+      probe = length
       suffix = data[i + probe - 1].to_int() | (data[i + probe].to_int() << 8)
     }
+    budget = budget - 1
     cand = prev[cand & WINDOW_MASK]
-    steps = steps + 1
+    guard budget > 0 && cand >= cutoff else { break }
   }
   (best_len << 16) | best_dist
 }
@@ -308,38 +316,47 @@ fn find_window_match(
   if base >= cfg.good_length {
     budget = budget >> 2
   }
-  guard cand >= 0 && i - cand <= WINDOW_SIZE && budget > 0 else {
-    return base << 16
-  }
+  let cutoff = (i - WINDOW_SIZE).max(0)
+  guard cand >= cutoff && budget > 0 else { return base << 16 }
   let position = i & STREAM_RING_MASK
   let prefix = data[position].to_int() | (data[position + 1].to_int() << 8)
   let prev = finder.prev
   let mut probe = base.max(2)
   let mut suffix = data[position + probe - 1].to_int() |
     (data[position + probe].to_int() << 8)
-  let mut steps = 0
-  while cand >= 0 && steps < budget && i - cand <= WINDOW_SIZE {
-    let candidate = cand & STREAM_RING_MASK
-    let candidate_suffix = data[candidate + probe - 1].to_int() |
-      (data[candidate + probe].to_int() << 8)
-    let l = if candidate_suffix == suffix &&
-      (data[candidate].to_int() | (data[candidate + 1].to_int() << 8)) == prefix {
-      match_len_in_window(data, cand, i, limit)
-    } else {
-      best_len
-    }
-    if l > best_len {
-      best_len = l
-      best_dist = i - cand
-      if l >= cfg.nice_length || l == limit {
+  let nice_length = cfg.nice_length.min(limit)
+  // Like libdeflate's longest_match, keep rejection in a tight inner loop.
+  // The cutoff folds both sentinel and window checks into one comparison.
+  for ;; {
+    for ;; {
+      let candidate = cand & STREAM_RING_MASK
+      let candidate_suffix = data[candidate + probe - 1].to_int() |
+        (data[candidate + probe].to_int() << 8)
+      if candidate_suffix == suffix &&
+        (data[candidate].to_int() | (data[candidate + 1].to_int() << 8)) ==
+        prefix {
         break
       }
-      probe = l
+      budget = budget - 1
+      cand = prev[cand & WINDOW_MASK]
+      guard budget > 0 && cand >= cutoff else {
+        return (best_len << 16) | best_dist
+      }
+    }
+    let length = match_len_in_window(data, cand, i, limit)
+    if length > best_len {
+      best_len = length
+      best_dist = i - cand
+      if length >= nice_length {
+        break
+      }
+      probe = length
       suffix = data[position + probe - 1].to_int() |
         (data[position + probe].to_int() << 8)
     }
+    budget = budget - 1
     cand = prev[cand & WINDOW_MASK]
-    steps = steps + 1
+    guard budget > 0 && cand >= cutoff else { break }
   }
   (best_len << 16) | best_dist
 }
