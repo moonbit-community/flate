@@ -91,5 +91,5 @@ comparison. Both implementations verify checksums.
   `e2aa3ce54481208808b746ce0cca45445a9ad696894c5dac812da83b111b5fda`.
   These repository-derived corpora differ from the prior run. Compare corpus
   hashes before using historical throughput or compressed-size differences.
-- Full report, samples, metadata, source snapshot and exact corpus/fixtures:
-  `.local/bench/20260910T074714.890399Z/` (local, ignored by Git).
+- Full report, samples, metadata, source snapshot and exact corpus/fixtures are
+  retained outside the repository.

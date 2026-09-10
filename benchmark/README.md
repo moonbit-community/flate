@@ -28,9 +28,9 @@ python3 benchmark/run.py --profile full                       # broader: 7 round
 python3 benchmark/run.py --corpus /path/to/application-data.bin
 ```
 
-Each run builds fresh runners and saves results to a new
-`.local/bench/<UTC timestamp>/` directory. Use `--output DIR` to choose another
-new directory. Timed workloads run sequentially; a run takes several minutes.
+Each run builds fresh runners and saves results to a new output directory. Use
+`--output DIR` to choose its location. Timed workloads run sequentially; a run
+takes several minutes.
 
 ## What is measured
 
