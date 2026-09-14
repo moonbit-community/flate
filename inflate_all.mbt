@@ -200,6 +200,7 @@ priv struct MemDecoder {
   mut bit_count : Int // valid bits in `bitbuf`
   mut out : DecodeOutput
   mut cancelled : () -> Bool // polled every `CANCEL_GRANULARITY` produced bytes
+  mut poll_cancel : Bool
   mut next_cancel : Int // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
   dyn_dist : HuffmanDecoder // distance
@@ -233,6 +234,7 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
     bit_count: 0,
     out: DecodeOutput(input.length()),
     cancelled,
+    poll_cancel: true,
     next_cancel: 0,
     dyn_litlen: HuffmanDecoder(),
     dyn_dist: HuffmanDecoder(),
@@ -249,20 +251,31 @@ fn MemDecoder::reset_into(
   self : MemDecoder,
   input : Bytes,
   output : FixedArray[Byte],
-  cancelled : () -> Bool,
+  cancelled : (() -> Bool)?,
 ) -> Unit {
   self.input = input
   self.pos = 0
   self.bitbuf = 0
   self.bit_count = 0
   self.out = DecodeOutput::into(output)
-  self.cancelled = cancelled
-  self.next_cancel = 0
+  self.set_cancellation(cancelled)
+}
+
+///|
+fn MemDecoder::set_cancellation(
+  self : MemDecoder,
+  cancelled : (() -> Bool)?,
+) -> Unit {
+  self.cancelled = cancelled.unwrap_or(() => false)
+  self.poll_cancel = cancelled is Some(_)
+  // Without a callback, capacity/EOF alone delimit the batch. Explicit
+  // callbacks still run at entry and every 4096 produced bytes.
+  self.next_cancel = if self.poll_cancel { 0 } else { 0x7FFF_FFFF }
 }
 
 ///|
 fn MemDecoder::check_cancel(self : MemDecoder) -> Unit raise InflateError {
-  guard self.out.length >= self.next_cancel else { return }
+  guard self.poll_cancel && self.out.length >= self.next_cancel else { return }
   if (self.cancelled)() {
     raise InflateError(Cancelled, "cancelled by caller")
   }
@@ -272,8 +285,17 @@ fn MemDecoder::check_cancel(self : MemDecoder) -> Unit raise InflateError {
 ///|
 #inline
 fn MemDecoder::push(self : MemDecoder, b : Byte) -> Unit raise InflateError {
-  self.out.append_byte(b)
-  self.check_cancel()
+  let out = self.out
+  let start = out.length
+  // The capacity check also proves start + 1 cannot overflow. Keep growth,
+  // output-limit errors and the exact cancellation boundary on the slow path.
+  if start < out.storage.length() && start + 1 < self.next_cancel {
+    out.storage[start] = b
+    out.length = start + 1
+  } else {
+    out.append_byte(b)
+    self.check_cancel()
+  }
 }
 
 ///|
@@ -330,7 +352,7 @@ fn MemDecoder::huff_sym(
       }
       self.bitbuf = self.bitbuf >> n
       self.bit_count = self.bit_count - n
-      return (chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
+      return ((chunk >> HUFFMAN_VALUE_SHIFT) & 0x1FF).reinterpret_as_int()
     }
   }
 }
@@ -367,7 +389,11 @@ fn MemDecoder::huff_sym_data(
   self : MemDecoder,
   h : HuffmanDecoder,
 ) -> Int raise InflateError {
-  self.refill_huffman_fast()
+  // Fifteen buffered bits cover any DEFLATE code. Avoid topping up the
+  // reservoir on every symbol when the next lookup can already complete.
+  if self.bit_count < HUFFMAN_FAST_BITS {
+    self.refill_huffman_fast()
+  }
   if self.bit_count < HUFFMAN_FAST_BITS {
     return self.huff_sym(h)
   }
@@ -381,7 +407,7 @@ fn MemDecoder::huff_sym_data(
   guard n != 0 else { raise InflateError(Corrupt, "corrupt: bad Huffman code") }
   self.bitbuf = self.bitbuf >> n
   self.bit_count = self.bit_count - n
-  (chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
+  ((chunk >> HUFFMAN_VALUE_SHIFT) & 0x1FF).reinterpret_as_int()
 }
 
 ///|
@@ -423,7 +449,12 @@ fn MemDecoder::decode_match(
   if length <= out.storage.length() - start && length < self.next_cancel - start {
     let storage = out.storage
     if length <= 16 {
-      for i in 0..<length {
+      // A decoded match is at least three bytes. Keep the mandatory prefix
+      // outside the loop; sequential stores preserve distances one and two.
+      storage[start] = storage[start - dist]
+      storage[start + 1] = storage[start + 1 - dist]
+      storage[start + 2] = storage[start + 2 - dist]
+      for i in 3..<length {
         storage[start + i] = storage[start + i - dist]
       }
     } else if dist == 1 {
@@ -438,12 +469,314 @@ fn MemDecoder::decode_match(
 }
 
 ///|
+// Lookup only: the batch caller has at least 15 bits and checks invalid entries.
+#cfg(target="native")
+#inline
+fn batch_huffman_entry(h : HuffmanDecoder, bits : UInt64) -> UInt {
+  // HuffmanDecoder always owns 512 primary entries, including empty trees.
+  // Masking to nine bits proves this load's range independently of input.
+  let chunk = h.chunks.unsafe_get((bits & 0x1FFUL).to_int())
+  if (chunk & 15) > HUFFMAN_CHUNK_BITS.reinterpret_as_uint() {
+    let link = ((bits >> HUFFMAN_CHUNK_BITS).to_uint() & h.link_mask).reinterpret_as_int()
+    h.links[(chunk >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int() + link]
+  } else {
+    chunk
+  }
+}
+
+///|
+// Low input lanes contain eight history bytes; high lanes hold old output.
+// Repeating only the available history handles overlap, while selecting old
+// output beyond the match preserves every caller-owned tail byte.
+#cfg(target="native")
+let short_copy_shuffle : FixedArray[Byte] = FixedArray::makei(1024, index => {
+  let lane = index & 15
+  let length = index >> 7
+  let distance = ((index >> 4) & 7).max(1)
+  if lane < length {
+    (lane % distance).to_byte()
+  } else {
+    (8 + (lane & 7)).to_byte()
+  }
+})
+
+///|
+/// Process complete tokens with local state. A token needs at most 48 bits
+/// (15 + 5 + 15 + 13) and emits at most 258 bytes. Uncommitted tokens are
+/// retried by the checked decoder, including malformed codes and EOF tails.
+#cfg(target="native")
+fn MemDecoder::decode_batch(
+  self : MemDecoder,
+  hl : HuffmanDecoder,
+  hd : HuffmanDecoder?,
+) -> Bool {
+  guard hd is Some(distance_tree) else { return false }
+  let input = self.input
+  let out = self.out
+  let storage = out.storage
+  let output_end = storage.length().min(self.next_cancel - 1)
+  guard input.length() - self.pos >= 8 && output_end - out.length >= 258 else {
+    return false
+  }
+  let mut bits = UInt64::extend_uint(self.bitbuf)
+  let mut count = self.bit_count
+  let mut pos = self.pos
+  let mut written = out.length
+  let mut next_primary = 0U
+  let ended = for ;; {
+    let input_length = input.length()
+    let output_length = storage.length()
+    // Explicit nonnegative ranges enable native bounds-check elimination for
+    // the constant-offset loads and stores below.
+    let can_decode_token = input_length >= 8 &&
+      pos >= 0 &&
+      pos <= input_length - 8 &&
+      output_length >= 258 &&
+      written >= 0 &&
+      written <= output_length - 258 &&
+      output_end - written >= 258
+    guard can_decode_token else { break false }
+    let mut word = bits
+    let mut remaining = count
+    let mut cursor = pos
+    if remaining < 48 {
+      // The iteration proves eight readable bytes. Advance only by complete
+      // bytes fitting below bit 63; afterwards 56..63 bits are available.
+      // Higher loaded bits are lookahead from the same unconsumed input. They
+      // agree with the next refill's OR and are discarded on batch exit.
+      let loaded = UInt64::extend_uint(input[cursor].to_uint()) |
+        (UInt64::extend_uint(input[cursor + 1].to_uint()) << 8) |
+        (UInt64::extend_uint(input[cursor + 2].to_uint()) << 16) |
+        (UInt64::extend_uint(input[cursor + 3].to_uint()) << 24) |
+        (UInt64::extend_uint(input[cursor + 4].to_uint()) << 32) |
+        (UInt64::extend_uint(input[cursor + 5].to_uint()) << 40) |
+        (UInt64::extend_uint(input[cursor + 6].to_uint()) << 48) |
+        (UInt64::extend_uint(input[cursor + 7].to_uint()) << 56)
+      let bytes = (63 - remaining) >> 3
+      word = word | (loaded << remaining)
+      remaining += bytes << 3
+      cursor += bytes
+    }
+    let mut entry = if next_primary != 0U {
+      next_primary
+    } else {
+      hl.chunks.unsafe_get((word & 511UL).to_int())
+    }
+    if (entry & 15U) > 9U {
+      entry = batch_huffman_entry(hl, word)
+    }
+    let mut used = (entry & 15).reinterpret_as_int()
+    guard used != 0 else { break false }
+    let mut symbol = ((entry >> HUFFMAN_VALUE_SHIFT) & 0x1FF).reinterpret_as_int()
+    if symbol < 256 {
+      word = word >> used
+      remaining -= used
+      next_primary = if remaining >= 9 {
+        hl.chunks.unsafe_get((word & 511UL).to_int())
+      } else {
+        0U
+      }
+      storage[written] = symbol.to_byte()
+      written += 1
+      // Preserve this literal even if the following token needs checked
+      // fallback. Continue directly only with a full token's reservation.
+      bits = word
+      count = remaining
+      pos = cursor
+      guard remaining >= 48 && output_end - written >= 258 else { continue }
+      entry = next_primary
+      if (entry & 15U) > 9U {
+        entry = batch_huffman_entry(hl, word)
+      }
+      used = (entry & 15).reinterpret_as_int()
+      guard used != 0 else { break false }
+      symbol = ((entry >> HUFFMAN_VALUE_SHIFT) & 0x1FF).reinterpret_as_int()
+    }
+    if symbol < 256 {
+      word = word >> used
+      remaining -= used
+      next_primary = if remaining >= 9 {
+        hl.chunks.unsafe_get((word & 511UL).to_int())
+      } else {
+        0U
+      }
+      storage[written] = symbol.to_byte()
+      written += 1
+    } else if symbol == 256 {
+      bits = word >> used
+      count = remaining - used
+      pos = cursor
+      break true
+    } else {
+      guard symbol < 286 else { break false }
+      let info = ((entry >> 13) & 0xFFF).reinterpret_as_int()
+      let extra = info & 7
+      let length = (info >> 3) +
+        ((word >> used) & ((1UL << extra) - 1)).to_int()
+      let total = (entry >> 25).reinterpret_as_int()
+      word = word >> total
+      remaining -= total
+      let distance_entry = batch_huffman_entry(distance_tree, word)
+      let distance_used = (distance_entry & 15).reinterpret_as_int()
+      let distance_info = (distance_entry >> 13).reinterpret_as_int()
+      // Native data tables give every valid distance nonzero metadata and
+      // leave reserved symbols 30/31 at zero. No separate symbol extraction
+      // is needed to reject them before committing the token.
+      guard distance_used != 0 && distance_info != 0 else { break false }
+      word = word >> distance_used
+      remaining -= distance_used
+      let distance_extra = distance_info & 15
+      let distance = (distance_info >> 4) +
+        (word & ((1UL << distance_extra) - 1)).to_int()
+      guard distance > 0 && distance <= written else { break false }
+      word = word >> distance_extra
+      remaining -= distance_extra
+      // Only the bounded primary read is speculative. Secondary resolution
+      // and invalid-code handling stay after refill on the next iteration.
+      next_primary = if remaining >= 9 {
+        hl.chunks.unsafe_get((word & 511UL).to_int())
+      } else {
+        0U
+      }
+      if length <= 7 {
+        // The batch reserves 258 bytes, so these eight-byte reads/writes stay
+        // in bounds even for a three-byte match. The shuffle retains the tail.
+        let history = @v128.v128_load64_zero(storage, written - distance)
+        let combined = @v128.v128_load64_lane(storage, written, history, 1)
+        let control = @v128.v128_load(
+          short_copy_shuffle,
+          (length * 8 + distance.min(7)) * 16,
+        )
+        @v128.v128_store64_lane(
+          storage,
+          written,
+          @v128.i8x16_swizzle(combined, control),
+          0,
+        )
+      } else if length <= 16 && distance >= 8 {
+        @v128.v128_store64_lane(
+          storage,
+          written,
+          @v128.v128_load64_zero(storage, written - distance),
+          0,
+        )
+        if length > 8 {
+          let tail = written + length - 8
+          @v128.v128_store64_lane(
+            storage,
+            tail,
+            @v128.v128_load64_zero(storage, tail - distance),
+            0,
+          )
+        }
+      } else if length <= 16 {
+        // Constant offsets reuse the batch's range proof. Each load precedes
+        // its store for overlapping history; stop at the exact match length.
+        storage[written] = storage[written - distance]
+        storage[written + 1] = storage[written + 1 - distance]
+        storage[written + 2] = storage[written + 2 - distance]
+        if length > 3 {
+          storage[written + 3] = storage[written + 3 - distance]
+        }
+        if length > 4 {
+          storage[written + 4] = storage[written + 4 - distance]
+        }
+        if length > 5 {
+          storage[written + 5] = storage[written + 5 - distance]
+        }
+        if length > 6 {
+          storage[written + 6] = storage[written + 6 - distance]
+        }
+        if length > 7 {
+          storage[written + 7] = storage[written + 7 - distance]
+        }
+        if length > 8 {
+          storage[written + 8] = storage[written + 8 - distance]
+        }
+        if length > 9 {
+          storage[written + 9] = storage[written + 9 - distance]
+        }
+        if length > 10 {
+          storage[written + 10] = storage[written + 10 - distance]
+        }
+        if length > 11 {
+          storage[written + 11] = storage[written + 11 - distance]
+        }
+        if length > 12 {
+          storage[written + 12] = storage[written + 12 - distance]
+        }
+        if length > 13 {
+          storage[written + 13] = storage[written + 13 - distance]
+        }
+        if length > 14 {
+          storage[written + 14] = storage[written + 14 - distance]
+        }
+        if length > 15 {
+          storage[written + 15] = storage[written + 15 - distance]
+        }
+      } else if length <= 48 && distance >= 16 {
+        // Length is now 17..48. Two or three forward vectors cover the
+        // match without a helper call, and the last store ends exactly.
+        @v128.v128_store(
+          storage,
+          written,
+          @v128.v128_load(storage, written - distance),
+        )
+        if length > 32 {
+          @v128.v128_store(
+            storage,
+            written + 16,
+            @v128.v128_load(storage, written + 16 - distance),
+          )
+        }
+        let tail = written + length - 16
+        @v128.v128_store(
+          storage,
+          tail,
+          @v128.v128_load(storage, tail - distance),
+        )
+      } else if distance == 1 {
+        storage.fill(storage[written - 1], start=written, end=written + length)
+      } else {
+        copy_match_bytes(storage, written, distance, length)
+      }
+      written += length
+    }
+    bits = word
+    count = remaining
+    pos = cursor
+  }
+  // Put unread whole bytes back before narrowing to the original reservoir.
+  self.pos = pos - (count >> 3)
+  self.bit_count = count & 7
+  self.bitbuf = bits.to_uint() & ((1U << self.bit_count) - 1)
+  out.length = written
+  ended
+}
+
+///|
+// The wide-reservoir fast path is measured on native. Keep the established
+// production loop on other backends.
+#cfg(not(target="native"))
+#inline
+fn MemDecoder::decode_batch(
+  _self : MemDecoder,
+  _hl : HuffmanDecoder,
+  _hd : HuffmanDecoder?,
+) -> Bool {
+  false
+}
+
+///|
 fn MemDecoder::decode_block(
   self : MemDecoder,
   hl : HuffmanDecoder,
   hd : HuffmanDecoder?,
 ) -> Unit raise InflateError {
   for ;; {
+    if self.decode_batch(hl, hd) {
+      return
+    }
     let v = self.huff_sym_data(hl)
     guard v >= 256 else {
       self.push(v.to_byte())
@@ -464,6 +797,28 @@ fn MemDecoder::decode_block(
 }
 
 ///|
+// Fixed blocks do not use the dynamic batch. Dispatch once per block instead
+// of paying for a failed batch probe on every token of small fixed streams.
+fn MemDecoder::decode_fixed_block(self : MemDecoder) -> Unit raise InflateError {
+  for ;; {
+    let symbol = self.huff_sym_data(fixed_huffman_decoder)
+    guard symbol >= 256 else {
+      self.push(symbol.to_byte())
+      let next = self.huff_sym_data(fixed_huffman_decoder)
+      guard next >= 256 else {
+        self.push(next.to_byte())
+        continue
+      }
+      guard next != 256 else { return }
+      self.decode_match(next, None)
+      continue
+    }
+    guard symbol != 256 else { return }
+    self.decode_match(symbol, None)
+  }
+}
+
+///|
 fn MemDecoder::copy_match(
   self : MemDecoder,
   distance : Int,
@@ -472,7 +827,11 @@ fn MemDecoder::copy_match(
   let mut remaining = length
   while remaining > 0 {
     // Keep the public cancellation cadence while copying in large chunks.
-    let until_cancel = self.next_cancel - self.out.length
+    let until_cancel = if self.poll_cancel {
+      self.next_cancel - self.out.length
+    } else {
+      remaining
+    }
     let chunk = remaining.min(until_cancel)
     self.out.append_repeated_suffix(distance, chunk)
     remaining = remaining - chunk
@@ -489,7 +848,11 @@ fn MemDecoder::copy_stored(
   while remaining > 0 {
     // Preserve `inflate_all`'s cancellation cadence while copying each chunk
     // through the core bulk-copy primitive.
-    let until_cancel = self.next_cancel - self.out.length
+    let until_cancel = if self.poll_cancel {
+      self.next_cancel - self.out.length
+    } else {
+      remaining
+    }
     let chunk = remaining.min(until_cancel)
     self.out.append_bytes(self.input, self.pos, chunk)
     self.pos = self.pos + chunk
@@ -530,10 +893,10 @@ fn MemDecoder::read_dynamic(self : MemDecoder) -> Unit raise InflateError {
     self.codebits,
     self.clbits,
   )
-  guard self.dyn_litlen.initialize(self.clbits[0:nlit]) else {
+  guard self.dyn_litlen.initialize_litlen(self.clbits[0:nlit]) else {
     raise InflateError(Corrupt, "corrupt: bad literal/length tree")
   }
-  guard self.dyn_dist.initialize(self.clbits[nlit:nlit + ndist]) else {
+  guard self.dyn_dist.initialize_distance(self.clbits[nlit:nlit + ndist]) else {
     raise InflateError(Corrupt, "corrupt: bad distance tree")
   }
 }
@@ -549,7 +912,7 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
     self.bit_count = self.bit_count - 3
     match btype {
       0 => self.stored_block()
-      1 => self.decode_block(fixed_huffman_decoder, None)
+      1 => self.decode_fixed_block()
       2 => {
         self.read_dynamic()
         self.decode_block(self.dyn_litlen, Some(self.dyn_dist))
@@ -571,9 +934,10 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
 /// bytes; returning `true` raises `InflateError(Cancelled, _)`.
 pub fn inflate_all(
   input : Bytes,
-  cancelled? : () -> Bool = () => false,
+  cancelled? : () -> Bool,
 ) -> Bytes raise InflateError {
-  let d = MemDecoder(input, cancelled)
+  let d = MemDecoder(input, cancelled.unwrap_or(() => false))
+  d.set_cancellation(cancelled)
   d.run()
   d.out.to_bytes()
 }
@@ -602,7 +966,7 @@ pub fn Decompressor::decompress_into(
   self : Decompressor,
   input : Bytes,
   output : FixedArray[Byte],
-  cancelled? : () -> Bool = () => false,
+  cancelled? : () -> Bool,
 ) -> Int raise InflateError {
   self.decoder.reset_into(input, output, cancelled)
   self.decoder.run()
@@ -615,9 +979,14 @@ pub fn Decompressor::decompress_into(
 pub fn inflate_into(
   input : Bytes,
   output : FixedArray[Byte],
-  cancelled? : () -> Bool = () => false,
+  cancelled? : () -> Bool,
 ) -> Int raise InflateError {
-  Decompressor().decompress_into(input, output, cancelled~)
+  let decoder = Decompressor()
+  if cancelled is Some(callback) {
+    decoder.decompress_into(input, output, cancelled=callback)
+  } else {
+    decoder.decompress_into(input, output)
+  }
 }
 
 ///|

@@ -352,8 +352,8 @@ static size_t sample_once(struct sample_context *s, int validate) {
 }
 
 static int sample_main(int argc, char **argv) {
-  if (argc != 9)
-    die("--sample export|compress|decompress direct|oneshot raw|zlib|gzip LEVEL INPUT FIXTURE MILLISECONDS");
+  if (argc != 10)
+    die("--sample bound|export|compress|decompress direct|oneshot raw|zlib|gzip LEVEL INPUT FIXTURE MILLISECONDS OUTPUT_CAPACITY");
   const char *operation = argv[2];
   struct sample_context s = {0};
   s.allocating = strcmp(argv[3], "oneshot") == 0;
@@ -364,7 +364,16 @@ static int sample_main(int argc, char **argv) {
   uint8_t *input = read_file(argv[6], &s.input_size);
   s.input = input;
   size_t milliseconds = parse_size(argv[8], "milliseconds");
-  if (milliseconds == 0) die("duration must be positive");
+  size_t capacity = parse_size(argv[9], "output capacity");
+  if (strcmp(operation, "bound") == 0) {
+    if (s.allocating) die("bound requires direct mode");
+    s.compressor = libdeflate_alloc_compressor(s.level);
+    if (s.compressor == NULL) die("codec allocation failed");
+    printf("%zu\n", compress_bound(s.format, s.compressor, s.input_size));
+    libdeflate_free_compressor(s.compressor);
+    free(input);
+    return EXIT_SUCCESS;
+  }
   s.decoding = strcmp(operation, "decompress") == 0;
   int exporting = strcmp(operation, "export") == 0;
   if (!s.decoding && !exporting && strcmp(operation, "compress") != 0)
@@ -373,9 +382,20 @@ static int sample_main(int argc, char **argv) {
   s.decompressor = libdeflate_alloc_decompressor();
   if (s.compressor == NULL || s.decompressor == NULL) die("codec allocation failed");
   size_t compressed_capacity = compress_bound(s.format, s.compressor, s.input_size);
+  if (!s.allocating) {
+    if (s.decoding) {
+      if (capacity != s.input_size) die("decode capacity mismatch");
+    } else {
+      if (capacity < compressed_capacity) die("compression capacity below bound");
+      compressed_capacity = capacity;
+    }
+  }
   uint8_t *compressed = malloc(compressed_capacity);
   uint8_t *decoded = malloc(s.input_size == 0 ? 1 : s.input_size);
   if (compressed == NULL || decoded == NULL) die("buffer allocation failed");
+  // Match MoonBit's initialized buffers; first-touch cost is outside timing.
+  memset(compressed, 0, compressed_capacity);
+  memset(decoded, 0, s.input_size);
   size_t compressed_size = compress_once(s.format, s.compressor, input,
     s.input_size, compressed, compressed_capacity);
   if (compressed_size == 0) die("fixture compression failed");
@@ -398,11 +418,14 @@ static int sample_main(int argc, char **argv) {
     s.capacity = s.decoding ? s.input_size : compressed_capacity;
     s.expected_output_size = s.decoding ? s.input_size : compressed_size;
     sample_once(&s, 1);
-    for (int i = 0; i < 3; i++) sample_once(&s, 0);
-    size_t iterations = 1;
-    double seconds;
-    size_t written = 0;
-    for (;;) {
+    size_t iterations = 0;
+    double seconds = 0;
+    size_t written = s.expected_output_size;
+    if (milliseconds > 0) {
+      for (int i = 0; i < 3; i++) sample_once(&s, 0);
+      iterations = 1;
+    }
+    while (milliseconds > 0) {
       double started = monotonic_seconds();
       for (size_t i = 0; i < iterations; i++) written = sample_once(&s, 0);
       seconds = monotonic_seconds() - started;

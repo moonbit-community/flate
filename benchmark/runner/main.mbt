@@ -99,6 +99,14 @@ fn measure(
   milliseconds : Int,
   output_size : Int,
 ) -> Unit {
+  // Zero duration validates once without warmup, calibration, or timing.
+  if milliseconds == 0 {
+    let sink = operation()
+    println(
+      "{\"iterations\":0,\"seconds\":0,\"output_bytes\":\{output_size},\"sink\":\{sink}}",
+    )
+    return
+  }
   let mut sink = 0
   for _ in 0..<3 {
     sink = sink + operation()
@@ -125,9 +133,9 @@ fn measure(
 #coverage.skip
 fn main {
   let args = @env.args()
-  guard args.length() == 8 else {
+  guard args.length() == 9 || args.length() == 10 else {
     abort(
-      "usage: runner export|compress|decompress direct|oneshot raw|zlib|gzip LEVEL INPUT FIXTURE MILLISECONDS",
+      "usage: runner bound|export|compress|decompress direct|oneshot raw|zlib|gzip LEVEL INPUT FIXTURE MILLISECONDS OUTPUT_CAPACITY [DECODE_SAMPLES]",
     )
   }
   let operation = args[1]
@@ -137,33 +145,56 @@ fn main {
   let input = read_input(args[5])
   let fixture_path = args[6]
   let milliseconds = parse_number(args[7])
-  guard level >= 0 && level <= 9 && milliseconds > 0 else {
-    abort("level must be 0..9 and duration must be positive")
+  let capacity = parse_number(args[8])
+  let samples = if args.length() == 10 { parse_number(args[9]) } else { 1 }
+  guard samples > 0 else { abort("sample count must be positive") }
+  guard args.length() == 9 || (operation == "decompress" && mode == "direct") else {
+    abort("repeated samples require direct decompression")
+  }
+  guard level >= 0 && level <= 9 && milliseconds >= 0 && capacity >= 0 else {
+    abort("level must be 0..9; duration and capacity must be nonnegative")
   }
   guard mode == "oneshot" || (mode == "direct" && format == "raw") else {
     abort("direct mode supports only raw DEFLATE")
   }
+  if operation == "bound" {
+    guard mode == "direct" else { abort("bound requires direct mode") }
+    println(@flate.deflate_bound(input.length()))
+    return
+  }
   if mode == "direct" {
     if operation == "decompress" {
+      guard capacity == input.length() else {
+        abort("decode capacity mismatch")
+      }
       let fixture = read_input(fixture_path)
       let codec = @flate.Decompressor()
       let output = FixedArray::make(input.length(), b'\x00')
-      let run = () => decompress_direct(codec, fixture, output)
-      guard run() == input.length() else { abort("decoded length mismatch") }
+      let run = () => {
+        let written = decompress_direct(codec, fixture, output)
+        let last = if written == 0 { 0 } else { output[written - 1].to_int() }
+        written + last
+      }
+      ignore(run())
       verify(input, Bytes::from_array(output[:]))
-      measure(run, milliseconds, input.length())
-      verify(input, Bytes::from_array(output[:]))
+      // Diagnostic repetitions retain the same codec and buffer addresses.
+      // Each sample still includes per-stream reset and table construction.
+      for _ in 0..<samples {
+        measure(run, milliseconds, input.length())
+        verify(input, Bytes::from_array(output[:]))
+      }
     } else {
       let codec = @flate.Compressor(level~)
-      let output = FixedArray::make(
-        @flate.deflate_bound(input.length()),
-        b'\x00',
-      )
+      guard capacity >= @flate.deflate_bound(input.length()) else {
+        abort("compression capacity below bound")
+      }
+      let output = FixedArray::make(capacity, b'\x00')
       let written = compress_direct(codec, input, output)
       let run = () => {
         let actual = compress_direct(codec, input, output)
         guard actual == written else { abort("compressed length changed") }
-        actual
+        let last = if actual == 0 { 0 } else { output[actual - 1].to_int() }
+        actual + last
       }
       let fixture = Bytes::from_array(output[:written])
       verify(input, decompress(fixture, "raw"))

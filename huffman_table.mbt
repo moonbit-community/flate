@@ -13,12 +13,14 @@ pub const HUFFMAN_VALUE_SHIFT : Int = 4
 
 ///|
 /// zlib-style chunked Huffman decode table. `chunk & 0xF` is the code length,
-/// `chunk >> 4` is the value (or an offset into the flat link table for codes
-/// wider than 9 bits). Keeping all link tables contiguous removes one pointer
+/// For plain tables `chunk >> 4` is the symbol. Native data tables keep the
+/// symbol in bits 4..12 and length/distance metadata in bits 13..31. Primary
+/// links are never decorated: their value remains a flat link-table offset.
+/// Keeping all link tables contiguous removes one pointer
 /// chase from the decode hot path.
 priv struct HuffmanDecoder {
   mut min : Int
-  mut chunks : FixedArray[UInt]
+  chunks : FixedArray[UInt]
   mut links : FixedArray[UInt]
   mut link_mask : UInt
 }
@@ -31,13 +33,16 @@ fn HuffmanDecoder::HuffmanDecoder() -> HuffmanDecoder {
 ///|
 /// Build the decode table from per-symbol code lengths. Returns false if the
 /// lengths do not form a complete (or valid degenerate) Huffman tree.
+/// Optional metadata has one entry per symbol and only uses bits 13..31.
+/// Callers supplying it must mask the nine-bit symbol on terminal entries.
 fn HuffmanDecoder::initialize(
   self : HuffmanDecoder,
   lengths : ArrayView[Int],
+  metadata? : FixedArray[UInt]? = None,
+  length_totals? : Bool = false,
 ) -> Bool {
   if self.min != 0 {
     self.min = 0
-    self.chunks = FixedArray::make(512, 0U)
     self.links = []
     self.link_mask = 0
   }
@@ -56,7 +61,10 @@ fn HuffmanDecoder::initialize(
     }
     count[n] = count[n] + 1
   }
-  guard max != 0 else { return true }
+  guard max != 0 else {
+    self.chunks.fill(0U)
+    return true
+  }
   let mut code = 0
   let nextcode = FixedArray::make(MAX_CODE_LEN, 0)
   for i in min..<=max {
@@ -64,7 +72,13 @@ fn HuffmanDecoder::initialize(
     nextcode[i] = code
     code = code + count[i]
   }
-  guard code == 1 << max || (code == 1 && max == 1) else { return false }
+  // Complete trees overwrite every primary entry with a terminal or link.
+  // Empty/degenerate/invalid trees must not retain entries from the old tree.
+  let complete = code == 1 << max
+  if !complete {
+    self.chunks.fill(0U)
+  }
+  guard complete || (code == 1 && max == 1) else { return false }
   self.min = min
   if max > HUFFMAN_CHUNK_BITS {
     let num_links = 1 << (max - HUFFMAN_CHUNK_BITS)
@@ -85,8 +99,17 @@ fn HuffmanDecoder::initialize(
     }
     let code = nextcode[n]
     nextcode[n] = nextcode[n] + 1
+    let extra = if metadata is Some(values) { values[idx] } else { 0U }
+    // Length metadata uses only bits 13..24. Store code + extra-bit count
+    // above it so the native loop can advance directly to the distance code.
+    let extra = if length_totals && extra != 0U {
+      extra | ((n.reinterpret_as_uint() + ((extra >> 13) & 7U)) << 25)
+    } else {
+      extra
+    }
     let chunk = (idx << HUFFMAN_VALUE_SHIFT).reinterpret_as_uint() |
-      n.reinterpret_as_uint()
+      n.reinterpret_as_uint() |
+      extra
     let mut reverse = reverse16((code & 0xffff).reinterpret_as_uint()).reinterpret_as_int()
     reverse = reverse >> (16 - n)
     if n <= HUFFMAN_CHUNK_BITS {
@@ -132,3 +155,86 @@ fn make_fixed_huffman_decoder() -> HuffmanDecoder {
 
 ///|
 let fixed_huffman_decoder : HuffmanDecoder = make_fixed_huffman_decoder()
+
+///|
+#cfg(target="native")
+priv enum InflateAlphabet {
+  LiteralLength
+  Distance
+}
+
+///|
+#cfg(target="native")
+let native_length_metadata : FixedArray[UInt] = FixedArray::makei(288, symbol => {
+  if symbol >= 257 && symbol < 286 {
+    length_code_info_table[symbol - 257].reinterpret_as_uint() << 13
+  } else {
+    0U
+  }
+})
+
+///|
+#cfg(target="native")
+let native_distance_metadata : FixedArray[UInt] = FixedArray::makei(32, symbol => {
+  if symbol < MAX_NUM_DIST {
+    distance_code_info_table[symbol].reinterpret_as_uint() << 13
+  } else {
+    0U
+  }
+})
+
+///|
+#cfg(target="native")
+fn HuffmanDecoder::initialize_data(
+  self : HuffmanDecoder,
+  lengths : ArrayView[Int],
+  alphabet : InflateAlphabet,
+) -> Bool {
+  let metadata = match alphabet {
+    LiteralLength => native_length_metadata
+    Distance => native_distance_metadata
+  }
+  self.initialize(
+    lengths,
+    metadata=Some(metadata),
+    length_totals=alphabet is LiteralLength,
+  )
+}
+
+///|
+// The entry points are separate so other backends keep plain tables without
+// constructing native-only alphabet tags or metadata arrays.
+#cfg(target="native")
+fn HuffmanDecoder::initialize_litlen(
+  self : HuffmanDecoder,
+  lengths : ArrayView[Int],
+) -> Bool {
+  self.initialize_data(lengths, LiteralLength)
+}
+
+///|
+#cfg(target="native")
+fn HuffmanDecoder::initialize_distance(
+  self : HuffmanDecoder,
+  lengths : ArrayView[Int],
+) -> Bool {
+  self.initialize_data(lengths, Distance)
+}
+
+///|
+#cfg(not(target="native"))
+fn HuffmanDecoder::initialize_litlen(
+  self : HuffmanDecoder,
+  lengths : ArrayView[Int],
+) -> Bool {
+  self.initialize(lengths)
+}
+
+///|
+#cfg(not(target="native"))
+fn HuffmanDecoder::initialize_distance(
+  self : HuffmanDecoder,
+  lengths : ArrayView[Int],
+) -> Bool {
+  self.initialize(lengths)
+}
