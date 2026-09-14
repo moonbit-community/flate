@@ -44,12 +44,30 @@ test "omitted cancellation preserves output and resets explicit callback state" 
     @test.assert_eq(inflate_all(input), source)
     let output = FixedArray::make(9000, b'\xA5')
     @test.assert_eq(inflate_into(input, output), 9000)
+    let mut one_shot_calls = 0
+    @test.assert_eq(
+      inflate_into(input, output, cancelled=() => {
+        one_shot_calls += 1
+        false
+      }),
+      9000,
+    )
+    @test.assert_eq(one_shot_calls, 3)
     let error = @test.expect_error(() => {
       decoder.decompress_into(input, FixedArray::make(4095, b'\xA5'))
     })
     guard error is InflateError(kind, _)
     @test.assert_eq(kind, OutputLimitExceeded)
   }
+}
+
+///|
+test "omitted cancellation installs a non-polling callback" {
+  let decoder = MemDecoder(b"", no_cancellation)
+  @test.assert_eq((decoder.cancelled)(), false)
+  decoder.set_cancellation(None)
+  @test.assert_eq(decoder.poll_cancel, false)
+  @test.assert_eq((decoder.cancelled)(), false)
 }
 
 ///|

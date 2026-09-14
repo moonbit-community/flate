@@ -212,6 +212,11 @@ priv struct MemDecoder {
 const CANCEL_GRANULARITY : Int = 4096
 
 ///|
+fn no_cancellation() -> Bool {
+  false
+}
+
+///|
 /// A DEFLATE Huffman code is at most 15 bits. The one-shot decoder can keep a
 /// 24-bit reservoir because it is allowed to consume trailing bytes after the
 /// final block, as documented by `inflate_all`'s prefix semantics.
@@ -571,11 +576,9 @@ fn MemDecoder::decode_batch(
     if symbol < 256 {
       word = word >> used
       remaining -= used
-      next_primary = if remaining >= 9 {
-        hl.chunks.unsafe_get((word & 511UL).to_int())
-      } else {
-        0U
-      }
+      // The loop entered with at least 48 bits and a literal uses at most 15,
+      // so a complete nine-bit primary prefix remains available.
+      next_primary = hl.chunks.unsafe_get((word & 511UL).to_int())
       storage[written] = symbol.to_byte()
       written += 1
       // Preserve this literal even if the following token needs checked
@@ -595,11 +598,8 @@ fn MemDecoder::decode_batch(
     if symbol < 256 {
       word = word >> used
       remaining -= used
-      next_primary = if remaining >= 9 {
-        hl.chunks.unsafe_get((word & 511UL).to_int())
-      } else {
-        0U
-      }
+      // The paired literal starts only with at least 48 remaining bits.
+      next_primary = hl.chunks.unsafe_get((word & 511UL).to_int())
       storage[written] = symbol.to_byte()
       written += 1
     } else if symbol == 256 {
@@ -936,7 +936,7 @@ pub fn inflate_all(
   input : Bytes,
   cancelled? : () -> Bool,
 ) -> Bytes raise InflateError {
-  let d = MemDecoder(input, cancelled.unwrap_or(() => false))
+  let d = MemDecoder(input, no_cancellation)
   d.set_cancellation(cancelled)
   d.run()
   d.out.to_bytes()

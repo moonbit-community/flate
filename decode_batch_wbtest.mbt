@@ -52,6 +52,16 @@ test "batch primary lookup accepts every prefix of an empty table" {
 
 ///|
 #cfg(target="native")
+test "batch requires a distance table" {
+  let decoder = MemDecoder(b"", () => false)
+  @test.assert_eq(
+    decoder.decode_batch(packed_fixed_huffman_decoder, None),
+    false,
+  )
+}
+
+///|
+#cfg(target="native")
 test "fused Huffman metadata preserves every prefix and plain-table reset" {
   let deep = FixedArray::make(286, 0)
   for i in 0..<14 {
@@ -602,5 +612,39 @@ test "zero prefetched primary remains invalid after a committed match" {
   }
   for i in 4..<storage.length() {
     @test.assert_eq(storage[i], (i * 37 + 19).to_byte())
+  }
+}
+
+///|
+#cfg(target="native")
+test "zero prefetched primary after a literal keeps the literal committed" {
+  let lengths = FixedArray::make(258, 0)
+  lengths[65] = 1
+  let literals = HuffmanDecoder()
+  let distances = HuffmanDecoder()
+  @test.assert_eq(literals.initialize_litlen(lengths[:]), true)
+  @test.assert_eq(distances.initialize_distance([1]), true)
+  let writer = BitWriter()
+  writer.write_bits(0, 1) // literal A
+  writer.write_bits(1, 1) // unassigned literal/length prefix
+  for _ in 0..<16 {
+    writer.write_bits(0, 8)
+  }
+  let decoder = MemDecoder(coverage_finish_bits(writer), () => false)
+  let storage = FixedArray::make(512, b'\xA5')
+  decoder.out = DecodeOutput::into(storage)
+  decoder.next_cancel = 4096
+  @test.assert_eq(decoder.decode_batch(literals, Some(distances)), false)
+  @test.assert_eq(decoder.pos * 8 - decoder.bit_count, 1)
+  @test.assert_eq(decoder.out.length, 1)
+  @test.assert_eq(storage[0], b'A')
+  let error = @test.expect_error(() => {
+    decoder.decode_block(literals, Some(distances))
+  })
+  guard error is InflateError(kind, _)
+  @test.assert_eq(kind, Corrupt)
+  @test.assert_eq(storage[0], b'A')
+  for i in 1..<storage.length() {
+    @test.assert_eq(storage[i], b'\xA5')
   }
 }
