@@ -1,6 +1,8 @@
 name: check
 
 env:
+  MOON_COVE_REPORT_ENABLED: "1"
+  MOON_WASM_NEW_ALLOCATOR: "1"
   MIN_COVERAGE_PERCENT: 100
 
 on:
