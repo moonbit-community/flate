@@ -116,9 +116,7 @@ fn BitWriter::write_bytes(
       self.overflowed = true
     }
   } else {
-    for i in offset..<(offset + length) {
-      self.out.push(input[i])
-    }
+    self.out.push_iter(input[offset:offset + length].iter())
   }
 }
 

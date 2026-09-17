@@ -17,6 +17,7 @@ pub extend Compression with Debug::{to_repr}
 /// limits. `max_preserved_source_bytes` bounds the raw local/central records
 /// retained in memory so a byte-preserving rewrite cannot be weaponized as an
 /// unbounded retention bomb.
+#valtype
 pub struct ReadLimits {
   max_package_bytes : Int
   max_entries : Int
@@ -241,47 +242,41 @@ pub fn Archive::replace(
   name : StringView,
   data : BytesView,
 ) -> Bool {
-  for index in 0..<self.entries.length() {
-    let entry = self.entries[index]
-    if entry.name()[:] == name {
-      let data = data.to_owned()
-      self.entries[index] = {
-        name: entry.name,
-        data,
-        compression: entry.compression,
-        data_descriptor: entry.data_descriptor,
-        crc32: @checksum.crc32(data),
-        compressed_size: data.length(),
-        source: None,
-        origin_local_offset: entry.origin_local_offset,
-      }
-      return true
-    }
+  guard self.entries.search_by(entry => entry.name()[:] == name) is Some(index) else {
+    return false
   }
-  false
+  let entry = self.entries[index]
+  let data = data.to_owned()
+  self.entries[index] = {
+    name: entry.name,
+    data,
+    compression: entry.compression,
+    data_descriptor: entry.data_descriptor,
+    crc32: @checksum.crc32(data),
+    compressed_size: data.length(),
+    source: None,
+    origin_local_offset: entry.origin_local_offset,
+  }
+  true
 }
 
 ///|
 /// Remove the entry named `name`. Returns `false` when no such entry exists.
 pub fn Archive::remove(self : Archive, name : StringView) -> Bool {
-  for index in 0..<self.entries.length() {
-    if self.entries[index].name()[:] == name {
-      ignore(self.entries.remove(index))
-      return true
-    }
+  guard self.entries.search_by(entry => entry.name()[:] == name) is Some(index) else {
+    return false
   }
-  false
+  ignore(self.entries.remove(index))
+  true
 }
 
 ///|
 /// A read-only view of an entry payload, or `None` when absent.
 pub fn Archive::get(self : Archive, name : StringView) -> BytesView? {
-  for entry in self.entries {
-    if entry.name()[:] == name {
-      return Some(entry.data())
-    }
+  guard self.entries.search_by(entry => entry.name()[:] == name) is Some(index) else {
+    return None
   }
-  None
+  Some(self.entries[index].data())
 }
 
 ///|

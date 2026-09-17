@@ -49,6 +49,7 @@ fn back_reference_distance_is_valid(
 /// Static interpretation of one dynamic-header repeat symbol. Keeping this
 /// independent of either bit reader makes the streaming and in-memory decoders
 /// agree on the symbol's base count, extra-bit width, and repeated value.
+#valtype
 priv struct CodeLengthRepeat {
   base : Int
   extra_bits : Int
@@ -125,10 +126,8 @@ fn decode_dynamic_header(
     guard i + rep <= n else {
       raise InflateError(Corrupt, "corrupt: code-length repeat overflow")
     }
-    for _j in 0..<rep {
-      clbits[i] = repeat.value
-      i = i + 1
-    }
+    clbits.fill(repeat.value, start=i, end=i + rep)
+    i += rep
   }
   (nlit, ndist)
 }

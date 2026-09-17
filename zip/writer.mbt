@@ -3,7 +3,7 @@
 /// preparation pass enforces the output ceiling before allocating that buffer.
 priv struct Output {
   limit : Int?
-  buf : Buffer?
+  mut buf : FixedArray[Byte]?
   mut size : Int
 }
 
@@ -14,7 +14,7 @@ fn Output::counting(limit : Int?) -> Output {
 
 ///|
 fn Output::writing(limit : Int?, size_hint? : Int = 0) -> Output {
-  { limit, buf: Some(Buffer(size_hint~)), size: 0, }
+  { limit, buf: Some(FixedArray::make(size_hint, b'\x00')), size: 0, }
 }
 
 ///|
@@ -42,14 +42,23 @@ fn Output::grow(self : Output, additional : Int) -> Unit raise ZipError {
   guard additional <= 0x7fff_ffff - self.size else {
     raise ZipError(UnsupportedFeature, "zip: output size exceeds Int range")
   }
-  self.size = self.size + additional
+  let required = self.size + additional
+  if self.buf is Some(buf) && required > buf.length() {
+    let capacity = required.max(
+      buf.length() + buf.length().min(0x7fff_ffff - buf.length()),
+    )
+    let grown = FixedArray::make(capacity, b'\x00')
+    buf.blit_to(grown, len=self.size)
+    self.buf = Some(grown)
+  }
+  self.size = required
 }
 
 ///|
 fn Output::write_bytes(self : Output, bytes : BytesView) -> Unit raise ZipError {
   self.grow(bytes.length())
   if self.buf is Some(buf) {
-    buf.write_bytes(bytes)
+    buf.blit_from_bytesview(self.size - bytes.length(), bytes)
   }
 }
 
@@ -60,13 +69,14 @@ fn Output::count(self : Output, n : Int) -> Unit raise ZipError {
 }
 
 ///|
+// grow checks both the output limit and capacity before unchecked field writes.
 fn Output::write_u16(self : Output, value : Int) -> Unit raise ZipError {
   if value < 0 || value > 0xffff {
     raise ZipError(UnsupportedFeature, "zip: u16 overflow")
   }
   self.grow(2)
   if self.buf is Some(buf) {
-    buf.write_uint16_le(value.to_uint16())
+    buf.unsafe_write_uint16_le(self.size - 2, value.to_uint16())
   }
 }
 
@@ -74,7 +84,7 @@ fn Output::write_u16(self : Output, value : Int) -> Unit raise ZipError {
 fn Output::write_u32(self : Output, value : UInt) -> Unit raise ZipError {
   self.grow(4)
   if self.buf is Some(buf) {
-    buf.write_uint_le(value)
+    buf.unsafe_write_uint32_le(self.size - 4, value)
   }
 }
 
@@ -82,28 +92,31 @@ fn Output::write_u32(self : Output, value : UInt) -> Unit raise ZipError {
 fn Output::write_u64(self : Output, value : UInt64) -> Unit raise ZipError {
   self.grow(8)
   if self.buf is Some(buf) {
-    buf.write_uint64_le(value)
+    buf.unsafe_write_uint64_le(self.size - 8, value)
   }
 }
 
 ///|
+/// Consumes the mutable output and returns its immutable contents.
 fn Output::finish(self : Output) -> Bytes {
   guard self.buf is Some(buf) else { return b"" }
-  buf.to_bytes()
+  // Consume the output: no mutable alias may survive the ownership transfer.
+  self.buf = None
+  let size = self.size
+  self.size = 0
+  if size == buf.length() {
+    owned_zip_buffer_to_bytes(buf)
+  } else {
+    let exact = FixedArray::make(size, b'\x00')
+    buf.blit_to(exact, len=size)
+    owned_zip_buffer_to_bytes(exact)
+  }
 }
 
 ///|
 fn write_u16_buf(buf : Buffer, value : Int) -> Unit raise ZipError {
   let raw = value.to_uint_checked()
-  buf.write_byte((raw & 0xff).to_byte())
-  buf.write_byte(((raw >> 8) & 0xff).to_byte())
-}
-
-///|
-fn write_u64_buf(buf : Buffer, value : UInt64) -> Unit {
-  for index in 0..<8 {
-    buf.write_byte(((value >> (8 * index)) & 0xff).to_byte())
-  }
+  buf.write_uint16_le(raw.to_uint16())
 }
 
 ///|
@@ -129,13 +142,13 @@ fn build_zip64_extra(
   write_u16_buf(buf, ZIP64_EXTRA_ID)
   write_u16_buf(buf, 8 * count)
   if uncomp is Some(value) {
-    write_u64_buf(buf, value.to_uint64_checked())
+    buf.write_uint64_le(value.to_uint64_checked())
   }
   if comp is Some(value) {
-    write_u64_buf(buf, value.to_uint64_checked())
+    buf.write_uint64_le(value.to_uint64_checked())
   }
   if offset is Some(value) {
-    write_u64_buf(buf, value.to_uint64_checked())
+    buf.write_uint64_le(value.to_uint64_checked())
   }
   buf.to_bytes()
 }
@@ -216,34 +229,39 @@ fn write_local_record(
   } else {
     b""
   }
-  out.write_u32(LOCAL_HEADER_SIG)
-  out.write_u16(version)
-  out.write_u16(flags)
-  out.write_u16(method_id)
-  out.write_u16(0)
-  out.write_u16(0)
-  if use_descriptor {
-    out.write_u32(0)
-    let size_field = if needs_zip64_sizes { MAX_U32 } else { 0 }
-    out.write_u32(size_field)
-    out.write_u32(size_field)
-  } else {
-    out.write_u32(crc)
-    let comp_field = if needs_zip64_sizes {
-      MAX_U32
-    } else {
-      compressed_size.to_uint_checked()
-    }
-    let uncomp_field = if needs_zip64_sizes {
-      MAX_U32
-    } else {
-      data_len.to_uint_checked()
-    }
-    out.write_u32(comp_field)
-    out.write_u32(uncomp_field)
+  guard name_bytes.length() <= 0xffff else {
+    raise ZipError(UnsupportedFeature, "zip: u16 overflow")
   }
-  out.write_u16(name_bytes.length())
-  out.write_u16(local_extra.length())
+  let comp_field = if needs_zip64_sizes {
+    MAX_U32
+  } else if use_descriptor {
+    0
+  } else {
+    compressed_size.to_uint_checked()
+  }
+  let uncomp_field = if needs_zip64_sizes {
+    MAX_U32
+  } else if use_descriptor {
+    0
+  } else {
+    data_len.to_uint_checked()
+  }
+  let start = out.size
+  out.grow(30)
+  if out.buf is Some(buf) {
+    // grow reserves the entire fixed header before any unchecked store.
+    // All u16 fields are constants, bounded enum codes, or validated lengths.
+    buf.unsafe_write_uint32_le(start, LOCAL_HEADER_SIG)
+    buf.unsafe_write_uint16_le(start + 4, version.to_uint16())
+    buf.unsafe_write_uint16_le(start + 6, flags.to_uint16())
+    buf.unsafe_write_uint16_le(start + 8, method_id.to_uint16())
+    buf.unsafe_write_uint32_le(start + 10, 0)
+    buf.unsafe_write_uint32_le(start + 14, if use_descriptor { 0 } else { crc })
+    buf.unsafe_write_uint32_le(start + 18, comp_field)
+    buf.unsafe_write_uint32_le(start + 22, uncomp_field)
+    buf.unsafe_write_uint16_le(start + 26, name_bytes.length().to_uint16())
+    buf.unsafe_write_uint16_le(start + 28, local_extra.length().to_uint16())
+  }
   out.write_bytes(name_bytes)
   out.write_bytes(local_extra)
   // Both stored and compressed payloads may be followed by a descriptor.
@@ -301,14 +319,9 @@ fn write_central_record(
     comp=if needs_zip64_sizes { Some(compressed_size) } else { None },
     offset=if needs_zip64_offset { Some(local_offset) } else { None },
   )
-  out.write_u32(CENTRAL_HEADER_SIG)
-  out.write_u16(version)
-  out.write_u16(version)
-  out.write_u16(flags)
-  out.write_u16(method_id)
-  out.write_u16(0)
-  out.write_u16(0)
-  out.write_u32(entry.crc32)
+  guard name_bytes.length() <= 0xffff else {
+    raise ZipError(UnsupportedFeature, "zip: u16 overflow")
+  }
   let comp_field = if needs_zip64_sizes {
     MAX_U32
   } else {
@@ -319,20 +332,31 @@ fn write_central_record(
   } else {
     data_len.to_uint_checked()
   }
-  out.write_u32(comp_field)
-  out.write_u32(uncomp_field)
-  out.write_u16(name_bytes.length())
-  out.write_u16(central_extra.length())
-  out.write_u16(0)
-  out.write_u16(0)
-  out.write_u16(0)
-  out.write_u32(0)
   let offset_field = if needs_zip64_offset {
     MAX_U32
   } else {
     local_offset.to_uint_checked()
   }
-  out.write_u32(offset_field)
+  let start = out.size
+  out.grow(46)
+  if out.buf is Some(buf) {
+    // grow reserves all 46 bytes; the generated extra is at most 28 bytes.
+    buf.unsafe_write_uint32_le(start, CENTRAL_HEADER_SIG)
+    buf.unsafe_write_uint16_le(start + 4, version.to_uint16())
+    buf.unsafe_write_uint16_le(start + 6, version.to_uint16())
+    buf.unsafe_write_uint16_le(start + 8, flags.to_uint16())
+    buf.unsafe_write_uint16_le(start + 10, method_id.to_uint16())
+    buf.unsafe_write_uint32_le(start + 12, 0)
+    buf.unsafe_write_uint32_le(start + 16, entry.crc32)
+    buf.unsafe_write_uint32_le(start + 20, comp_field)
+    buf.unsafe_write_uint32_le(start + 24, uncomp_field)
+    buf.unsafe_write_uint16_le(start + 28, name_bytes.length().to_uint16())
+    buf.unsafe_write_uint16_le(start + 30, central_extra.length().to_uint16())
+    buf.unsafe_write_uint32_le(start + 32, 0)
+    buf.unsafe_write_uint16_le(start + 36, 0)
+    buf.unsafe_write_uint32_le(start + 38, 0)
+    buf.unsafe_write_uint32_le(start + 42, offset_field)
+  }
   out.write_bytes(name_bytes)
   out.write_bytes(central_extra)
 }

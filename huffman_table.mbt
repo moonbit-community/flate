@@ -136,18 +136,10 @@ fn HuffmanDecoder::initialize(
 /// canonical code lengths so we never transcribe a precomputed table.
 fn make_fixed_huffman_decoder() -> HuffmanDecoder {
   let lengths = FixedArray::make(288, 0)
-  for i in 0..<144 {
-    lengths[i] = 8
-  }
-  for i in 144..<256 {
-    lengths[i] = 9
-  }
-  for i in 256..<280 {
-    lengths[i] = 7
-  }
-  for i in 280..<288 {
-    lengths[i] = 8
-  }
+  lengths.fill(8, start=0, end=144)
+  lengths.fill(9, start=144, end=256)
+  lengths.fill(7, start=256, end=280)
+  lengths.fill(8, start=280, end=288)
   let h = HuffmanDecoder()
   let _ = h.initialize(lengths[:])
   h

@@ -188,13 +188,10 @@ pub fn Inflater::last_produced(self : Inflater) -> Int {
 /// Preload the history window with the final 32 KiB of a preset dictionary.
 fn Inflater::preload_dictionary(self : Inflater, dict : BytesView) -> Unit {
   let start = (dict.length() - WINDOW_SIZE).max(0)
-  for i in start..<dict.length() {
-    self.window[self.wpos & (WINDOW_SIZE - 1)] = dict[i]
-    self.wpos = self.wpos + 1
-  }
-  if self.wpos >= WINDOW_SIZE {
-    self.filled = true
-  }
+  // Construction and reset both start with an empty history window.
+  self.window.blit_from_bytesview(0, dict[start:])
+  self.wpos = dict.length() - start
+  self.filled = self.wpos == WINDOW_SIZE
 }
 
 ///|
@@ -419,13 +416,8 @@ fn Inflater::next_stored_byte(self : Inflater) -> Byte? {
 /// the external view is then either permanently decoded or owned here, so the
 /// public call may report that complete view as consumed.
 fn Inflater::stage_incomplete_input(self : Inflater) -> Unit {
-  let kept : Array[Byte] = []
-  for i in self.staged_pos..<self.staged_input.length() {
-    kept.push(self.staged_input[i])
-  }
-  for i in self.in_pos..<self.view.length() {
-    kept.push(self.view[i])
-  }
+  let kept = self.staged_input[self.staged_pos:].to_owned()
+  kept.push_iter(self.view[self.in_pos:].iter())
   self.staged_input = kept
   self.staged_pos = 0
 }
@@ -440,11 +432,7 @@ fn Inflater::compact_staged_input(self : Inflater) -> Unit {
     self.staged_pos = 0
     return
   }
-  let kept : Array[Byte] = []
-  for i in self.staged_pos..<self.staged_input.length() {
-    kept.push(self.staged_input[i])
-  }
-  self.staged_input = kept
+  self.staged_input = self.staged_input[self.staged_pos:].to_owned()
   self.staged_pos = 0
 }
 
@@ -616,6 +604,7 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
 /// Snapshot of the input cursor taken before one atomic unit. Rewinding to a
 /// mark lets a `NeedInput`-suspended unit re-run verbatim once more input
 /// arrives, instead of resuming mid-unit.
+#valtype
 priv struct CursorMark {
   bitbuf : Int
   bit_count : Int

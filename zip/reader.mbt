@@ -6,6 +6,7 @@
 ///|
 priv struct EntryMeta {
   name : String
+  name_len : Int
   flags : Int
   method_id : Int
   crc : UInt
@@ -57,7 +58,11 @@ fn read_local_record(
   let extra_len = reader.read_u16()
   let local_name = reader.read_bytes(name_len)
   let local_extra = reader.read_bytes(extra_len)
-  guard decode_name(local_name) == meta.name else {
+  // The central name was already decoded and validated. Reuse its owned raw
+  // bytes without allocating another String on the matching-name path.
+  // Keep the old decode fallback so malformed UTF-8 still raises InvalidUtf8.
+  let central_name = meta.central_record[46:46 + meta.name_len]
+  guard local_name == central_name || decode_name(local_name) == meta.name else {
     raise ZipError(UnsupportedFeature, "zip: local and central names differ")
   }
   let has_descriptor = (flags & FLAG_DATA_DESCRIPTOR) != 0
@@ -453,6 +458,7 @@ fn parse_central_record(
   })
   {
     name,
+    name_len,
     flags,
     method_id,
     crc,

@@ -110,10 +110,9 @@ fn split_end_block_check(
 /// force-cut at `SPLIT_SOFT_MAX_BLOCK_BYTES`. Returns token indices where the
 /// following block begins (strictly increasing, within `[1, tokens.length()]`).
 fn choose_splits(tokens : Array[Int]) -> Array[Int] {
-  let mut total_bytes = 0
-  for tok in tokens {
-    total_bytes = total_bytes + split_token_bytes(tok)
-  }
+  let total_bytes = tokens.fold(init=0, (total, tok) => {
+    total + split_token_bytes(tok)
+  })
   let old = FixedArray::make(SPLIT_NUM_CLASSES, 0)
   let mut old_tot = 0
   let new = FixedArray::make(SPLIT_NUM_CLASSES, 0)
@@ -140,10 +139,8 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
       )
     guard !cut else {
       cuts.push(i + 1)
-      for j in 0..<SPLIT_NUM_CLASSES {
-        old[j] = 0
-        new[j] = 0
-      }
+      old.fill(0)
+      new.fill(0)
       old_tot = 0
       new_tot = 0
       block_bytes = 0

@@ -60,3 +60,25 @@ test "CRC slicing preserves mixed incremental updates and non-destructive finish
     @test.assert_eq(crc.finish(), crc_bitwise_reference(input[:]))
   }
 }
+
+///|
+test "CRC wide loads respect backing ends and every short split" {
+  for offset in 0..<16 {
+    for size in 0..<40 {
+      // The view ends exactly at the backing allocation, including empty views.
+      let input = Bytes::makei(offset + size, i => {
+        (i * 151 + size * 17).to_byte()
+      })
+      let view = input[offset:]
+      let expected = crc_bitwise_reference(view)
+      @test.assert_eq(@checksum.crc32(view), expected)
+      for split in 0..<(size + 1) {
+        let crc = @checksum.Crc32()
+        crc.update(view[:split])
+        @test.assert_eq(crc.finish(), crc_bitwise_reference(view[:split]))
+        crc.update(view[split:])
+        @test.assert_eq(crc.finish(), expected)
+      }
+    }
+  }
+}

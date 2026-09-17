@@ -202,20 +202,14 @@ fn copy_cancellable(
   cancelled : () -> Bool,
 ) -> Bytes raise ZipError {
   check_cancelled(cancelled)
-  let output : UninitializedArray[Byte] = UninitializedArray::make(
-    bytes.length(),
-  )
-  for index in 0..<bytes.length() {
-    if (index & 0xffff) == 0 {
-      check_cancelled(cancelled)
-    }
-    output[index] = bytes[index]
+  let output : FixedArray[Byte] = FixedArray::make(bytes.length(), b'\x00')
+  for offset = 0
+      offset < bytes.length()
+      offset = offset + (bytes.length() - offset).min(0x10000) {
+    check_cancelled(cancelled)
+    let end = offset + (bytes.length() - offset).min(0x10000)
+    output.blit_from_bytesview(offset, bytes[offset:end])
   }
   check_cancelled(cancelled)
-  initialized_zip_byte_buffer_to_bytes(output)
+  owned_zip_buffer_to_bytes(output)
 }
-
-///|
-fn initialized_zip_byte_buffer_to_bytes(
-  buffer : UninitializedArray[Byte],
-) -> Bytes = "%identity"

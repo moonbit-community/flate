@@ -43,14 +43,6 @@ fn wrap_inflate_error(err : Error) -> GzipError {
 }
 
 ///|
-fn put_u32_le(out : Buffer, v : UInt) -> Unit {
-  out.write_byte((v & 0xFF).reinterpret_as_int().to_byte())
-  out.write_byte(((v >> 8) & 0xFF).reinterpret_as_int().to_byte())
-  out.write_byte(((v >> 16) & 0xFF).reinterpret_as_int().to_byte())
-  out.write_byte(((v >> 24) & 0xFF).reinterpret_as_int().to_byte())
-}
-
-///|
 fn u32_le(data : Bytes, off : Int) -> UInt {
   data[off].to_uint() |
   (data[off + 1].to_uint() << 8) |
@@ -63,12 +55,10 @@ fn u32_le(data : Bytes, off : Int) -> UInt {
 fn gzip_frame(input : Bytes, deflated : Bytes) -> Bytes {
   let out = Buffer()
   // Header: magic, CM=8 (deflate), FLG=0, MTIME=0, XFL=0, OS=255 (unknown).
-  for b in [0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF] {
-    out.write_byte(b.to_byte())
-  }
+  out.write_bytes(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff")
   out.write_bytes(deflated)
-  put_u32_le(out, @checksum.crc32(input))
-  put_u32_le(out, input.length().reinterpret_as_uint())
+  out.write_uint_le(@checksum.crc32(input))
+  out.write_uint_le(input.length().reinterpret_as_uint())
   out.to_bytes()
 }
 

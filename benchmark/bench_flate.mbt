@@ -19,28 +19,18 @@ const BENCH_INPUT_SIZE : Int = 262144
 #coverage.skip
 pub fn bench_repetitive(size : Int) -> Bytes {
   let unit = b"The quick brown fox jumps over the lazy dog. Pack my box. "
-  let arr : Array[Byte] = []
-  while arr.length() < size {
-    let remaining = size - arr.length()
-    let take = remaining.min(unit.length())
-    for i in 0..<take {
-      arr.push(unit[i])
-    }
-  }
-  Bytes::from_array(arr)
+  Bytes::makei(size, i => unit[i % unit.length()])
 }
 
 ///|
 /// Effectively incompressible: bytes from a deterministic LCG.
 #coverage.skip
 fn bench_random(size : Int) -> Bytes {
-  let arr : Array[Byte] = []
   let mut s = 0x12345678U
-  for _i in 0..<size {
+  Bytes::makei(size, _ => {
     s = s * 1103515245U + 12345U
-    arr.push(((s >> 16) & 0xFF).reinterpret_as_int().to_byte())
-  }
-  Bytes::from_array(arr)
+    ((s >> 16) & 0xFF).reinterpret_as_int().to_byte()
+  })
 }
 
 ///|
@@ -58,14 +48,7 @@ fn bench_corpora(size : Int) -> FixedArray[(String, Bytes)] {
 /// A realistic blend: compressible text followed by incompressible bytes.
 #coverage.skip
 pub fn bench_mixed(size : Int) -> Bytes {
-  let arr : Array[Byte] = []
-  for x in bench_repetitive(size / 2) {
-    arr.push(x)
-  }
-  for x in bench_random(size - size / 2) {
-    arr.push(x)
-  }
-  Bytes::from_array(arr)
+  bench_repetitive(size / 2) + bench_random(size - size / 2)
 }
 
 ///|
@@ -276,15 +259,7 @@ test "bench deflate_all_optimal" (b : @bench.T) {
 #coverage.skip
 fn bench_prose(size : Int) -> Bytes {
   let unit = b"The history of data compression is a history of finding structure in information that does not want to be found. Early codes worked letter by letter; the leap to phrase-based matching came only when programmers realized that a file is rarely a stream of independent symbols but a tapestry of repeated fragments. Consider a text file: common words appear over and over, at distances that vary with the sentence structure around them, and an encoder that treats every occurrence as new is wasting its time. Matching is not the same as deciding: a match that is one byte longer but a thousand bytes farther away may cost more in offset bits than it saves in literals."
-  let arr : Array[Byte] = []
-  while arr.length() < size {
-    let remaining = size - arr.length()
-    let take = remaining.min(unit.length())
-    for i in 0..<take {
-      arr.push(unit[i])
-    }
-  }
-  Bytes::from_array(arr)
+  Bytes::makei(size, i => unit[i % unit.length()])
 }
 
 ///|

@@ -36,11 +36,7 @@ let len_extra : FixedArray[Int] = [
 
 ///|
 fn build_length_code_info_table() -> FixedArray[Int] {
-  let info = FixedArray::make(29, 0)
-  for index in 0..<29 {
-    info[index] = (len_base[index] << 3) | len_extra[index]
-  }
-  info
+  FixedArray::makei(29, index => (len_base[index] << 3) | len_extra[index])
 }
 
 ///|
@@ -53,9 +49,7 @@ fn build_len_to_idx() -> FixedArray[Int] {
   for idx in 0..<29 {
     let lo = len_base[idx]
     let hi = if idx + 1 < 29 { len_base[idx + 1] } else { 259 }
-    for l in lo..<hi {
-      m[l] = idx
-    }
+    m.fill(idx, start=lo, end=hi)
   }
   m
 }
@@ -77,11 +71,9 @@ let dist_extra : FixedArray[Int] = [
 
 ///|
 fn build_distance_code_info_table() -> FixedArray[Int] {
-  let info = FixedArray::make(MAX_NUM_DIST, 0)
-  for symbol in 0..<MAX_NUM_DIST {
-    info[symbol] = (dist_base[symbol] << 4) | dist_extra[symbol]
-  }
-  info
+  FixedArray::makei(MAX_NUM_DIST, symbol => {
+    (dist_base[symbol] << 4) | dist_extra[symbol]
+  })
 }
 
 ///|
@@ -92,9 +84,11 @@ let distance_code_info_table : FixedArray[Int] = build_distance_code_info_table(
 fn build_dist_to_idx() -> FixedArray[Byte] {
   let slots = FixedArray::make(256, b'\x00')
   for symbol in 0..<16 {
-    for distance in dist_base[symbol]..<dist_base[symbol + 1] {
-      slots[distance - 1] = symbol.to_byte()
-    }
+    slots.fill(
+      symbol.to_byte(),
+      start=dist_base[symbol] - 1,
+      end=dist_base[symbol + 1] - 1,
+    )
   }
   slots
 }
@@ -118,20 +112,14 @@ fn dist_index(distance : Int) -> Int {
 
 ///|
 fn build_fixed_litlen_info() -> FixedArray[Int] {
-  let info = FixedArray::make(288, 0)
-  for s in 0..<144 {
-    info[s] = ((0x30 + s) << 4) | 8
-  }
-  for s in 144..<256 {
-    info[s] = ((0x190 + (s - 144)) << 4) | 9
-  }
-  for s in 256..<280 {
-    info[s] = ((s - 256) << 4) | 7
-  }
-  for s in 280..<288 {
-    info[s] = ((0xC0 + (s - 280)) << 4) | 8
-  }
-  info
+  FixedArray::makei(288, symbol => {
+    match symbol {
+      _ if symbol < 144 => ((0x30 + symbol) << 4) | 8
+      _ if symbol < 256 => ((0x190 + (symbol - 144)) << 4) | 9
+      _ if symbol < 280 => ((symbol - 256) << 4) | 7
+      _ => ((0xC0 + (symbol - 280)) << 4) | 8
+    }
+  })
 }
 
 ///|
@@ -143,14 +131,9 @@ let fixed_litlen_info : FixedArray[Int] = build_fixed_litlen_info()
 /// Unpacked fixed literal/length tables (bit-reversed code words and code
 /// lengths) for the unified token writer.
 fn build_fixed_ll_val() -> FixedArray[UInt] {
-  let t = FixedArray::make(288, 0U)
-  for s in 0..<288 {
-    t[s] = reverse_bits(
-      (fixed_litlen_info[s] >> 4).reinterpret_as_uint(),
-      fixed_litlen_info[s] & 0xF,
-    )
-  }
-  t
+  fixed_litlen_info.map(info => {
+    reverse_bits((info >> 4).reinterpret_as_uint(), info & 0xF)
+  })
 }
 
 ///|
@@ -158,11 +141,7 @@ let fixed_ll_val : FixedArray[UInt] = build_fixed_ll_val()
 
 ///|
 fn build_fixed_ll_len() -> FixedArray[Int] {
-  let t = FixedArray::make(288, 0)
-  for s in 0..<288 {
-    t[s] = fixed_litlen_info[s] & 0xF
-  }
-  t
+  fixed_litlen_info.map(info => info & 0xF)
 }
 
 ///|
@@ -171,11 +150,7 @@ let fixed_ll_len : FixedArray[Int] = build_fixed_ll_len()
 ///|
 /// Bit-reversed 5-bit fixed distance codes (code = distance symbol).
 fn build_fixed_dist_val() -> FixedArray[UInt] {
-  let t = FixedArray::make(MAX_NUM_DIST, 0U)
-  for d in 0..<MAX_NUM_DIST {
-    t[d] = reverse_bits(d.reinterpret_as_uint(), 5)
-  }
-  t
+  FixedArray::makei(MAX_NUM_DIST, d => reverse_bits(d.reinterpret_as_uint(), 5))
 }
 
 ///|

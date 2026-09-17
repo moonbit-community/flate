@@ -92,10 +92,8 @@ pub fn Encoder::last_produced(self : Encoder) -> Int {
 fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
   let adler = self.adler.finish()
   let t = FixedArray::make(4, b'\x00')
-  t[0] = ((adler >> 24) & 0xFF).reinterpret_as_int().to_byte()
-  t[1] = ((adler >> 16) & 0xFF).reinterpret_as_int().to_byte()
-  t[2] = ((adler >> 8) & 0xFF).reinterpret_as_int().to_byte()
-  t[3] = (adler & 0xFF).reinterpret_as_int().to_byte()
+  // The 4-byte allocation above covers every fixed-offset write.
+  t.unsafe_write_uint32_be(0, adler)
   t
 }
 

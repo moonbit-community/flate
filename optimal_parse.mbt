@@ -13,6 +13,7 @@
 /// (previous entry's len, len] are reachable at `dist`, the smallest distance
 /// achieving them (the chain walks nearest-first, so the first candidate
 /// reaching a new length has the minimal distance for it).
+#valtype
 priv struct MatchRange {
   len : Int
   dist : Int
@@ -53,16 +54,9 @@ fn collect_matches(
   start : Int,
   end : Int,
 ) -> FixedArray[Array[MatchRange]] {
-  let seed_from = if start > WINDOW_SIZE { start - WINDOW_SIZE } else { 0 }
+  let seed_from = (start - WINDOW_SIZE).max(0)
   let head = FixedArray::make(1 << HASH_BITS, -1)
-  let prev = FixedArray::make(
-    if end > seed_from {
-      end - seed_from
-    } else {
-      1
-    },
-    -1,
-  )
+  let prev = FixedArray::make((end - seed_from).max(1), -1)
   let n = data.length()
   for j in seed_from..<start {
     insert_optimal_pos(data, head, prev, j, n, seed_from)
@@ -72,7 +66,7 @@ fn collect_matches(
   let out : FixedArray[Array[MatchRange]] = FixedArray::make(end - start, [])
   for i in start..<end {
     let frontier : Array[MatchRange] = []
-    let limit = if end - i < 258 { end - i } else { 258 }
+    let limit = (end - i).min(258)
     if limit >= 3 && i + 3 <= n {
       let h = hash3(data, i)
       let mut cand = head[h]
@@ -122,8 +116,7 @@ fn replay_tokens(
     o = o - len_choice[o]
   }
   let mut pos = start
-  for k = steps.length() - 1; k >= 0; k = k - 1 {
-    let at = steps[k]
+  for at in steps.rev_iter() {
     let l = len_choice[at]
     if l == 1 && dist_choice[at] == 0 {
       let b = data[pos].to_int()
@@ -203,9 +196,7 @@ fn stats_to_costs(
   d_cost : FixedArray[Int],
 ) -> Unit {
   let ll_freq_eob = FixedArray::make(286, 0)
-  for s in 0..<286 {
-    ll_freq_eob[s] = ll_freq[s]
-  }
+  ll_freq.blit_to(ll_freq_eob, len=286)
   ll_freq_eob[256] += 1
   let ll_len = FixedArray::make(286, 0)
   gen_huffman(ll_freq_eob, 286, 15, ll_len)
@@ -230,10 +221,7 @@ fn tokenize_optimal(
   iterations : Int,
 ) -> Array[Int] {
   let matches = collect_matches(data, start, end)
-  let mut ll_cost = FixedArray::make(286, 0)
-  for s in 0..<286 {
-    ll_cost[s] = fixed_litlen_info[s] & 0xF
-  }
+  let mut ll_cost = FixedArray::makei(286, s => fixed_litlen_info[s] & 0xF)
   let mut d_cost = FixedArray::make(30, 5)
   let mut best_bits = 0x3FFFFFFF
   let mut best_tokens : Array[Int]? = None

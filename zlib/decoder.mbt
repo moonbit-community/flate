@@ -98,11 +98,7 @@ fn Decoder::pending_length(self : Decoder) -> Int {
 /// read-ahead. All consumed compressed storage and the inflater snapshot can
 /// be released after the Adler-32 trailer has been verified.
 fn Decoder::finish_stream(self : Decoder) -> Unit {
-  let suffix : Array[Byte] = []
-  for i in self.pending_pos..<self.pending.length() {
-    suffix.push(self.pending[i])
-  }
-  self.unused = Bytes::from_array(suffix)
+  self.unused = Bytes::from_array(self.pending[self.pending_pos:])
   self.pending = []
   self.pending_pos = 0
   self.body_input = b""
@@ -123,11 +119,7 @@ fn Decoder::compact_pending(self : Decoder) -> Unit {
   let worth_compacting = self.pending_pos >= 4096 &&
     self.pending_pos * 2 >= self.pending.length()
   guard worth_compacting else { return }
-  let kept : Array[Byte] = []
-  for j in self.pending_pos..<self.pending.length() {
-    kept.push(self.pending[j])
-  }
-  self.pending = kept
+  self.pending = self.pending[self.pending_pos:].to_owned()
   self.pending_pos = 0
 }
 
@@ -135,11 +127,7 @@ fn Decoder::compact_pending(self : Decoder) -> Unit {
 /// Force prefix reclamation before admitting another bounded input window.
 fn Decoder::compact_for_input(self : Decoder) -> Unit {
   guard self.pending_pos != 0 else { return }
-  let kept : Array[Byte] = []
-  for i in self.pending_pos..<self.pending.length() {
-    kept.push(self.pending[i])
-  }
-  self.pending = kept
+  self.pending = self.pending[self.pending_pos:].to_owned()
   self.pending_pos = 0
 }
 
@@ -155,11 +143,7 @@ fn Decoder::consume_pending(self : Decoder, count : Int) -> Unit {
 /// `pending` without invalidating this immutable prefix; it is incorporated
 /// only if Inflater actually asks for more input.
 fn Decoder::stage_body_input(self : Decoder) -> Unit {
-  let staged : Array[Byte] = []
-  for j in self.pending_pos..<self.pending.length() {
-    staged.push(self.pending[j])
-  }
-  self.body_input = Bytes::from_array(staged)
+  self.body_input = Bytes::from_array(self.pending[self.pending_pos:])
   self.body_pos = 0
 }
 
@@ -341,9 +325,7 @@ fn Decoder::step_active(
   } else {
     input.length().min(capacity)
   }
-  for i in 0..<consumed {
-    self.pending.push(input[i])
-  }
+  self.pending.push_iter(input[:consumed].iter())
   if end && consumed == input.length() {
     self.ending = true
   }

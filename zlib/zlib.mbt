@@ -93,10 +93,7 @@ fn zlib_frame(input : Bytes, deflated : Bytes) -> Bytes {
   out.write_byte(b'\x01')
   out.write_bytes(deflated)
   let adler = @checksum.adler32(input)
-  out.write_byte(((adler >> 24) & 0xFF).reinterpret_as_int().to_byte())
-  out.write_byte(((adler >> 16) & 0xFF).reinterpret_as_int().to_byte())
-  out.write_byte(((adler >> 8) & 0xFF).reinterpret_as_int().to_byte())
-  out.write_byte((adler & 0xFF).reinterpret_as_int().to_byte())
+  out.write_uint_be(adler)
   out.to_bytes()
 }
 

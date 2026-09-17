@@ -76,14 +76,9 @@ fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
   let crc = self.crc.finish()
   let isize = self.isize
   let t = FixedArray::make(8, b'\x00')
-  t[0] = (crc & 0xFF).reinterpret_as_int().to_byte()
-  t[1] = ((crc >> 8) & 0xFF).reinterpret_as_int().to_byte()
-  t[2] = ((crc >> 16) & 0xFF).reinterpret_as_int().to_byte()
-  t[3] = ((crc >> 24) & 0xFF).reinterpret_as_int().to_byte()
-  t[4] = (isize & 0xFF).reinterpret_as_int().to_byte()
-  t[5] = ((isize >> 8) & 0xFF).reinterpret_as_int().to_byte()
-  t[6] = ((isize >> 16) & 0xFF).reinterpret_as_int().to_byte()
-  t[7] = ((isize >> 24) & 0xFF).reinterpret_as_int().to_byte()
+  // The 8-byte allocation above covers every fixed-offset write.
+  t.unsafe_write_uint32_le(0, crc)
+  t.unsafe_write_uint32_le(4, isize)
   t
 }
 

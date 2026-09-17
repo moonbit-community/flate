@@ -3,6 +3,7 @@
 //
 
 ///|
+#valtype
 priv struct Node {
   lit : Int
   freq : Int
@@ -36,10 +37,7 @@ fn bit_counts(
   max_bits_in : Int,
 ) -> FixedArray[Int] {
   let maxi = 2147483647
-  let mut max_bits = max_bits_in
-  if max_bits > n - 1 {
-    max_bits = n - 1
-  }
+  let max_bits = max_bits_in.min(n - 1)
   let levels = FixedArray::makei(17, _ => LevelInfo())
   let leaf_counts = FixedArray::make(17 * 17, 0)
   for level in 1..<=max_bits {
@@ -71,9 +69,12 @@ fn bit_counts(
       lv.next_char_freq = if nn < n { nodes[nn].freq } else { maxi }
     } else {
       lv.last_freq = lv.next_pair_freq
-      for i in 0..<level {
-        leaf_counts[level * 17 + i] = leaf_counts[(level - 1) * 17 + i]
-      }
+      leaf_counts.blit_to(
+        leaf_counts,
+        len=level,
+        src_offset=(level - 1) * 17,
+        dst_offset=level * 17,
+      )
       levels[lv.level - 1].needed = 2
     }
     lv.needed = lv.needed - 1

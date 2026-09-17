@@ -32,6 +32,7 @@ const STREAM_RING_STORAGE_SIZE : Int = STREAM_RING_SIZE * 2
 /// set); levels 1-3 are zlib's non-lazy "fast" strategy, expressed here as
 /// `max_lazy = 0`. Level 0 (stored only) is special-cased in the block
 /// planner and never searches.
+#valtype
 priv struct LevelConfig {
   good_length : Int // shrink the chain budget once a match this long is held
   max_lazy : Int // 0 = greedy (commit immediately); else defer while best < this
@@ -261,7 +262,7 @@ fn find_match(
   let mut cand = finder.head[h]
   let mut best_len = base
   let mut best_dist = 0
-  let limit = if n - i < 258 { n - i } else { 258 }
+  let limit = (n - i).min(258)
   guard base < limit else { return base << 16 }
   let mut budget = cfg.max_chain
   if base >= cfg.good_length {
@@ -326,7 +327,7 @@ fn find_window_match(
   let mut cand = finder.head[h]
   let mut best_len = base
   let mut best_dist = 0
-  let limit = if end - i < 258 { end - i } else { 258 }
+  let limit = (end - i).min(258)
   guard base < limit else { return base << 16 }
   let mut budget = cfg.max_chain
   if base >= cfg.good_length {

@@ -4,6 +4,7 @@
 // table's code lengths (RFC 1951 §3.2.7).
 
 ///|
+#valtype
 priv struct CodeLenSym {
   sym : Int
   extra : Int
@@ -32,12 +33,8 @@ fn build_codelen_syms(
   hdist : Int,
 ) -> Array[CodeLenSym] {
   let comb = FixedArray::make(hlit + hdist, 0)
-  for i in 0..<hlit {
-    comb[i] = ll_len[i]
-  }
-  for i in 0..<hdist {
-    comb[hlit + i] = dd_len[i]
-  }
+  ll_len.blit_to(comb, len=hlit)
+  dd_len.blit_to(comb, len=hdist, dst_offset=hlit)
   let out : Array[CodeLenSym] = []
   let m = comb.length()
   let mut i = 0
@@ -50,12 +47,12 @@ fn build_codelen_syms(
     i = i + run
     if cur == 0 {
       while run >= 11 {
-        let r = if run < 138 { run } else { 138 }
+        let r = run.min(138)
         out.push({ sym: 18, extra: r - 11, nextra: 7, })
         run = run - r
       }
       while run >= 3 {
-        let r = if run < 10 { run } else { 10 }
+        let r = run.min(10)
         out.push({ sym: 17, extra: r - 3, nextra: 3, })
         run = run - r
       }
@@ -67,7 +64,7 @@ fn build_codelen_syms(
       out.push({ sym: cur, extra: 0, nextra: 0, })
       run = run - 1
       while run >= 3 {
-        let r = if run < 6 { run } else { 6 }
+        let r = run.min(6)
         out.push({ sym: 16, extra: r - 3, nextra: 2, })
         run = run - r
       }
@@ -83,6 +80,7 @@ fn build_codelen_syms(
 ///|
 /// Exact bit cost of each candidate encoding for one block, 3-bit block
 /// header included.
+#valtype
 priv struct BlockCost {
   stored : Int
   fixed : Int
@@ -126,14 +124,7 @@ fn build_dynamic_codes(
   let dd_len = FixedArray::make(30, 0)
   let dd_val = FixedArray::make(30, 0U)
   gen_huffman(d_freq, 30, 15, dd_len, code_val=dd_val)
-  let mut have_dist = false
-  for d in 0..<30 {
-    if dd_len[d] > 0 {
-      have_dist = true
-      break
-    }
-  }
-  if !have_dist {
+  if !dd_len.any(length => length > 0) {
     dd_len[0] = 1 // DEFLATE requires at least one distance code
   }
   let mut hlit = 286
@@ -407,7 +398,7 @@ fn write_stored(
   let mut p = start
   for ;; {
     let n = end - p
-    let chunk = if n < 65535 { n } else { 65535 }
+    let chunk = n.min(65535)
     let last = p + chunk == end
     if is_final && last {
       w.write_bit(1) // BFINAL
@@ -443,7 +434,7 @@ fn write_stored_window(
   let mut p = start
   for ;; {
     let n = end - p
-    let chunk = if n < 65535 { n } else { 65535 }
+    let chunk = n.min(65535)
     let last = p + chunk == end
     if is_final && last {
       w.write_bit(1)
@@ -457,9 +448,11 @@ fn write_stored_window(
     w.out.push(((chunk >> 8) & 0xFF).to_byte())
     w.out.push((nlen & 0xFF).to_byte())
     w.out.push(((nlen >> 8) & 0xFF).to_byte())
-    for i in p..<(p + chunk) {
-      w.out.push(data[i & STREAM_RING_MASK])
-    }
+    // A stored block is smaller than the ring, so at most one wrap occurs.
+    let offset = p & STREAM_RING_MASK
+    let first = chunk.min(STREAM_RING_SIZE - offset)
+    w.out.append(data[offset:offset + first])
+    w.out.append(data[:chunk - first])
     p = p + chunk
     if last {
       break

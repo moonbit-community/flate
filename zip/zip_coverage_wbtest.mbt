@@ -190,6 +190,7 @@ test "zip zip64 end record rejects malformed trailers" {
 fn descriptor_meta(crc~ : UInt) -> EntryMeta {
   {
     name: "",
+    name_len: 0,
     flags: 0,
     method_id: 0,
     crc,
@@ -264,6 +265,7 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
   let sig_int = DATA_DESCRIPTOR_SIG.reinterpret_as_int()
   let ambiguous_meta : EntryMeta = {
     name: "",
+    name_len: 0,
     flags: 0,
     method_id: 0,
     crc: DATA_DESCRIPTOR_SIG,
@@ -330,13 +332,14 @@ fn local_record(
 fn base_meta() -> EntryMeta {
   {
     name: "a.txt",
+    name_len: 5,
     flags: 0,
     method_id: 0,
     crc: 0x11111111U,
     compressed_size: 3,
     uncompressed_size: 3,
     local_offset: 0,
-    central_record: b"",
+    central_record: central_record(0, 0, 0, 0x11111111U, 3, 3, b"a.txt", b"", 0),
     central_zip64_offset_position: None,
     data_descriptor: false,
   }
@@ -1067,4 +1070,109 @@ test "zip local-order sorts read-origin entries ahead of fresh ones" {
   assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
   assert_eq(mixed.entries()[reordered[1]].name(), "b.txt")
   assert_eq(mixed.entries()[reordered[2]].name(), "fresh.txt")
+}
+
+///|
+test "zip owned copy handles chunk boundaries and cancellation" {
+  for length in [0, 1, 65535, 65536, 65537, 131073] {
+    let source = Bytes::makei(length + 2, i => (i % 251).to_byte())
+    let mut polls = 0
+    let copied = copy_cancellable(source[1:length + 1], () => {
+      polls += 1
+      false
+    })
+    assert_eq(copied, source[1:length + 1].to_owned())
+    let expected_polls = 2 + (length + 65535) / 65536
+    assert_eq(polls, expected_polls)
+    for cancel_at in 1..<(expected_polls + 1) {
+      let mut calls = 0
+      expect_zip_kind(
+        () => {
+          ignore(
+            copy_cancellable(source[1:length + 1], () => {
+              calls += 1
+              calls == cancel_at
+            }),
+          )
+        },
+        Cancelled,
+      )
+      assert_eq(calls, cancel_at)
+    }
+  }
+}
+
+///|
+test "zip output writes unaligned fields and transfers only written bytes" {
+  let expected = b"\xff\x34\x12\x78\x56\x34\x12\x08\x07\x06\x05\x04\x03\x02\x01"
+  for capacity in [0, 1, 15, 64] {
+    let out = Output::writing(Some(15), size_hint=capacity)
+    out.write_bytes(b"\xff")
+    out.write_u16(0x1234)
+    out.write_u32(0x12345678)
+    out.write_u64(0x0102030405060708)
+    expect_zip_kind(
+      () => out.write_bytes(b"x"),
+      LimitExceeded(OutputBytes, 15, 16),
+    )
+    assert_eq(out.finish(), expected)
+  }
+}
+
+///|
+test "zip matching raw names preserve empty and Unicode names" {
+  for name in ["", "a.txt", "目录/🙂.txt", "é.txt", "é.txt"] {
+    let archive = Archive()
+    archive.add(name, b"payload", compression=Store)
+    let encoded = write(archive)
+    let decoded = read(encoded)
+    assert_eq(decoded.entries()[0].name(), name)
+    assert_eq(decoded.entries()[0].data().to_owned(), b"payload")
+    assert_eq(write_preserving(decoded), encoded)
+  }
+}
+
+///|
+test "zip local name mismatch preserves UTF-8 error classification" {
+  for name in [b"b.txt", b"a", b"a.txtx", b"", b"\xc3\xa9.txt"] {
+    let local_bytes = local_record(
+      0, 0, 0x11111111U, 3, 3, name, b"", b"abc", b"",
+    )
+    expect_zip_kind(
+      () => {
+        ignore(
+          read_local_record(local_bytes, base_meta(), local_bytes.length()),
+        )
+      },
+      UnsupportedFeature,
+    )
+  }
+  for name in [b"\xff.txt", b"\xc0\xaf", b"\xed\xa0\x80", b"\xe2\x82"] {
+    let local_bytes = local_record(
+      0, 0, 0x11111111U, 3, 3, name, b"", b"abc", b"",
+    )
+    expect_zip_kind(
+      () => {
+        ignore(
+          read_local_record(local_bytes, base_meta(), local_bytes.length()),
+        )
+      },
+      InvalidUtf8,
+    )
+    // Even identical invalid raw names must fail central-directory decoding.
+    let central = central_record(0, 0, 0, 0x11111111U, 3, 3, name, b"", 0)
+    expect_zip_kind(
+      () => {
+        ignore(
+          parse_central_record(
+            central,
+            Cursor(central, 0),
+            SourceBudget(0x7fff_ffff),
+            () => false,
+          ),
+        )
+      },
+      InvalidUtf8,
+    )
+  }
 }

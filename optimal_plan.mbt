@@ -30,9 +30,7 @@ fn block_cost_bits(
   d_freq : FixedArray[Int],
 ) -> Int {
   let ll_freq = FixedArray::make(286, 0)
-  for s in 0..<286 {
-    ll_freq[s] = ll_freq_in[s]
-  }
+  ll_freq_in.blit_to(ll_freq, len=286)
   ll_freq[256] += 1
   let codes = build_dynamic_codes(ll_freq, d_freq)
   let cost = estimate_block_cost(codes, byte_len, ll_freq, d_freq)
@@ -48,12 +46,8 @@ fn range_freqs(
   ll_freq : FixedArray[Int],
   d_freq : FixedArray[Int],
 ) -> Unit {
-  for s in 0..<286 {
-    ll_freq[s] = 0
-  }
-  for d in 0..<30 {
-    d_freq[d] = 0
-  }
+  ll_freq.fill(0, end=286)
+  d_freq.fill(0, end=30)
   for k in lo..<hi {
     let tok = tokens[k]
     if tok < 256 {
@@ -284,9 +278,7 @@ fn optimal_parse_chunk(
     let a = gtok_pos[bounds1[s]]
     let b = gtok_pos[bounds1[s + 1]]
     let toks = tokenize_optimal(input, a, b, iterations)
-    for t in toks {
-      tokens.push(t)
-    }
+    tokens.append(toks[:])
     joins.push(tokens.length())
   }
   { tokens, joins, chunk_end, }

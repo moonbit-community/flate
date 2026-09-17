@@ -30,7 +30,7 @@ pub const DEFLATE_BLOCK_SIZE : Int = 16384
 ///|
 /// Clamp a compression level to 0-9.
 fn clamp_level(level : Int) -> Int {
-  level.max(0).min(9)
+  level.clamp(min=0, max=9)
 }
 
 ///|

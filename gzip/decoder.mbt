@@ -122,11 +122,7 @@ fn Decoder::available(self : Decoder) -> Int {
 /// read-ahead. The inflater snapshot and consumed prefix are no longer useful
 /// once the member trailer has been verified.
 fn Decoder::finish_stream(self : Decoder) -> Unit {
-  let suffix : Array[Byte] = []
-  for i in self.pending_pos..<self.pending.length() {
-    suffix.push(self.pending[i])
-  }
-  self.unused = Bytes::from_array(suffix)
+  self.unused = Bytes::from_array(self.pending[self.pending_pos:])
   self.pending = []
   self.pending_pos = 0
   self.pending_bytes = b""
@@ -146,9 +142,7 @@ fn Decoder::pending_at(self : Decoder, off : Int) -> Byte {
 /// reaches `NeedMoreInput`, never merely because output is backpressured.
 fn Decoder::buffer_input(self : Decoder, input : BytesView) -> Unit {
   guard input.length() != 0 else { return }
-  for i in 0..<input.length() {
-    self.pending.push(input[i])
-  }
+  self.pending.push_iter(input.iter())
 }
 
 ///|
@@ -156,11 +150,7 @@ fn Decoder::buffer_input(self : Decoder, input : BytesView) -> Unit {
 /// safe between steps because the raw inflater releases its call-local view.
 fn Decoder::compact_for_input(self : Decoder) -> Unit {
   guard self.pending_pos != 0 else { return }
-  let kept : Array[Byte] = []
-  for i in self.pending_pos..<self.pending.length() {
-    kept.push(self.pending[i])
-  }
-  self.pending = kept
+  self.pending = self.pending[self.pending_pos:].to_owned()
   self.pending_pos = 0
   self.pending_bytes = b""
   self.pending_snapshot_end = 0
@@ -183,11 +173,7 @@ fn Decoder::advance(self : Decoder, k : Int) -> Unit {
   let worth_compacting = self.pending_pos >= 4096 &&
     self.pending_pos >= self.available()
   guard worth_compacting else { return }
-  let kept : Array[Byte] = []
-  for j in self.pending_pos..<self.pending.length() {
-    kept.push(self.pending[j])
-  }
-  self.pending = kept
+  self.pending = self.pending[self.pending_pos:].to_owned()
   self.pending_pos = 0
   self.pending_bytes = b""
   self.pending_snapshot_end = 0
@@ -201,11 +187,7 @@ fn Decoder::advance(self : Decoder, k : Int) -> Unit {
 /// amortized constant number of times.
 fn Decoder::refresh_pending_snapshot(self : Decoder) -> Unit {
   if self.pending_pos > 0 {
-    let kept : Array[Byte] = []
-    for j in self.pending_pos..<self.pending.length() {
-      kept.push(self.pending[j])
-    }
-    self.pending = kept
+    self.pending = self.pending[self.pending_pos:].to_owned()
     self.pending_pos = 0
   }
   self.pending_bytes = Bytes::from_array(self.pending)
@@ -386,20 +368,12 @@ fn Decoder::finish_member_trailer(self : Decoder) -> Bool raise GzipError {
 /// length bound, so they are never retained). Returns true when the field is
 /// complete.
 fn Decoder::skip_nul_terminated(self : Decoder) -> Bool {
-  let mut nul = -1
-  for j in 0..<self.available() {
-    if self.pending_at(j) == b'\x00' {
-      nul = j
-      break
-    }
-  }
-  if nul >= 0 {
-    self.advance(nul + 1)
-    true
-  } else {
+  guard self.pending[self.pending_pos:].search(b'\x00') is Some(nul) else {
     self.advance(self.available())
-    false
+    return false
   }
+  self.advance(nul + 1)
+  true
 }
 
 ///|
