@@ -842,7 +842,7 @@ test "zip force_zip64 emits zip64 local and central records" {
   archive.add("a.txt", b"payload", compression=Store, data_descriptor=true)
   let entry = archive.entries()[0]
   let name_bytes = entry_name_bytes(entry)
-  let payload = prepare_payload(entry, 6, false)
+  let payload = prepare_payload(entry, @flate.Compressor())
   let local_out = Output::writing(None)
   write_local_record(local_out, entry, name_bytes, payload, true, true)
   // The non-descriptor zip64 size fields.

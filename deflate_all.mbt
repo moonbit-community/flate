@@ -5,12 +5,13 @@
 ///|
 /// A reusable, whole-buffer raw DEFLATE compressor. Unlike the suspendable
 /// `Deflater`, it reads the input directly and writes one complete stream into
-/// a caller-provided buffer.
+/// either a caller-provided buffer or reusable growable output storage.
 pub struct Compressor {
   priv level : Int
   priv cfg : LevelConfig
   priv finder : MatchFinder
   priv tokens : Array[Int]
+  priv mut output : FixedArray[Byte]
   priv ll_freq : FixedArray[Int]
   priv d_freq : FixedArray[Int]
 }
@@ -25,6 +26,7 @@ pub fn Compressor::Compressor(level? : Int = 6) -> Compressor {
     cfg: level_configs[level],
     finder: MatchFinder(),
     tokens: [],
+    output: [],
     ll_freq: FixedArray::make(MAX_NUM_LIT, 0),
     d_freq: FixedArray::make(MAX_NUM_DIST, 0),
   }
@@ -54,7 +56,23 @@ pub fn Compressor::compress_into(
   input : Bytes,
   output : FixedArray[Byte],
 ) -> Int? {
-  let w = BitWriter::into(output)
+  self.encode(input, BitWriter::into(output))
+}
+
+///|
+/// Compress a complete stream, reusing the parsing and output workspace.
+/// The returned bytes are independent of subsequent calls to this compressor.
+pub fn Compressor::compress(self : Compressor, input : Bytes) -> Bytes {
+  let writer = BitWriter::growing(self.output)
+  ignore(self.encode(input, writer))
+  if writer.direct_output is Some(output) {
+    self.output = output
+  }
+  Bytes::from_array(self.output[:writer.direct_pos])
+}
+
+///|
+fn Compressor::encode(self : Compressor, input : Bytes, w : BitWriter) -> Int? {
   let n = input.length()
   // Level 0 (and the empty input it subsumes): one stored pass, no parsing.
   guard self.level != 0 else {
@@ -66,7 +84,7 @@ pub fn Compressor::compress_into(
       Some(w.direct_pos)
     }
   }
-  self.finder.reset()
+  self.finder.reset_for_input(input)
   // Each non-final block covers up to `DEFLATE_BLOCK_SIZE` tokenizable bytes; a
   // boundary match may overhang, so `processed` (not `target`) sets the next
   // start.

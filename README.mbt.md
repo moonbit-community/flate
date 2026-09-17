@@ -55,6 +55,9 @@ methods. They retain `deflate_all` / `inflate_all`'s complete-stream prefix
 semantics: trailing raw bytes after a valid final block are ignored. Use the
 streaming APIs when input or output must suspend under backpressure.
 
+`Compressor::compress(input)` returns independent `Bytes` and reuses its
+workspace across calls, without requiring a caller-owned output buffer.
+
 The streaming API is a pure push state machine. It owns no I/O object, so both
 an async event loop and a future synchronous reader/writer adapter can feed and
 drain the same engine with whatever buffers their runtime provides:
@@ -167,8 +170,8 @@ callers that do not need the memory bound.
 
 ## ZIP container
 
-The `@zip` package reads and writes the ZIP (APPNOTE.TXT) container format over
-the same engine. It is io-free and suspendable like the rest of the library:
+The `@zip` package reads and writes ZIP archives using the same compression
+engine. Use `Archive` for in-memory editing and serialization:
 
 ```mbt nocheck
 ///|
@@ -181,15 +184,44 @@ test "README zip round-trip" {
 }
 ```
 
-`read` accepts a `ReadLimits` value (package bytes, entry count, per-entry and
-total decompressed bytes, retained source records) and a `cancelled` callback,
-so untrusted archives cannot exhaust memory; exceeding a limit raises
-`ZipError(LimitExceeded(kind, limit, actual))`. STORED and DEFLATE entries,
-ZIP64 sizes/offsets, data descriptors, UTF-8 names, and archive comments are
-handled. `write_preserving` re-emits pristine entries byte-for-byte from their
-retained source records (round-tripping `read` → `write_preserving` exactly),
-while `write_limited` / `write_preserving_limited` enforce an output ceiling
-without materializing an oversized candidate.
+Supported features include STORED and DEFLATE entries, ZIP64, data descriptors,
+UTF-8 names, and archive comments. `read` accepts `ReadLimits` to bound archive
+size, entry count, decompressed sizes, and retained source records, plus a
+`cancelled` callback. Exceeding a limit raises
+`ZipError(LimitExceeded(kind, limit, actual))`.
+
+`write_preserving` reuses unchanged source records; an unmodified archive can
+round-trip byte-for-byte. `write_limited` and `write_preserving_limited` cap the
+output size. These APIs return the complete ZIP as `Bytes`.
+
+For incremental output, use `Writer` with a synchronous sink. `add` accepts a
+complete file; `begin_entry` / `write` / `end_entry` accept chunks. Supply `size`
+when known; unknown sizes use ZIP64.
+
+```mbt nocheck
+///|
+test "README incremental ZIP writer" {
+  // A real folder adapter passes a buffered file-write callback here.
+  let output = Buffer()
+  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
+  writer.add("small.txt", b"small file")
+  writer.begin_entry("chunked.txt", size=6UL)
+  writer.write(b"abc")
+  writer.write(b"def")
+  writer.end_entry()
+  writer.finish()
+  let archive = @zip.read(output.to_bytes())
+  assert_eq(archive.get("chunked.txt"), Some(b"abcdef"[:]))
+}
+```
+
+Call `finish` to write the central directory. The sink must consume each chunk
+before returning. If it raises an error, the writer becomes unusable and the
+partial output must be discarded.
+
+`Writer` retains directory metadata and codec buffers, plus the current file
+for `add` or chunks for `write`. Chunked input reduces memory use at some cost
+to throughput. Folder traversal and file I/O belong to the caller.
 
 ## Architecture
 
@@ -255,8 +287,8 @@ CONTAINERS: thin framing over the engine
          decodes concatenated multi-member streams (§2.2)
   zlib/  Encoder/Decoder, zlib_compress/zlib_decompress   (RFC 1950)
          2 B header (+ FDICT dictionary id) + Adler-32
-  zip/   read/write, Archive/Entry, bounded reads, ZIP64,   (APPNOTE.TXT)
-         data descriptors, byte-preserving rewrites
+  zip/   read/write, Archive/Entry, Writer, ZIP64,         (APPNOTE.TXT)
+         bounded reads, incremental writes, byte-preserving rewrites
   checksum/  incremental CRC-32 / Adler-32 digests
 
  shared by both pipelines:

@@ -107,6 +107,19 @@ pub fn ReadLimits::with_package_limit(Self, Int) -> Self
 pub fn ReadLimits::with_preserved_source_limit(Self, Int) -> Self
 pub fn ReadLimits::with_total_limit(Self, Int) -> Self
 
+pub struct Writer {
+  // private fields
+}
+pub fn Writer::Writer((BytesView) -> Unit raise, level? : Int) -> Self
+pub fn Writer::add(Self, String, Bytes, compression? : Compression) -> Unit raise
+pub fn Writer::begin_entry(Self, String, compression? : Compression, size? : UInt64) -> Unit raise
+pub fn Writer::end_entry(Self) -> Unit raise
+pub fn Writer::finish(Self, comment? : BytesView) -> Unit raise
+pub fn Writer::is_failed(Self) -> Bool
+pub fn Writer::is_finished(Self) -> Bool
+pub fn Writer::position(Self) -> UInt64
+pub fn Writer::write(Self, BytesView) -> Unit raise
+
 pub(all) enum ZipErrorKind {
   Truncated
   InvalidSignature

@@ -95,6 +95,22 @@ fn MatchFinder::reset(self : MatchFinder) -> Unit {
 }
 
 ///|
+/// Whole-buffer streams only query hashes of triples present in their input.
+/// For tiny inputs, invalidate just those heads instead of clearing 32K slots.
+/// Old predecessor slots are unreachable: a head starts at -1, and each insert
+/// overwrites its predecessor before publishing the new head. Larger inputs
+/// use one bulk head clear, avoiding an extra pass over the whole input.
+fn MatchFinder::reset_for_input(self : MatchFinder, input : Bytes) -> Unit {
+  guard input.length() < 1024 else {
+    self.head.fill(-1)
+    return
+  }
+  for index in 0..<(input.length() - 2).max(0) {
+    self.head[hash3(input, index)] = -1
+  }
+}
+
+///|
 fn MatchFinder::rebase(self : MatchFinder, offset : Int) -> Unit {
   for i in 0..<self.head.length() {
     if self.head[i] >= 0 {

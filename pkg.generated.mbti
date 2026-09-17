@@ -54,6 +54,7 @@ pub struct Compressor {
   // private fields
 }
 pub fn Compressor::Compressor(level? : Int) -> Self
+pub fn Compressor::compress(Self, Bytes) -> Bytes
 pub fn Compressor::compress_into(Self, Bytes, FixedArray[Byte]) -> Int?
 
 pub struct Decompressor {

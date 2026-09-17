@@ -1,6 +1,6 @@
 ///|
-/// A byte sink that either counts (sizing pass) or writes into a growable
-/// buffer (emit pass), while enforcing an optional output ceiling.
+/// Counts prepared records or emits them into an exactly sized buffer. The
+/// preparation pass enforces the output ceiling before allocating that buffer.
 priv struct Output {
   limit : Int?
   buf : Buffer?
@@ -13,8 +13,8 @@ fn Output::counting(limit : Int?) -> Output {
 }
 
 ///|
-fn Output::writing(limit : Int?) -> Output {
-  { limit, buf: Some(Buffer()), size: 0, }
+fn Output::writing(limit : Int?, size_hint? : Int = 0) -> Output {
+  { limit, buf: Some(Buffer(size_hint~)), size: 0, }
 }
 
 ///|
@@ -30,20 +30,19 @@ fn Output::grow(self : Output, additional : Int) -> Unit raise ZipError {
   if self.limit is Some(limit) {
     guard additional <= limit - self.size else {
       raise ZipError(
-        LimitExceeded(OutputBytes, limit, self.size + additional),
+        LimitExceeded(
+          OutputBytes,
+          limit,
+          self.size + additional.min(0x7fff_ffff - self.size),
+        ),
         "zip: output exceeds its byte limit",
       )
     }
   }
-  self.size = self.size + additional
-}
-
-///|
-fn Output::write_byte(self : Output, b : Byte) -> Unit raise ZipError {
-  self.grow(1)
-  if self.buf is Some(buf) {
-    buf.write_byte(b)
+  guard additional <= 0x7fff_ffff - self.size else {
+    raise ZipError(UnsupportedFeature, "zip: output size exceeds Int range")
   }
+  self.size = self.size + additional
 }
 
 ///|
@@ -55,8 +54,7 @@ fn Output::write_bytes(self : Output, bytes : BytesView) -> Unit raise ZipError 
 }
 
 ///|
-/// Counts `n` payload bytes without materializing them (used by the sizing pass
-/// for DEFLATE payloads whose compressed bytes are not held).
+/// Advance the sizing pass without copying payload bytes.
 fn Output::count(self : Output, n : Int) -> Unit raise ZipError {
   self.grow(n)
 }
@@ -66,23 +64,25 @@ fn Output::write_u16(self : Output, value : Int) -> Unit raise ZipError {
   if value < 0 || value > 0xffff {
     raise ZipError(UnsupportedFeature, "zip: u16 overflow")
   }
-  let raw = value.to_uint_checked()
-  self.write_byte((raw & 0xff).to_byte())
-  self.write_byte(((raw >> 8) & 0xff).to_byte())
+  self.grow(2)
+  if self.buf is Some(buf) {
+    buf.write_uint16_le(value.to_uint16())
+  }
 }
 
 ///|
 fn Output::write_u32(self : Output, value : UInt) -> Unit raise ZipError {
-  self.write_byte((value & 0xff).to_byte())
-  self.write_byte(((value >> 8) & 0xff).to_byte())
-  self.write_byte(((value >> 16) & 0xff).to_byte())
-  self.write_byte(((value >> 24) & 0xff).to_byte())
+  self.grow(4)
+  if self.buf is Some(buf) {
+    buf.write_uint_le(value)
+  }
 }
 
 ///|
 fn Output::write_u64(self : Output, value : UInt64) -> Unit raise ZipError {
-  for index in 0..<8 {
-    self.write_byte(((value >> (8 * index)) & 0xff).to_byte())
+  self.grow(8)
+  if self.buf is Some(buf) {
+    buf.write_uint64_le(value)
   }
 }
 
@@ -141,30 +141,23 @@ fn build_zip64_extra(
 }
 
 ///|
-/// The materialized (or sized) payload of one fresh entry.
+/// A prepared payload; stored data remains owned by its entry.
 priv struct PreparedPayload {
   compressed_size : Int
   compressed : Bytes?
 }
 
 ///|
-/// Compress the entry's payload once. The sizing pass discards the bytes after
-/// measuring; the emit pass keeps them so each entry is DEFLATEd exactly once
-/// per pass.
+/// Compress an entry once using the archive's reusable workspace.
 fn prepare_payload(
   entry : Entry,
-  level : Int,
-  counting : Bool,
+  compressor : @flate.Compressor,
 ) -> PreparedPayload {
   match entry.compression {
     Store => { compressed_size: entry.data.length(), compressed: None, }
     Deflate => {
-      let compressed = @flate.deflate_all(entry.data, level~)
-      if counting {
-        { compressed_size: compressed.length(), compressed: None, }
-      } else {
-        { compressed_size: compressed.length(), compressed: Some(compressed), }
-      }
+      let compressed = compressor.compress(entry.data)
+      { compressed_size: compressed.length(), compressed: Some(compressed), }
     }
   }
 }
@@ -202,6 +195,15 @@ fn write_local_record(
   let needs_zip64_sizes = force_zip64 ||
     data_len.to_uint_checked() > MAX_U32 ||
     compressed_size.to_uint_checked() > MAX_U32
+  if out.is_counting() {
+    let extra_size = if needs_zip64_sizes { 20 } else { 0 }
+    out.count(30 + name_bytes.length() + extra_size)
+    out.count(compressed_size)
+    if use_descriptor {
+      out.count(if needs_zip64_sizes { 24 } else { 16 })
+    }
+    return
+  }
   let version = if needs_zip64_sizes { 45 } else { 20 }
   let flags = FLAG_UTF8 |
     (if use_descriptor { FLAG_DATA_DESCRIPTOR } else { 0 })
@@ -244,17 +246,11 @@ fn write_local_record(
   out.write_u16(local_extra.length())
   out.write_bytes(name_bytes)
   out.write_bytes(local_extra)
-  // Both arms fall through to the data descriptor below, so the descriptor is
-  // emitted (and, in the sizing pass, counted) for STORED and DEFLATE entries
-  // alike — a `guard` would `return` out of the missing-payload branch and
-  // skip it.
+  // Both stored and compressed payloads may be followed by a descriptor.
   if payload.compressed is Some(compressed) {
     out.write_bytes(compressed)
   } else {
-    match entry.compression {
-      Store => out.write_bytes(entry.data)
-      Deflate => out.count(compressed_size)
-    }
+    out.write_bytes(entry.data)
   }
   if use_descriptor {
     out.write_u32(DATA_DESCRIPTOR_SIG)
@@ -286,6 +282,16 @@ fn write_central_record(
     compressed_size.to_uint_checked() > MAX_U32
   let needs_zip64_offset = force_zip64 ||
     local_offset.to_uint_checked() > MAX_U32
+  if out.is_counting() {
+    let extra_size = (if needs_zip64_sizes { 16 } else { 0 }) +
+      (if needs_zip64_offset { 8 } else { 0 })
+    out.count(
+      46 +
+      name_bytes.length() +
+      (if extra_size > 0 { 4 + extra_size } else { 0 }),
+    )
+    return
+  }
   let needs_zip64_entry = needs_zip64_sizes || needs_zip64_offset
   let version = if needs_zip64_entry { 45 } else { 20 }
   let flags = FLAG_UTF8 |
@@ -522,11 +528,13 @@ fn write_preserved_classic_end_record(
 }
 
 ///|
-/// Per-entry sizing/emission bookkeeping shared between the counting and emit
-/// passes.
+/// Each fresh entry is encoded once during preparation. Emission consumes the
+/// retained payload so it can be released as soon as it has been copied.
 priv struct EntryPlan {
   local_offset : Int
   compressed_size : Int
+  name_bytes : Bytes
+  mut payload : PreparedPayload
 }
 
 ///|
@@ -538,6 +546,23 @@ priv struct EntryPlan {
 /// to the end of the archive.
 fn archive_local_order(archive : Archive) -> FixedArray[Int] {
   let order = FixedArray::makei(archive.entries.length(), index => index)
+  // Most archives are already in local-record order, including all newly built
+  // archives. Avoid sorting (and its comparisons) on this common path.
+  let mut previous = -1
+  let mut fresh_seen = false
+  let mut ordered = true
+  for entry in archive.entries {
+    if entry.origin_local_offset is Some(offset) {
+      if fresh_seen || offset < previous {
+        ordered = false
+        break
+      }
+      previous = offset
+    } else {
+      fresh_seen = true
+    }
+  }
+  guard !ordered else { return order }
   order.sort_by((left, right) => {
     match
       (
@@ -554,63 +579,96 @@ fn archive_local_order(archive : Archive) -> FixedArray[Int] {
 }
 
 ///|
-/// Writes every local record, then every central directory record, filling
-/// `plans` with each entry's local offset and compressed size. Returns the
-/// central directory's offset and size.
-fn emit_archive(
+/// Prepare local records once, measuring exact offsets without allocating the
+/// final ZIP buffer. Preserved and stored payloads continue to reference their
+/// existing bytes. A compressor is allocated only when a fresh Deflate entry
+/// is encountered.
+fn prepare_archive(
   out : Output,
   archive : Archive,
   order : FixedArray[Int],
-  plans : FixedArray[EntryPlan],
   preserve : Bool,
   level : Int,
-  force_zip64 : Bool,
-) -> (Int, Int) raise ZipError {
+) -> Array[EntryPlan] raise ZipError {
+  let plans : Array[EntryPlan] = []
+  let mut compressor : @flate.Compressor? = None
   for index in order {
     let entry = archive.entries[index]
     let local_offset = out.size
-    match (entry.source, preserve) {
-      (Some(source), true) => {
-        out.write_bytes(source.local_record)
-        plans[index] = { local_offset, compressed_size: entry.compressed_size, }
-      }
-      _ => {
-        let payload = prepare_payload(entry, level, out.is_counting())
-        write_local_record(
-          out,
-          entry,
-          entry_name_bytes(entry),
-          payload,
-          entry.data_descriptor,
-          force_zip64,
+    if preserve && entry.source is Some(source) {
+      out.count(source.local_record.length())
+      plans.push({
+        local_offset,
+        compressed_size: entry.compressed_size,
+        name_bytes: b"",
+        payload: { compressed_size: entry.compressed_size, compressed: None, },
+      })
+      continue
+    }
+    let name_bytes = entry_name_bytes(entry)
+    // Reject an impossible header before doing compression work.
+    if out.limit is Some(limit) {
+      guard 30 + name_bytes.length() <= limit - out.size else {
+        raise ZipError(
+          LimitExceeded(OutputBytes, limit, out.size + 30 + name_bytes.length()),
+          "zip: output exceeds its byte limit",
         )
-        plans[index] = {
-          local_offset,
-          compressed_size: payload.compressed_size,
-        }
       }
     }
+    let payload = match entry.compression {
+      Store => { compressed_size: entry.data.length(), compressed: None, }
+      Deflate => {
+        let codec = compressor.unwrap_or_else(() => {
+          let codec = @flate.Compressor(level~)
+          compressor = Some(codec)
+          codec
+        })
+        prepare_payload(entry, codec)
+      }
+    }
+    write_local_record(
+      out,
+      entry,
+      name_bytes,
+      payload,
+      entry.data_descriptor,
+      false,
+    )
+    plans.push({
+      local_offset,
+      compressed_size: payload.compressed_size,
+      name_bytes,
+      payload,
+    })
   }
-  let central_offset = out.size
-  for index in order {
-    let entry = archive.entries[index]
-    match (entry.source, preserve) {
-      (Some(source), true) =>
-        write_preserved_central_record(out, source, plans[index].local_offset)
-      _ =>
-        write_central_record(
-          out,
-          entry,
-          entry_name_bytes(entry),
-          plans[index].local_offset,
-          plans[index].compressed_size,
-          entry.data_descriptor,
-          force_zip64,
-        )
+  plans
+}
+
+///|
+fn write_directory(
+  out : Output,
+  archive : Archive,
+  order : FixedArray[Int],
+  plans : Array[EntryPlan],
+  preserve : Bool,
+) -> Unit raise ZipError {
+  for position in 0..<order.length() {
+    let entry = archive.entries[order[position]]
+    let plan = plans[position]
+    if preserve && entry.source is Some(source) {
+      write_preserved_central_record(out, source, plan.local_offset)
+    } else {
+      write_central_record(
+        out,
+        entry,
+        plan.name_bytes,
+        plan.local_offset,
+        plan.compressed_size,
+        entry.data_descriptor,
+        false,
+      )
     }
   }
-  let central_size = out.size - central_offset
-  (central_offset, central_size)
 }
 
 ///|
@@ -655,26 +713,66 @@ fn write_trailer(
 }
 
 ///|
-/// The sizing pass and the emit pass are deterministic on the same archive, so
-/// a mismatch indicates an internal serialization invariant failure rather than
-/// bad caller input; this defensive branch is excluded from behavior coverage.
-#coverage.skip
-fn assert_sizing_agrees(
-  counting_size : Int,
-  counting_central_offset : Int,
-  counting_central_size : Int,
-  central_offset : Int,
-  central_size : Int,
-  emitted_size : Int,
-) -> Unit raise ZipError {
-  if central_offset != counting_central_offset ||
-    central_size != counting_central_size ||
-    emitted_size != counting_size {
-    raise ZipError(UnsupportedFeature, "zip: sizing and emission disagreed")
+/// A pristine rewrite needs only record lengths and patched offsets. Avoid
+/// allocating a payload/name plan for every entry when no encoding is needed.
+fn write_pristine_archive(
+  archive : Archive,
+  order : FixedArray[Int],
+  max_output : Int?,
+) -> Bytes? raise ZipError {
+  for entry in archive.entries {
+    guard entry.source is Some(_) else { return None }
   }
+  let counting = Output::counting(max_output)
+  for index in order {
+    if archive.entries[index].source is Some(source) {
+      counting.count(source.local_record.length())
+    }
+  }
+  let central_offset = counting.size
+  for index in order {
+    if archive.entries[index].source is Some(source) {
+      counting.count(source.central_record.length())
+    }
+  }
+  let central_size = counting.size - central_offset
+  write_trailer(
+    counting,
+    archive,
+    archive.entries.length(),
+    central_size,
+    central_offset,
+    true,
+    false,
+  )
+  let out = Output::writing(None, size_hint=counting.size)
+  for index in order {
+    if archive.entries[index].source is Some(source) {
+      out.write_bytes(source.local_record)
+    }
+  }
+  let mut local_offset = 0
+  for index in order {
+    if archive.entries[index].source is Some(source) {
+      write_preserved_central_record(out, source, local_offset)
+      local_offset += source.local_record.length()
+    }
+  }
+  write_trailer(
+    out,
+    archive,
+    archive.entries.length(),
+    central_size,
+    central_offset,
+    true,
+    false,
+  )
+  Some(out.finish())
 }
 
 ///|
+/// Prepare once, then serialize into an exactly sized buffer. The output limit
+/// is checked before allocating the final archive; no entry is recompressed.
 fn write_impl(
   archive : Archive,
   preserve : Bool,
@@ -682,44 +780,46 @@ fn write_impl(
   max_output : Int?,
 ) -> Bytes raise ZipError {
   let order = archive_local_order(archive)
-  let plans = FixedArray::make(archive.entries.length(), {
-    local_offset: 0,
-    compressed_size: 0,
-  })
-  guard max_output is Some(limit) else {
-    let out = Output::writing(None)
-    let (central_offset, central_size) = emit_archive(
-      out, archive, order, plans, preserve, level, false,
-    )
-    write_trailer(
-      out,
-      archive,
-      archive.entries.length(),
-      central_size,
-      central_offset,
-      preserve,
-      false,
-    )
-    return out.finish()
+  if preserve &&
+    write_pristine_archive(archive, order, max_output) is Some(bytes) {
+    return bytes
   }
-  let counting = Output::counting(Some(limit))
-  let (counting_central_offset, counting_central_size) = emit_archive(
-    counting, archive, order, plans, preserve, level, false,
-  )
+  let counting = Output::counting(max_output)
+  let plans = prepare_archive(counting, archive, order, preserve, level)
+  let central_offset = counting.size
+  write_directory(counting, archive, order, plans, preserve)
+  let central_size = counting.size - central_offset
   write_trailer(
     counting,
     archive,
     archive.entries.length(),
-    counting_central_size,
-    counting_central_offset,
+    central_size,
+    central_offset,
     preserve,
     false,
   )
-  let size = counting.size
-  let out = Output::writing(Some(limit))
-  let (central_offset, central_size) = emit_archive(
-    out, archive, order, plans, preserve, level, false,
-  )
+  let out = Output::writing(None, size_hint=counting.size)
+  for position in 0..<order.length() {
+    let entry = archive.entries[order[position]]
+    let plan = plans[position]
+    if preserve && entry.source is Some(source) {
+      out.write_bytes(source.local_record)
+    } else {
+      write_local_record(
+        out,
+        entry,
+        plan.name_bytes,
+        plan.payload,
+        entry.data_descriptor,
+        false,
+      )
+      plan.payload = {
+        compressed_size: plan.compressed_size,
+        compressed: None,
+      }
+    }
+  }
+  write_directory(out, archive, order, plans, preserve)
   write_trailer(
     out,
     archive,
@@ -728,14 +828,6 @@ fn write_impl(
     central_offset,
     preserve,
     false,
-  )
-  assert_sizing_agrees(
-    size,
-    counting_central_offset,
-    counting_central_size,
-    central_offset,
-    central_size,
-    out.size,
   )
   out.finish()
 }

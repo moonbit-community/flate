@@ -6,7 +6,8 @@ priv struct BitWriter {
   out : Array[Byte]
   mut bitbuf : Int
   mut bit_count : Int // bits currently held in `bitbuf`, not yet flushed to a byte
-  direct_output : FixedArray[Byte]?
+  mut direct_output : FixedArray[Byte]?
+  growable : Bool
   mut direct_pos : Int
   mut overflowed : Bool
 }
@@ -19,6 +20,7 @@ fn BitWriter::BitWriter() -> BitWriter {
     bit_count: 0,
     direct_output: None,
     direct_pos: 0,
+    growable: false,
     overflowed: false,
   }
 }
@@ -33,8 +35,40 @@ fn BitWriter::into(output : FixedArray[Byte]) -> BitWriter {
     bit_count: 0,
     direct_output: Some(output),
     direct_pos: 0,
+    growable: false,
     overflowed: false,
   }
+}
+
+///|
+/// Reusable, geometrically growing output for complete in-memory streams.
+/// Unlike the caller-owned fixed buffer this can expand without recompressing.
+fn BitWriter::growing(output : FixedArray[Byte]) -> BitWriter {
+  { ..BitWriter::into(output), growable: true, }
+}
+
+///|
+/// Keep capacity arithmetic separate so Int-boundary growth can be checked
+/// without allocating gigabyte-sized buffers.
+fn bitwriter_growth_capacity(current : Int, required : Int) -> Int {
+  let doubled = if current <= 0x3fff_ffff { current * 2 } else { required }
+  required.max(doubled).max(64)
+}
+
+///|
+fn BitWriter::grow(
+  self : BitWriter,
+  output : FixedArray[Byte],
+  required : Int,
+) -> FixedArray[Byte] {
+  let grown = FixedArray::make_and_blit(
+    output,
+    allocate_len=bitwriter_growth_capacity(output.length(), required),
+    init=b'\x00',
+    len=self.direct_pos,
+  )
+  self.direct_output = Some(grown)
+  grown
 }
 
 ///|
@@ -46,6 +80,9 @@ fn BitWriter::write_byte(self : BitWriter, byte : Byte) -> Unit {
   if self.direct_output is Some(output) {
     if self.direct_pos < output.length() {
       output[self.direct_pos] = byte
+    } else if self.growable {
+      let grown = self.grow(output, self.direct_pos + 1)
+      grown[self.direct_pos] = byte
     } else {
       self.overflowed = true
     }
@@ -65,6 +102,11 @@ fn BitWriter::write_bytes(
   length : Int,
 ) -> Unit {
   if self.direct_output is Some(output) {
+    let output = if self.growable && length > output.length() - self.direct_pos {
+      self.grow(output, self.direct_pos + length)
+    } else {
+      output
+    }
     let count = length.min((output.length() - self.direct_pos).max(0))
     if count > 0 {
       output.blit_from_bytes(self.direct_pos, input, offset, count)
