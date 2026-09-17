@@ -1176,3 +1176,96 @@ test "zip local name mismatch preserves UTF-8 error classification" {
     )
   }
 }
+
+///|
+test "zip output rejects Int overflow and oversized raw header names" {
+  let counting = Output::counting(None)
+  counting.count(0x7fff_ffff)
+  expect_zip_kind(() => counting.count(1), UnsupportedFeature)
+  let archive = Archive()
+  archive.add("a", b"", compression=Store)
+  let entry = archive.entries()[0]
+  let long_name = Bytes::make(65536, b'x')
+  expect_zip_kind(
+    () => {
+      write_local_record(
+        Output::writing(None),
+        entry,
+        long_name,
+        { compressed_size: 0, compressed: None, },
+        false,
+        false,
+      )
+    },
+    UnsupportedFeature,
+  )
+  expect_zip_kind(
+    () => {
+      write_central_record(
+        Output::writing(None),
+        entry,
+        long_name,
+        0,
+        0,
+        false,
+        false,
+      )
+    },
+    UnsupportedFeature,
+  )
+  expect_zip_kind(
+    () => ignore(write_limited(archive, max_output_bytes=1)),
+    LimitExceeded(OutputBytes, 1, 31),
+  )
+}
+
+///|
+test "zip local order sorts source offsets and keeps new entries stable" {
+  let archive = Archive()
+  for i in 0..<32 {
+    archive.add("entry-\{i}", b"", compression=Store)
+    if i % 3 == 0 {
+      archive.entries[i] = {
+        ..archive.entries[i],
+        origin_local_offset: Some((31 - i) * 10),
+      }
+    }
+  }
+  let order = archive_local_order(archive)
+  for i in 0..<11 {
+    assert_eq(order[i], 30 - i * 3)
+  }
+  let mut next = 11
+  for i in 0..<32 {
+    if i % 3 != 0 {
+      assert_eq(order[next], i)
+      next += 1
+    }
+  }
+}
+
+///|
+test "ZIP64 sizing agrees with emitted headers and descriptors" {
+  let archive = Archive()
+  archive.add("a", b"", compression=Store)
+  let entry = archive.entries()[0]
+  let counting = Output::counting(None)
+  let output = Output::writing(None)
+  for out in [counting, output] {
+    write_local_record(
+      out,
+      entry,
+      b"a",
+      { compressed_size: 0, compressed: None, },
+      true,
+      true,
+    )
+    write_central_record(out, entry, b"a", 0, 0, true, true)
+  }
+  let bytes = output.finish()
+  assert_eq(counting.size, bytes.length())
+  assert_eq(bytes.length(), 150)
+  assert_eq(read_u32_le_at_raw(bytes, 51), DATA_DESCRIPTOR_SIG)
+  assert_eq(read_u32_le_at_raw(bytes, 75), CENTRAL_HEADER_SIG)
+  assert_eq(read_u16_le_at(bytes, 105), 28)
+}

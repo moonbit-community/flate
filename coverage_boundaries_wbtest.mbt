@@ -233,3 +233,20 @@ test "empty output appends preserve storage and cancellation starts before copie
   d.copy_match(3, 3)
   @test.assert_eq(d.out.to_bytes(), b"abcabc")
 }
+
+///|
+test "growable bit writer preserves prefix when byte payload grows storage" {
+  let writer = BitWriter::growing(FixedArray::make(1, b'\x00'))
+  writer.write_byte(b'\xaa')
+  writer.write_bytes(b"012345", 1, 4)
+  assert_eq(writer.direct_pos, 5)
+  assert_false(writer.overflowed)
+  assert_eq(Bytes::from_array(writer.direct_output.unwrap()[:5]), b"\xaa1234")
+}
+
+///|
+test "bit writer capacity arithmetic stays within Int at the doubling boundary" {
+  assert_eq(bitwriter_growth_capacity(0x3fff_ffff, 0x4000_0000), 0x7fff_fffe)
+  assert_eq(bitwriter_growth_capacity(0x4000_0000, 0x4000_0001), 0x4000_0001)
+  assert_eq(bitwriter_growth_capacity(0x7fff_fffe, 0x7fff_ffff), 0x7fff_ffff)
+}
