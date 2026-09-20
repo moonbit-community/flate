@@ -8,23 +8,23 @@
 test "property: crc32 forms agree and are cancellable" {
   @quickcheck.check(
     (data : Bytes) => {
-      let one = crc32(data)
-      let c = Crc32()
+      let one = @checksum.crc32(data)
+      let c = @checksum.Crc32()
       c.update(data)
       if c.finish() != one {
         return false
       }
-      let d = Crc32()
+      let d = @checksum.Crc32()
       for b in data {
         d.update_byte(b)
       }
       if d.finish() != one {
         return false
       }
-      if crc32_cancellable(data, cancelled=() => false) != Some(one) {
+      if @checksum.crc32_cancellable(data, cancelled=() => false) != Some(one) {
         return false
       }
-      if crc32_cancellable(data, cancelled=() => true) != None {
+      if @checksum.crc32_cancellable(data, cancelled=() => true) != None {
         return false
       }
       // `cancelled` is polled at entry, after each 4 KiB chunk, and once more
@@ -32,7 +32,7 @@ test "property: crc32 forms agree and are cancellable" {
       // poll must still cancel, exercising the post-loop check.
       let total_polls = 2 + (data.length() - 1) / 4096
       let mut polls = 0
-      let late_cancel = crc32_cancellable(data, cancelled=() => {
+      let late_cancel = @checksum.crc32_cancellable(data, cancelled=() => {
         polls = polls + 1
         polls >= total_polls
       })
@@ -53,8 +53,8 @@ test "property: crc32 is additive across concatenation" {
   @quickcheck.check(
     (pair : (Bytes, Bytes)) => {
       let (x, y) = pair
-      let full = crc32(x + y)
-      let c = Crc32()
+      let full = @checksum.crc32(x + y)
+      let c = @checksum.Crc32()
       c.update(x)
       c.update(y)
       c.finish() == full
@@ -71,13 +71,13 @@ test "property: crc32 is additive across concatenation" {
 test "property: adler32 forms agree" {
   @quickcheck.check(
     (data : Bytes) => {
-      let one = adler32(data)
-      let a = Adler32()
+      let one = @checksum.adler32(data)
+      let a = @checksum.Adler32()
       a.update(data)
       if a.finish() != one {
         return false
       }
-      let b = Adler32()
+      let b = @checksum.Adler32()
       for byte in data {
         b.update_byte(byte)
       }
@@ -95,8 +95,8 @@ test "property: adler32 is additive across concatenation" {
   @quickcheck.check(
     (pair : (Bytes, Bytes)) => {
       let (x, y) = pair
-      let full = adler32(x + y)
-      let a = Adler32()
+      let full = @checksum.adler32(x + y)
+      let a = @checksum.Adler32()
       a.update(x)
       a.update(y)
       a.finish() == full
