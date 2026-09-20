@@ -134,8 +134,8 @@ test "deflate_all_split never worse than fixed cadence" {
       ("code", split_code(1048576)),
       ("drift", split_drift(524288)),
       ("midmix", split_midmix(524288)),
-      ("repetitive", bench_repetitive(262144)),
-      ("mixed", bench_mixed(262144)),
+      ("repetitive", @benchmark.bench_repetitive(262144)),
+      ("mixed", @benchmark.bench_mixed(262144)),
     ]
     for t in inputs {
       let (name, data) = t
