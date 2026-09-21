@@ -36,9 +36,14 @@ pub struct Encoder {
 
 ///|
 /// Create a fresh gzip compressor.
-pub fn Encoder::Encoder(level? : Int = 6) -> Encoder {
+/// Opt-in `fast_store` samples each block; it may increase output size.
+/// The default is false.
+pub fn Encoder::Encoder(
+  level? : Int = 6,
+  fast_store? : Bool = false,
+) -> Encoder {
   {
-    def: Deflater(level~),
+    def: Deflater(level~, fast_store~),
     crc: Crc32(),
     isize: 0,
     mode: Header,

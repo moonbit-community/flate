@@ -32,13 +32,13 @@ pub const ZIP64_LOCATOR_SIG : UInt = 0x07064b50
 
 pub fn read(BytesView, limits? : ReadLimits, cancelled? : () -> Bool) -> Archive raise ZipError
 
-pub fn write(Archive, level? : Int) -> Bytes raise ZipError
+pub fn write(Archive, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
 
-pub fn write_limited(Archive, max_output_bytes~ : Int, level? : Int) -> Bytes raise ZipError
+pub fn write_limited(Archive, max_output_bytes~ : Int, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
 
-pub fn write_preserving(Archive, level? : Int) -> Bytes raise ZipError
+pub fn write_preserving(Archive, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
 
-pub fn write_preserving_limited(Archive, max_output_bytes~ : Int, level? : Int) -> Bytes raise ZipError
+pub fn write_preserving_limited(Archive, max_output_bytes~ : Int, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
 
 // Errors
 pub suberror ZipError {
@@ -110,7 +110,7 @@ pub fn ReadLimits::with_total_limit(Self, Int) -> Self
 pub struct Writer {
   // private fields
 }
-pub fn Writer::Writer((BytesView) -> Unit raise, level? : Int) -> Self
+pub fn Writer::Writer((BytesView) -> Unit raise, level? : Int, fast_store? : Bool) -> Self
 pub fn Writer::add(Self, String, Bytes, compression? : Compression) -> Unit raise
 pub fn Writer::begin_entry(Self, String, compression? : Compression, size? : UInt64) -> Unit raise
 pub fn Writer::end_entry(Self) -> Unit raise

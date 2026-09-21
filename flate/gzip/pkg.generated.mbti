@@ -11,9 +11,9 @@ pub const DECODER_INPUT_LIMIT : Int = 65536
 
 pub fn gunzip(Bytes) -> Bytes raise GzipError
 
-pub fn gzip_compress(Bytes, level? : Int) -> Bytes
+pub fn gzip_compress(Bytes, level? : Int, fast_store? : Bool) -> Bytes
 
-pub fn gzip_compress_optimal(Bytes, iterations? : Int) -> Bytes
+pub fn gzip_compress_optimal(Bytes, iterations? : Int, fast_store? : Bool) -> Bytes
 
 // Errors
 pub suberror GzipError {
@@ -34,7 +34,7 @@ pub fn Decoder::unused_input(Self) -> Bytes
 pub struct Encoder {
   // private fields
 }
-pub fn Encoder::Encoder(level? : Int) -> Self
+pub fn Encoder::Encoder(level? : Int, fast_store? : Bool) -> Self
 pub fn Encoder::is_finished(Self) -> Bool
 pub fn Encoder::last_consumed(Self) -> Int
 pub fn Encoder::last_produced(Self) -> Int

@@ -34,11 +34,11 @@ fn Deflater::write_stored_pending(self : Deflater, is_final~ : Bool) -> Unit {
 }
 
 ///|
-// The final two bytes of an earlier accepted chunk could not yet form a
-// 3-byte hash. Insert them once new lookahead makes them hashable; all older
+// The final three bytes of an earlier accepted chunk could not yet form a
+// 4-byte hash. Insert them once new lookahead makes them hashable; all older
 // history is already present in the persistent chain.
 fn Deflater::chain_ready_history(self : Deflater) -> Unit {
-  let ready_end = self.parse_pos.min((self.pending_end - 2).max(0))
+  let ready_end = self.parse_pos.min((self.pending_end - 3).max(0))
   while self.hashed_through < ready_end {
     insert_window_pos(
       self.pending,
@@ -52,10 +52,38 @@ fn Deflater::chain_ready_history(self : Deflater) -> Unit {
 
 ///|
 fn Deflater::record_chained_positions(self : Deflater, processed : Int) -> Unit {
-  let chained_end = processed.min((self.pending_end - 2).max(0))
+  let chained_end = processed.min((self.pending_end - 3).max(0))
   if chained_end > self.hashed_through {
     self.hashed_through = chained_end
   }
+}
+
+///|
+// Unlike level 0, a heuristically stored block must remain available as
+// history if a later block resumes normal matching. Keep both hash tables
+// current without spending time on token search or Huffman construction.
+fn Deflater::try_fast_store(
+  self : Deflater,
+  end : Int,
+  is_final~ : Bool,
+) -> Bool {
+  guard self.fast_store &&
+    should_fast_store_window(self.pending, self.parse_pos, end) else {
+    return false
+  }
+  self.chain_ready_history()
+  write_stored_window(self.w, self.pending, self.parse_pos, end, is_final~)
+  insert_window_positions(
+    self.pending,
+    self.finder,
+    self.parse_pos,
+    end,
+    self.pending_end,
+  )
+  self.parse_pos = end
+  self.record_chained_positions(end)
+  self.maybe_rebase()
+  true
 }
 
 ///|
@@ -64,6 +92,9 @@ fn Deflater::record_chained_positions(self : Deflater, processed : Int) -> Unit 
 /// for an ordinary 258-byte match overhang.
 fn Deflater::emit_capped(self : Deflater) -> Unit {
   let target = (self.parse_pos + DEFLATE_BLOCK_SIZE).min(self.pending_end)
+  if self.try_fast_store(target, is_final=false) {
+    return
+  }
   let tokens : Array[Int] = []
   let ll_freq = FixedArray::make(286, 0)
   let d_freq = FixedArray::make(30, 0)
@@ -116,6 +147,10 @@ fn Deflater::emit_one(self : Deflater) -> Unit {
 /// Tokenize all remaining input into one trailing block. The end bound removes
 /// the non-final lookahead restriction while preserving the same parse policy.
 fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
+  let end = self.pending_end
+  if self.try_fast_store(end, is_final~) {
+    return end
+  }
   let tokens : Array[Int] = []
   let ll_freq = FixedArray::make(286, 0)
   let d_freq = FixedArray::make(30, 0)

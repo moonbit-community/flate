@@ -1,5 +1,9 @@
 import {
   "moonbit-community/flate",
+  "moonbit-community/flate/gzip",
+  "moonbit-community/flate/zlib",
+  "moonbit-community/flate/zip",
+  "moonbitlang/core/buffer",
   "moonbitlang/core/quickcheck",
   "moonbitlang/core/test",
 } for "test"

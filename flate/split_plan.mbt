@@ -1,5 +1,5 @@
 // Content-driven block planning (libdeflate's observation-divergence split,
-// as adopted by lean-zip): the drop-in counterpart to the fixed 16 KB
+// as adopted by lean-zip): the drop-in counterpart to the fixed-cadence
 // threshold planner for the one-shot `deflate_all`. A large window is
 // tokenized once with the full 32 KB history, then the token stream is
 // partitioned where the literal/match observation distribution drifts —
@@ -159,23 +159,24 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
 }
 
 ///|
-/// Token-boundary cuts approximating the fixed `DEFLATE_BLOCK_SIZE` cadence:
-/// cut at the first token whose start offset reaches each 16 KB output-byte
+/// Token-boundary cuts approximating the selected whole-buffer cadence:
+/// cut at the first token whose start offset reaches each block-size
 /// multiple. Used as the arbitration baseline so the adaptive split can never
 /// regress the fixed-cadence ratio.
 fn fixed_cadence_cuts(
   tokens : Array[Int],
   all_pos : FixedArray[Int],
   pos : Int,
+  block_size : Int,
 ) -> Array[Int] {
   let m = tokens.length()
   let cuts : Array[Int] = []
-  let mut target = pos + DEFLATE_BLOCK_SIZE
+  let mut target = pos + block_size
   let mut k = 1
   while k < m {
     if all_pos[k] >= target {
       cuts.push(k)
-      target = target + DEFLATE_BLOCK_SIZE
+      target = target + block_size
     }
     k = k + 1
   }
@@ -264,11 +265,17 @@ fn emit_split_blocks(
 /// symbol statistics drift, and emit one dynamic-Huffman block per segment.
 /// A mid-tier between the fixed-cadence `deflate_all` and the offline zopfli
 /// `deflate_all_optimal`.
-pub fn deflate_all_split(input : Bytes, level? : Int = 6) -> Bytes {
+/// `fast_store` is disabled by default. Enabling it can bypass this strategy
+/// for heuristically incompressible input, trading output size for speed.
+pub fn deflate_all_split(
+  input : Bytes,
+  level? : Int = 6,
+  fast_store? : Bool = false,
+) -> Bytes {
   let lv = clamp_level(level)
   let w = BitWriter()
   let n = input.length()
-  guard lv != 0 else {
+  guard lv != 0 && !(fast_store && should_fast_store(input)) else {
     write_stored(w, input, 0, n, is_final=true)
     w.flush()
     return Bytes::from_array(w.out)
@@ -279,10 +286,15 @@ pub fn deflate_all_split(input : Bytes, level? : Int = 6) -> Bytes {
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
-  let finder = MatchFinder()
+  let block_size = if lv == 6 { 65535 } else { DEFLATE_BLOCK_SIZE }
+  // At level 6, use the same outer boundaries as the ordinary encoder.
+  // Otherwise a 65536-byte master chunk can add a tiny extra stored block
+  // compared with its 65535-byte baseline, invalidating the cost comparison.
+  let master_size = if lv == 6 { block_size } else { SPLIT_MASTER_CHUNK }
+  let finder = MatchFinder(input_size=n)
   let mut pos = 0
   for ;; {
-    let target = (pos + SPLIT_MASTER_CHUNK).min(n)
+    let target = (pos + master_size).min(n)
     let tokens : Array[Int] = []
     let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
     let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
@@ -295,7 +307,7 @@ pub fn deflate_all_split(input : Bytes, level? : Int = 6) -> Bytes {
     // never regresses the fixed-cadence ratio (libdeflate-style arbitration).
     // This must run even when `split_cuts` is empty: a single undivided block
     // can still lose to the fixed cadence when the chunk drifts slowly.
-    let fixed_cuts = fixed_cadence_cuts(tokens, all_pos, pos)
+    let fixed_cuts = fixed_cadence_cuts(tokens, all_pos, pos, block_size)
     let cuts = if partition_cost(tokens, all_pos, split_cuts) <=
       partition_cost(tokens, all_pos, fixed_cuts) {
       split_cuts

@@ -613,6 +613,7 @@ fn prepare_archive(
   order : FixedArray[Int],
   preserve : Bool,
   level : Int,
+  fast_store : Bool,
 ) -> Array[EntryPlan] raise ZipError {
   let plans : Array[EntryPlan] = []
   let mut compressor : @flate.Compressor? = None
@@ -643,7 +644,7 @@ fn prepare_archive(
       Store => { compressed_size: entry.data.length(), compressed: None, }
       Deflate => {
         let codec = compressor.unwrap_or_else(() => {
-          let codec = @flate.Compressor(level~)
+          let codec = @flate.Compressor(level~, fast_store~)
           compressor = Some(codec)
           codec
         })
@@ -802,6 +803,7 @@ fn write_impl(
   preserve : Bool,
   level : Int,
   max_output : Int?,
+  fast_store : Bool,
 ) -> Bytes raise ZipError {
   let order = archive_local_order(archive)
   if preserve &&
@@ -809,7 +811,9 @@ fn write_impl(
     return bytes
   }
   let counting = Output::counting(max_output)
-  let plans = prepare_archive(counting, archive, order, preserve, level)
+  let plans = prepare_archive(
+    counting, archive, order, preserve, level, fast_store,
+  )
   let central_offset = counting.size
   write_directory(counting, archive, order, plans, preserve)
   let central_size = counting.size - central_offset
@@ -860,8 +864,14 @@ fn write_impl(
 /// Serialize `archive` into a ZIP byte stream, encoding every entry fresh
 /// (DEFLATE by default, STORED when the entry says so). `level` 0-9 trades
 /// speed for ratio on the DEFLATE payloads.
-pub fn write(archive : Archive, level? : Int = 6) -> Bytes raise ZipError {
-  write_impl(archive, false, level, None)
+/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
+/// stored blocks when enabled; ZIP methods and preserved records stay intact.
+pub fn write(
+  archive : Archive,
+  level? : Int = 6,
+  fast_store? : Bool = false,
+) -> Bytes raise ZipError {
+  write_impl(archive, false, level, None, fast_store)
 }
 
 ///|
@@ -869,39 +879,48 @@ pub fn write(archive : Archive, level? : Int = 6) -> Bytes raise ZipError {
 /// previous archive and never replaced) byte-for-byte from their retained
 /// source records, so unchanged packages round-trip without loss. Entries
 /// created or replaced in memory are encoded fresh.
+/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
+/// stored blocks when enabled; ZIP methods and preserved records stay intact.
 pub fn write_preserving(
   archive : Archive,
   level? : Int = 6,
+  fast_store? : Bool = false,
 ) -> Bytes raise ZipError {
-  write_impl(archive, true, level, None)
+  write_impl(archive, true, level, None, fast_store)
 }
 
 ///|
 /// Serialize `archive` like `write` while enforcing a hard output ceiling. The
 /// output is sized first, so an over-limit archive raises
 /// `LimitExceeded(OutputBytes, ...)` without materializing a candidate buffer.
+/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
+/// stored blocks when enabled; ZIP methods and preserved records stay intact.
 pub fn write_limited(
   archive : Archive,
   max_output_bytes~ : Int,
   level? : Int = 6,
+  fast_store? : Bool = false,
 ) -> Bytes raise ZipError {
   guard max_output_bytes >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: output limit must be non-negative")
   }
-  write_impl(archive, false, level, Some(max_output_bytes))
+  write_impl(archive, false, level, Some(max_output_bytes), fast_store)
 }
 
 ///|
 /// Serialize `archive` like `write_preserving` while enforcing a hard output
 /// ceiling (sized first, so an over-limit archive raises without materializing
 /// a candidate buffer).
+/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
+/// stored blocks when enabled; ZIP methods and preserved records stay intact.
 pub fn write_preserving_limited(
   archive : Archive,
   max_output_bytes~ : Int,
   level? : Int = 6,
+  fast_store? : Bool = false,
 ) -> Bytes raise ZipError {
   guard max_output_bytes >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: output limit must be non-negative")
   }
-  write_impl(archive, true, level, Some(max_output_bytes))
+  write_impl(archive, true, level, Some(max_output_bytes), fast_store)
 }

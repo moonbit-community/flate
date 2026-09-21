@@ -12,3 +12,6 @@ bisect.coverage
 *~
 .#*
 \#*#
+
+# Local-only ZIP profiling source and package configuration
+/benchmark/local_zip_profile/

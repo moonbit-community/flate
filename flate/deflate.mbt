@@ -51,18 +51,22 @@ pub struct Deflater {
   priv mut end_requested : Bool // sticky until reset; no later input is accepted
   priv mut step_consumed : Int // input accepted by the latest successful step
   priv mut step_produced : Int // output written by the latest successful step
+  priv fast_store : Bool
   priv level : Int // compression level 0-9 (0 = stored only)
   priv cfg : LevelConfig // match-search tuning for `level`
 }
 
 ///|
 /// Create a fresh compressor. `level` 0-9 (clamped) trades speed for ratio
-/// with zlib-equivalent tuning; 0 emits stored blocks only, 6 is the default.
+/// with level-specific tuning; 0 emits stored blocks only, 6 is the default.
 /// `dictionary`, when supplied, preloads the match window with its last 32 KB;
-/// the decoder must use the same preset dictionary.
+/// the decoder must use the same preset dictionary. Optional `fast_store`
+/// samples each block and may skip compression; it is off by default and
+/// may increase output size, including when a dictionary could help.
 pub fn Deflater::Deflater(
   level? : Int = 6,
   dictionary? : BytesView,
+  fast_store? : Bool = false,
 ) -> Deflater {
   let lv = clamp_level(level)
   let deflater = {
@@ -81,6 +85,7 @@ pub fn Deflater::Deflater(
     step_consumed: 0,
     step_produced: 0,
     level: lv,
+    fast_store,
     cfg: level_configs[lv],
   }
   if dictionary is Some(dict) {
@@ -103,21 +108,21 @@ fn Deflater::preload_dictionary(
   for i in 0..<self.pending_end {
     insert_window_pos(self.pending, self.finder, i, self.pending_end)
   }
-  self.hashed_through = (self.pending_end - 2).max(0)
+  self.hashed_through = (self.pending_end - 3).max(0)
   self.parse_pos = self.pending_end
 }
 
 ///|
 /// Reset to the start of a fresh DEFLATE stream, keeping the compression
-/// level and reusing allocations across many streams (e.g. ZIP entries).
+/// level and `fast_store` policy, reusing allocations across streams (e.g. ZIP entries).
 /// With no `dictionary`, the history is cleared. Supplying one immediately
 /// preloads its last 32 KB for the new stream; the decoder must use the same
 /// preset dictionary.
 pub fn Deflater::reset(self : Deflater, dictionary? : BytesView) -> Unit {
+  self.finder.reset_stream(self.pending_end)
   self.parse_pos = 0
   self.pending_end = 0
   self.hashed_through = 0
-  self.finder.reset()
   self.w.out.clear()
   self.w.bitbuf = 0
   self.w.bit_count = 0

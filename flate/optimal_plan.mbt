@@ -329,7 +329,16 @@ fn emit_optimal_chunk(
 /// tokens (blocksplittinglast). Tens to hundreds of times slower than
 /// `deflate_all` — for compress-once, serve-forever artifacts.  `iterations` is the squeeze count
 /// per block (zopfli's default is 15).
-pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
+/// `fast_store` is disabled by default. Enabling it can bypass this strategy
+/// for heuristically incompressible input, trading output size for speed.
+pub fn deflate_all_optimal(
+  input : Bytes,
+  iterations? : Int = 15,
+  fast_store? : Bool = false,
+) -> Bytes {
+  guard !fast_store || !should_fast_store(input) else {
+    return deflate_all(input, level=0)
+  }
   let iters = iterations.max(1)
   let w = BitWriter()
   let n = input.length()
@@ -339,7 +348,7 @@ pub fn deflate_all_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
     return Bytes::from_array(w.out)
   }
   let mut pos = 0
-  let finder = MatchFinder()
+  let finder = MatchFinder(input_size=n)
   for ;; {
     let target = (pos + OPTIMAL_MASTER_BLOCK).min(n)
     let chunk = optimal_parse_chunk(input, finder, pos, target, iters)

@@ -100,8 +100,14 @@ fn zlib_frame(input : Bytes, deflated : Bytes) -> Bytes {
 ///|
 /// Compress `input` into the zlib format. `level` 0-9 (clamped) trades speed
 /// for ratio; 0 = stored only, 6 = default.
-pub fn zlib_compress(input : Bytes, level? : Int = 6) -> Bytes {
-  zlib_frame(input, @flate.deflate_all(input, level~))
+/// Optional `fast_store` is off by default; sampled inputs may use stored
+/// DEFLATE blocks, sacrificing compression ratio for speed.
+pub fn zlib_compress(
+  input : Bytes,
+  level? : Int = 6,
+  fast_store? : Bool = false,
+) -> Bytes {
+  zlib_frame(input, @flate.deflate_all(input, level~, fast_store~))
 }
 
 ///|
@@ -109,8 +115,14 @@ pub fn zlib_compress(input : Bytes, level? : Int = 6) -> Bytes {
 /// far slower (offline, whole input in memory) for a few percent smaller
 /// output. For compress-once, serve-forever artifacts (e.g. a PNG's zlib
 /// stream). `iterations` is the squeeze count per block (zopfli's default 15).
-pub fn zlib_compress_optimal(input : Bytes, iterations? : Int = 15) -> Bytes {
-  zlib_frame(input, @flate.deflate_all_optimal(input, iterations~))
+/// Optional `fast_store` is off by default; sampled inputs may use stored
+/// DEFLATE blocks, sacrificing compression ratio for speed.
+pub fn zlib_compress_optimal(
+  input : Bytes,
+  iterations? : Int = 15,
+  fast_store? : Bool = false,
+) -> Bytes {
+  zlib_frame(input, @flate.deflate_all_optimal(input, iterations~, fast_store~))
 }
 
 ///|

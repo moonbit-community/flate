@@ -9,9 +9,9 @@ import {
 // Values
 pub const DECODER_INPUT_LIMIT : Int = 65536
 
-pub fn zlib_compress(Bytes, level? : Int) -> Bytes
+pub fn zlib_compress(Bytes, level? : Int, fast_store? : Bool) -> Bytes
 
-pub fn zlib_compress_optimal(Bytes, iterations? : Int) -> Bytes
+pub fn zlib_compress_optimal(Bytes, iterations? : Int, fast_store? : Bool) -> Bytes
 
 pub fn zlib_decompress(Bytes) -> Bytes raise ZlibError
 
@@ -34,7 +34,7 @@ pub fn Decoder::unused_input(Self) -> Bytes
 pub struct Encoder {
   // private fields
 }
-pub fn Encoder::Encoder(level? : Int, dictionary? : Bytes) -> Self
+pub fn Encoder::Encoder(level? : Int, dictionary? : Bytes, fast_store? : Bool) -> Self
 pub fn Encoder::is_finished(Self) -> Bool
 pub fn Encoder::last_consumed(Self) -> Int
 pub fn Encoder::last_produced(Self) -> Int

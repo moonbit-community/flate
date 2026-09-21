@@ -28,6 +28,7 @@ priv struct PendingEntry {
 pub struct Writer {
   priv sink : (BytesView) -> Unit raise
   priv level : Int
+  priv fast_store : Bool
   priv mut mode : WriterMode
   priv mut offset : UInt64
   priv mut directory : Array[Bytes]
@@ -40,13 +41,18 @@ pub struct Writer {
 ///|
 /// Create a ZIP writer. The sink supplies file/socket I/O or collects chunks;
 /// this package itself performs no I/O. Calling `finish` writes the directory.
+/// Optional `fast_store` applies to Deflate entries: whole-file detection for
+/// `add`, per-block detection for chunked writes. It is off by default and may
+/// increase output size. ZIP entry methods are unchanged.
 pub fn Writer::Writer(
   sink : (BytesView) -> Unit raise,
   level? : Int = 6,
+  fast_store? : Bool = false,
 ) -> Writer {
   {
     sink,
     level,
+    fast_store,
     mode: Ready,
     offset: 0UL,
     directory: [],
@@ -246,7 +252,10 @@ pub fn Writer::add(
     Store => data
     Deflate => {
       let compressor = self.compressor.unwrap_or_else(() => {
-        let codec = @flate.Compressor(level=self.level)
+        let codec = @flate.Compressor(
+          level=self.level,
+          fast_store=self.fast_store,
+        )
         self.compressor = Some(codec)
         codec
       })
@@ -291,7 +300,9 @@ pub fn Writer::begin_entry(
     if self.deflater is Some(deflater) {
       deflater.reset()
     } else {
-      self.deflater = Some(@flate.Deflater(level=self.level))
+      self.deflater = Some(
+        @flate.Deflater(level=self.level, fast_store=self.fast_store),
+      )
       self.scratch = FixedArray::make(65536, b'\x00')
     }
   }

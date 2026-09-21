@@ -26,15 +26,15 @@ pub const OPTIMAL_MASTER_BLOCK : Int = 262144
 
 pub const WINDOW_SIZE : Int = 32768
 
-pub fn deflate_all(Bytes, level? : Int) -> Bytes
+pub fn deflate_all(Bytes, level? : Int, fast_store? : Bool) -> Bytes
 
-pub fn deflate_all_optimal(Bytes, iterations? : Int) -> Bytes
+pub fn deflate_all_optimal(Bytes, iterations? : Int, fast_store? : Bool) -> Bytes
 
-pub fn deflate_all_split(Bytes, level? : Int) -> Bytes
+pub fn deflate_all_split(Bytes, level? : Int, fast_store? : Bool) -> Bytes
 
 pub fn deflate_bound(Int) -> Int
 
-pub fn deflate_into(Bytes, FixedArray[Byte], level? : Int) -> Int?
+pub fn deflate_into(Bytes, FixedArray[Byte], level? : Int, fast_store? : Bool) -> Int?
 
 pub fn inflate_all(Bytes, cancelled? : () -> Bool) -> Bytes raise InflateError
 
@@ -53,7 +53,7 @@ pub suberror InflateError {
 pub struct Compressor {
   // private fields
 }
-pub fn Compressor::Compressor(level? : Int) -> Self
+pub fn Compressor::Compressor(level? : Int, fast_store? : Bool) -> Self
 pub fn Compressor::compress(Self, Bytes) -> Bytes
 pub fn Compressor::compress_into(Self, Bytes, FixedArray[Byte]) -> Int?
 
@@ -75,7 +75,7 @@ pub fn DeflateAction::to_repr(Self) -> @debug.Repr
 pub struct Deflater {
   // private fields
 }
-pub fn Deflater::Deflater(level? : Int, dictionary? : BytesView) -> Self
+pub fn Deflater::Deflater(level? : Int, dictionary? : BytesView, fast_store? : Bool) -> Self
 pub fn Deflater::is_finished(Self) -> Bool
 pub fn Deflater::last_consumed(Self) -> Int
 pub fn Deflater::last_produced(Self) -> Int

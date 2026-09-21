@@ -232,8 +232,8 @@ ENCODE: bytes → raw DEFLATE
  deflate_all /    Deflater::step             deflate_all_split(input)   deflate_all_optimal(input)
  Compressor::      streaming, suspendable;    one-shot, adaptive         one-shot, offline
  compress_into     sync flush, preset dict    block splitting            (zopfli-style)
- one-shot, 16 KB
-  blocks
+ one-shot, up to
+  64 KB blocks
         │              │                           │                        │
         └──────┬───────┘                           │                        │
                ▼                                   ▼                        ▼
@@ -241,10 +241,10 @@ ENCODE: bytes → raw DEFLATE
  │ lz77.mbt                 │    │ split_plan.mbt            │  │ optimal_parse.mbt          │
  │ greedy/lazy hash chains  │    │ observation-divergence    │  │ squeeze: iterated          │
  │ (levels 1-9; 0 = stored) │    │ split, arbitrated vs      │  │ cost-optimal shortest path │
- ├─ block driver ───────────┤    │ the 16 KB cadence         │  ├─ planner ──────────────────┤
+ ├─ block driver ───────────┤    │ the ordinary block size   │  ├─ planner ──────────────────┤
  │ block_planner.mbt (strm) │    └────────────┬──────────────┘  │ optimal_plan.mbt           │
  │ or deflate_all.mbt inline│                 │                 │ content-driven splitting   │
- │ both: 16 KB blocks       │                 │                 │ (FindMinimum + resplit)    │
+ │ streaming: 16 KB blocks  │                 │                 │ (FindMinimum + resplit)    │
  └────────────┬─────────────┘    └─────────────┬──────────────┘
               └────────────┬───────────────────┘
                            ▼
@@ -304,14 +304,52 @@ costs. Both decoders call the same pure RFC validation rules, and a deterministi
 differential-fuzz suite checks them across randomized chunk/output schedules,
 truncations, and bit flips.
 
+## Optional fast stored blocks
+
+`fast_store=true` opts into a heuristic speed/ratio trade-off. It samples byte
+variety, frequency skew and local repetition; small inputs also get a periodicity
+check. Inputs below 1 KiB skip the classifier. A candidate judged unlikely to compress is emitted as DEFLATE stored
+blocks without match search or Huffman construction. The default is `false`:
+existing calls retain their normal compression behavior.
+
+```moonbit nocheck
+///|
+let codec = @flate.Compressor(level=6, fast_store=true)
+
+///|
+let raw = @flate.deflate_all(input, fast_store=true)
+
+///|
+let stream = @flate.Deflater(level=6, fast_store=true)
+
+///|
+let archive_bytes = @zip.write(archive, fast_store=true)
+```
+
+The option is also available on `deflate_into`, split/optimal convenience APIs,
+gzip/zlib compression functions and streaming encoders, all ZIP serialization
+functions, and `zip.Writer`. Whole-buffer APIs classify the entire input;
+streaming encoders decide per block and retain stored bytes as match history.
+ZIP entries declared `Deflate` remain method 8; this option selects stored blocks
+inside DEFLATE, rather than changing the entry to ZIP method 0. Preserved ZIP
+records remain byte-for-byte unchanged.
+
+This is **not a proof of incompressibility**. Long repeated patterns or useful
+dictionary matches can be missed, potentially making output much larger. Enable
+it only when that compression-ratio trade-off is acceptable. Decoding remains
+lossless, and the normal output bounds and output limits still apply.
+
 ## Effort tiers
 
-All standard DEFLATE on the wire. Levels 0-9 (zlib's tuning table) on
-`deflate_all` / `Deflater`. `deflate_all_split` is a one-shot mid-tier that
+All standard DEFLATE on the wire. Levels 0-9 are available on
+`deflate_all` / `Deflater`. The default level 6 uses distance-aware lazy
+matching and a sampled minimum match length; the other levels retain their
+zlib-derived tuning. Whole-buffer level 6 uses 65,535-byte block targets,
+while streaming keeps its bounded 16 KiB input blocks. `deflate_all_split` is a one-shot mid-tier that
 tokenizes each large window once with the full 32 KB history and cuts blocks
 where the literal/match observation distribution drifts (libdeflate's
 observation-divergence splitter, `split_plan.mbt`), arbitrating each chunk
-against the fixed 16 KB cadence by exact cost so it is never larger — typically
+against the ordinary block cadence by exact cost so it is never larger — typically
 several percent smaller on prose, code, and repetitive data. `deflate_all_optimal`
 adds zopfli-style iterated optimal parsing (`optimal_parse.mbt`) plus
 content-driven block splitting (`optimal_plan.mbt`) — drop-in replacements for

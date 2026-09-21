@@ -233,3 +233,42 @@ test "optimal planner may prefer its second splitting pass" {
   let compressed = deflate_all_optimal(source, iterations=2)
   assert_eq(inflate_all(compressed), source)
 }
+
+///|
+test "split planner cuts and resets observations across literal-class changes" {
+  // Exercise planner behavior independently of a particular matchfinder's
+  // token choices: three long literal regions have sharply different classes.
+  let tokens : Array[Int] = []
+  for literal in [97, 98, 97] {
+    for _ in 0..<12000 {
+      tokens.push(literal)
+    }
+  }
+  let cuts = choose_splits(tokens)
+  @test.assert_eq(cuts.length() >= 2, true)
+  let data = Bytes::makei(tokens.length(), i => tokens[i].to_byte())
+  let writer = BitWriter()
+  cuts.push(tokens.length())
+  let mut start = 0
+  for end in cuts {
+    @test.assert_eq(end > start && end <= tokens.length(), true)
+    let literal_freq = FixedArray::make(MAX_NUM_LIT, 0)
+    let distance_freq = FixedArray::make(MAX_NUM_DIST, 0)
+    for i in start..<end {
+      literal_freq[tokens[i]] += 1
+    }
+    emit_block(
+      writer,
+      data,
+      start,
+      end,
+      tokens[start:end],
+      literal_freq,
+      distance_freq,
+      is_final=end == tokens.length(),
+    )
+    start = end
+  }
+  writer.flush()
+  @test.assert_eq(inflate_all(Bytes::from_array(writer.out)), data)
+}

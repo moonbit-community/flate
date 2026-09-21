@@ -1,6 +1,6 @@
 // LZ77 parsing stage of the encode pipeline: bytes in, tokens (literals and
 // length/distance matches) plus symbol frequencies out. In modern terms,
-// `tokenize` bundles the match finder (3-byte hash chains), the parsing
+// `tokenize` bundles the match finder (3-byte heads and 4-byte hash chains), the parsing
 // policy (greedy or lazy, tuned per compression level), and the symbol tally
 // (frequency tables, already in Huffman-symbol space).
 //
@@ -27,9 +27,9 @@ const STREAM_RING_MASK : Int = STREAM_RING_SIZE - 1
 const STREAM_RING_STORAGE_SIZE : Int = STREAM_RING_SIZE * 2
 
 ///|
-/// Per-level match-search tuning. The good/lazy/nice/chain values are adopted
-/// verbatim from zlib's `configuration_table` (its most field-tested knob
-/// set); levels 1-3 are zlib's non-lazy "fast" strategy, expressed here as
+/// Per-level baseline search tuning, adopted from zlib's configuration table.
+/// The default level uses the distance-aware parser below; its initial and
+/// lookahead search budgets are separate. Levels 1-3 are greedy, expressed as
 /// `max_lazy = 0`. Level 0 (stored only) is special-cased in the block
 /// planner and never searches.
 #valtype
@@ -38,7 +38,7 @@ priv struct LevelConfig {
   max_lazy : Int // 0 = greedy (commit immediately); else defer while best < this
   nice_length : Int // stop searching outright at this match length
   max_chain : Int // candidate positions examined per search
-}
+} derive(Eq)
 
 ///|
 let level_configs : FixedArray[LevelConfig] = [
@@ -63,64 +63,193 @@ fn hash3(data : Bytes, i : Int) -> Int {
 }
 
 ///|
-fn hash3_window(data : FixedArray[Byte], i : Int) -> Int {
+fn hash3_window(data : FixedArray[Byte], i : Int, shift? : Int = 9) -> Int {
   let offset = i & STREAM_RING_MASK
-  let a = data[offset].to_int()
-  let b = data[offset + 1].to_int()
-  let c = data[offset + 2].to_int()
-  (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
+  let triple = (data[offset].to_int() |
+  (data[offset + 1].to_int() << 8) |
+  (data[offset + 2].to_int() << 16)).reinterpret_as_uint()
+  short_hash_product(triple * 0x1E35A7BDU, shift~)
 }
 
 ///|
-// `head` records the most recent absolute position for each hash, while the
-// fixed 32 KiB `prev` ring links to the next older one. A candidate is valid
-// only while it remains within the DEFLATE window, so overwriting its slot on
-// the next lap cannot hide a valid match.
+// The fourth input byte contributes only above bit 23 of the wrapping
+// product. Its lower 24 bits therefore hash the three-byte prefix too.
+#inline
+fn short_hash_product(product : UInt, shift? : Int = 9) -> Int {
+  ((product & 0xFFFFFF) >> shift).reinterpret_as_int()
+}
+
+///|
+fn short_hash3(data : Bytes, position : Int, shift? : Int = 9) -> Int {
+  let triple = (data[position].to_int() |
+  (data[position + 1].to_int() << 8) |
+  (data[position + 2].to_int() << 16)).reinterpret_as_uint()
+  short_hash_product(triple * 0x1E35A7BDU, shift~)
+}
+
+///|
+const LONG_HASH_BITS : Int = 16
+
+///|
+#inline
+fn long_hash_product(product : UInt, shift? : Int = 16) -> Int {
+  (product >> shift).reinterpret_as_int()
+}
+
+///|
+#inline
+fn read_match_word(data : Bytes, position : Int) -> UInt {
+  // SAFETY: insertion proves four bytes remain. Search clamps probe below
+  // limit <= n - i and only visits earlier candidates, so prefix and suffix
+  // words both stay inside the input, including its final four-byte tail.
+  data.unsafe_read_uint32_le(position)
+}
+
+///|
+#cfg(not(any(target="native", target="wasm")))
+#inline
+fn read_window_match_word(data : FixedArray[Byte], position : Int) -> UInt {
+  let offset = position & STREAM_RING_MASK
+  (data[offset].to_int() |
+  (data[offset + 1].to_int() << 8) |
+  (data[offset + 2].to_int() << 16) |
+  (data[offset + 3].to_int() << 24)).reinterpret_as_uint()
+}
+
+///|
+// The mirrored byte array and Bytes use the same backing layout on these
+// backends. This borrowed view never escapes the immediate read below.
+#cfg(any(target="native", target="wasm"))
+fn match_window_as_bytes(data : FixedArray[Byte]) -> Bytes = "%identity"
+
+///|
+#cfg(any(target="native", target="wasm"))
+#inline
+fn read_window_match_word(data : FixedArray[Byte], position : Int) -> UInt {
+  // SAFETY: masking selects the first half of the mirrored ring, leaving
+  // at least four bytes of storage even when the read crosses the wrap.
+  match_window_as_bytes(data).unsafe_read_uint32_le(position & STREAM_RING_MASK)
+}
+
+///|
+// As in libdeflate's hc_matchfinder, short matches use a single recent
+// 3-byte candidate; the chain is reserved for matches of at least 4 bytes.
+// Heads contain stream-stamped positions; predecessors remain stream-relative.
+// The predecessor ring stores saturated 16-bit backward distances across the
+// full 32 KiB window. Distances survive stream rebasing without adjustment.
 priv struct MatchFinder {
-  head : FixedArray[Int]
-  prev : FixedArray[Int]
+  mut min_match_length : Int
+  mut position_base : Int
+  mut next_base : Int
+  mut short_shift : Int
+  mut long_shift : Int
+  mut short_head : FixedArray[Int]
+  mut head : FixedArray[Int]
+  prev : FixedArray[Byte]
 }
 
 ///|
-fn MatchFinder::MatchFinder() -> MatchFinder {
+fn MatchFinder::MatchFinder(input_size? : Int = WINDOW_SIZE) -> MatchFinder {
+  let short_size = match_table_capacity(
+    input_size.min(16384) * 2,
+    1 << HASH_BITS,
+  )
+  let long_size = match_table_capacity(
+    input_size.min(16384) * 4,
+    1 << LONG_HASH_BITS,
+  )
   {
-    head: FixedArray::make(1 << HASH_BITS, -1),
-    prev: FixedArray::make(WINDOW_SIZE, -1),
+    min_match_length: 0,
+    position_base: 0,
+    next_base: 0,
+    short_shift: 24 - short_size.ctz(),
+    long_shift: 32 - long_size.ctz(),
+    short_head: FixedArray::make(short_size, -1),
+    head: FixedArray::make(long_size, -1),
+    prev: FixedArray::make(WINDOW_SIZE * 2 + 2, b'\xFF'),
   }
+}
+
+///|
+fn match_table_capacity(requested : Int, maximum : Int) -> Int {
+  for capacity = 256 {
+    guard capacity < requested && capacity < maximum else { break capacity }
+    continue capacity * 2
+  }
+}
+
+///|
+// Logical size depends only on this input, even when larger backing tables
+// are retained from an earlier stream. Cold and reused codecs choose the same
+// candidates; allocations grow only when a larger input first needs them.
+fn MatchFinder::size_for_input(self : MatchFinder, input_size : Int) -> Unit {
+  let short_size = match_table_capacity(
+    input_size.min(16384) * 2,
+    1 << HASH_BITS,
+  )
+  let long_size = match_table_capacity(
+    input_size.min(16384) * 4,
+    1 << LONG_HASH_BITS,
+  )
+  if self.short_head.length() < short_size {
+    self.short_head = FixedArray::make(short_size, -1)
+  }
+  if self.head.length() < long_size {
+    self.head = FixedArray::make(long_size, -1)
+  }
+  self.short_shift = 24 - short_size.ctz()
+  self.long_shift = 32 - long_size.ctz()
 }
 
 ///|
 fn MatchFinder::reset(self : MatchFinder) -> Unit {
+  self.min_match_length = 0
+  self.position_base = 0
+  self.next_base = 0
+  self.short_head.fill(-1)
   self.head.fill(-1)
-  self.prev.fill(-1)
+  self.prev.fill(b'\xFF')
 }
 
 ///|
-/// Whole-buffer streams only query hashes of triples present in their input.
-/// For tiny inputs, invalidate just those heads instead of clearing 32K slots.
-/// Old predecessor slots are unreachable: a head starts at -1, and each insert
-/// overwrites its predecessor before publishing the new head. Larger inputs
-/// use one bulk head clear, avoiding an extra pass over the whole input.
-fn MatchFinder::reset_for_input(self : MatchFinder, input : Bytes) -> Unit {
-  guard input.length() < 1024 else {
-    self.head.fill(-1)
+// A streaming encoder knows the previous stream's accepted span at reset.
+// Keep a half-GiB base ceiling: the encoder rebases its relative positions
+// after one GiB, leaving ample Int headroom for a pending ring and lookahead.
+fn MatchFinder::reset_stream(self : MatchFinder, previous_size : Int) -> Unit {
+  self.min_match_length = 0
+  let next = self.position_base + previous_size
+  guard next < 1 << 29 else {
+    self.reset()
     return
   }
-  for index in 0..<(input.length() - 2).max(0) {
-    self.head[hash3(input, index)] = -1
+  self.position_base = next
+  self.next_base = next + (1 << 30) + STREAM_RING_SIZE
+}
+
+///|
+// Head positions carry a monotonically increasing stream base. Old heads
+// decode to negative positions and are rejected without clearing either table.
+// Predecessor distances are overwritten before their head becomes
+// reachable. Reset before Int overflow; empty inputs cannot publish a head.
+fn MatchFinder::reset_for_input(self : MatchFinder, input : Bytes) -> Unit {
+  self.min_match_length = 0
+  self.size_for_input(input.length())
+  if input.length() > 2147483647 - self.next_base {
+    self.short_head.fill(-1)
+    self.head.fill(-1)
+    self.next_base = 0
   }
+  self.position_base = self.next_base
+  self.next_base += input.length()
 }
 
 ///|
 fn MatchFinder::rebase(self : MatchFinder, offset : Int) -> Unit {
-  for i in 0..<self.head.length() {
-    if self.head[i] >= 0 {
-      self.head[i] = self.head[i] - offset
-    }
-  }
-  for i in 0..<self.prev.length() {
-    if self.prev[i] >= 0 {
-      self.prev[i] = self.prev[i] - offset
+  for table in [self.short_head, self.head] {
+    for i in 0..<table.length() {
+      if table[i] >= 0 {
+        table[i] = table[i] - offset
+      }
     }
   }
 }
@@ -243,13 +372,8 @@ fn match_candidate_can_beat(
 }
 
 ///|
-/// Longest back-reference for position `i` that beats `base`, found by walking
-/// the hash chain (does not insert `i`). Returns `length << 16 | distance`; a
-/// zero distance means nothing longer than `base` was found. Both fields fit
-/// exactly within their packed ranges (length <= 258, distance <= 32768), and
-/// the scalar return avoids allocating a tuple at every searched position.
-/// zlib heuristics: the chain budget shrinks 4x once `base` is already a good
-/// match, and the search stops outright at `nice_length`.
+/// Find a recent length-3 match, then search the independent 4-byte chain.
+/// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
 fn find_match(
   data : Bytes,
   finder : MatchFinder,
@@ -258,41 +382,59 @@ fn find_match(
   base : Int,
   cfg : LevelConfig,
 ) -> Int {
-  let h = hash3(data, i)
-  let mut cand = finder.head[h]
-  let mut best_len = base
-  let mut best_dist = 0
   let limit = (n - i).min(258)
   guard base < limit else { return base << 16 }
-  let mut budget = cfg.max_chain
-  if base >= cfg.good_length {
-    budget = budget >> 2
+  let mut budget = if base >= cfg.good_length {
+    cfg.max_chain >> 2
+  } else {
+    cfg.max_chain
   }
+  guard budget > 0 else { return base << 16 }
   let cutoff = (i - WINDOW_SIZE).max(0)
-  guard cand >= cutoff && budget > 0 else { return base << 16 }
-  let prefix = data[i].to_int() | (data[i + 1].to_int() << 8)
+  let position = i
+  let mut best_len = base
+  let mut best_dist = 0
+  guard limit >= 4 else {
+    let short = finder.short_head[short_hash3(data, i, shift=finder.short_shift)] -
+      finder.position_base
+    if base < 3 && short >= cutoff {
+      let candidate = short
+      if data[candidate] == data[position] &&
+        data[candidate + 1] == data[position + 1] &&
+        data[candidate + 2] == data[position + 2] {
+        return (3 << 16) | (i - short)
+      }
+    }
+    return base << 16
+  }
+  let prefix = read_match_word(data, i)
+  let product = prefix * 0x1E35A7BDU
+  if base < 3 {
+    let short_hash = short_hash_product(product, shift=finder.short_shift)
+    let short = finder.short_head[short_hash] - finder.position_base
+    // Every long-chain insertion also updates this short head. If even
+    // the newest short-hash candidate expired, no four-byte match can exist.
+    guard short >= cutoff else { return base << 16 }
+    if (read_match_word(data, short) & 0xFFFFFF) == (prefix & 0xFFFFFF) {
+      best_len = 3
+      best_dist = i - short
+    }
+  }
+  let mut cand = finder.head[long_hash_product(product, shift=finder.long_shift)] -
+    finder.position_base
+  guard cand >= cutoff else { return (best_len << 16) | best_dist }
   let prev = finder.prev
-  // Probe the end first, as in libdeflate's longer-match search. Keep the
-  // current-position bytes in locals and refresh them only after improvement.
-  // With no three-byte match yet, offset 2 checks the same three prefix bytes.
-  // Pack adjacent bytes into 16-bit values to combine equality branches;
-  // ordinary byte indexing keeps the same bounds guarantees on every target.
-  let mut probe = base.max(2)
-  let mut suffix = data[i + probe - 1].to_int() |
-    (data[i + probe].to_int() << 8)
+  let mut probe = best_len.max(3)
+  let mut suffix = read_match_word(data, i + probe - 3)
   let nice_length = cfg.nice_length.min(limit)
-  // Like libdeflate's longest_match, keep rejection in a tight inner loop.
-  // The cutoff folds both sentinel and window checks into one comparison.
   for ;; {
     for ;; {
-      let candidate_suffix = data[cand + probe - 1].to_int() |
-        (data[cand + probe].to_int() << 8)
-      if candidate_suffix == suffix &&
-        (data[cand].to_int() | (data[cand + 1].to_int() << 8)) == prefix {
+      let candidate_suffix = read_match_word(data, cand + probe - 3)
+      if candidate_suffix == suffix && read_match_word(data, cand) == prefix {
         break
       }
-      budget = budget - 1
-      cand = prev[cand & WINDOW_MASK]
+      budget -= 1
+      cand = chain_previous(prev, cand)
       guard budget > 0 && cand >= cutoff else {
         return (best_len << 16) | best_dist
       }
@@ -305,16 +447,18 @@ fn find_match(
         break
       }
       probe = length
-      suffix = data[i + probe - 1].to_int() | (data[i + probe].to_int() << 8)
+      suffix = read_match_word(data, i + probe - 3)
     }
-    budget = budget - 1
-    cand = prev[cand & WINDOW_MASK]
+    budget -= 1
+    cand = chain_previous(prev, cand)
     guard budget > 0 && cand >= cutoff else { break }
   }
   (best_len << 16) | best_dist
 }
 
 ///|
+/// Find a recent length-3 match, then search the independent 4-byte chain.
+/// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
 fn find_window_match(
   data : FixedArray[Byte],
   finder : MatchFinder,
@@ -323,39 +467,64 @@ fn find_window_match(
   base : Int,
   cfg : LevelConfig,
 ) -> Int {
-  let h = hash3_window(data, i)
-  let mut cand = finder.head[h]
-  let mut best_len = base
-  let mut best_dist = 0
   let limit = (end - i).min(258)
   guard base < limit else { return base << 16 }
-  let mut budget = cfg.max_chain
-  if base >= cfg.good_length {
-    budget = budget >> 2
+  let mut budget = if base >= cfg.good_length {
+    cfg.max_chain >> 2
+  } else {
+    cfg.max_chain
   }
+  guard budget > 0 else { return base << 16 }
   let cutoff = (i - WINDOW_SIZE).max(0)
-  guard cand >= cutoff && budget > 0 else { return base << 16 }
   let position = i & STREAM_RING_MASK
-  let prefix = data[position].to_int() | (data[position + 1].to_int() << 8)
+  let mut best_len = base
+  let mut best_dist = 0
+  guard limit >= 4 else {
+    let short = finder.short_head[hash3_window(
+        data,
+        i,
+        shift=finder.short_shift,
+      )] -
+      finder.position_base
+    if base < 3 && short >= cutoff {
+      let candidate = short & STREAM_RING_MASK
+      if data[candidate] == data[position] &&
+        data[candidate + 1] == data[position + 1] &&
+        data[candidate + 2] == data[position + 2] {
+        return (3 << 16) | (i - short)
+      }
+    }
+    return base << 16
+  }
+  let prefix = read_window_match_word(data, i)
+  let product = prefix * 0x1E35A7BDU
+  if base < 3 {
+    let short_hash = short_hash_product(product, shift=finder.short_shift)
+    let short = finder.short_head[short_hash] - finder.position_base
+    // Every long-chain insertion also updates this short head. If even
+    // the newest short-hash candidate expired, no four-byte match can exist.
+    guard short >= cutoff else { return base << 16 }
+    if (read_window_match_word(data, short) & 0xFFFFFF) == (prefix & 0xFFFFFF) {
+      best_len = 3
+      best_dist = i - short
+    }
+  }
+  let mut cand = finder.head[long_hash_product(product, shift=finder.long_shift)] -
+    finder.position_base
+  guard cand >= cutoff else { return (best_len << 16) | best_dist }
   let prev = finder.prev
-  let mut probe = base.max(2)
-  let mut suffix = data[position + probe - 1].to_int() |
-    (data[position + probe].to_int() << 8)
+  let mut probe = best_len.max(3)
+  let mut suffix = read_window_match_word(data, i + probe - 3)
   let nice_length = cfg.nice_length.min(limit)
-  // Like libdeflate's longest_match, keep rejection in a tight inner loop.
-  // The cutoff folds both sentinel and window checks into one comparison.
   for ;; {
     for ;; {
-      let candidate = cand & STREAM_RING_MASK
-      let candidate_suffix = data[candidate + probe - 1].to_int() |
-        (data[candidate + probe].to_int() << 8)
+      let candidate_suffix = read_window_match_word(data, cand + probe - 3)
       if candidate_suffix == suffix &&
-        (data[candidate].to_int() | (data[candidate + 1].to_int() << 8)) ==
-        prefix {
+        read_window_match_word(data, cand) == prefix {
         break
       }
-      budget = budget - 1
-      cand = prev[cand & WINDOW_MASK]
+      budget -= 1
+      cand = chain_previous(prev, cand)
       guard budget > 0 && cand >= cutoff else {
         return (best_len << 16) | best_dist
       }
@@ -368,44 +537,33 @@ fn find_window_match(
         break
       }
       probe = length
-      suffix = data[position + probe - 1].to_int() |
-        (data[position + probe].to_int() << 8)
+      suffix = read_window_match_word(data, i + probe - 3)
     }
-    budget = budget - 1
-    cand = prev[cand & WINDOW_MASK]
+    budget -= 1
+    cand = chain_previous(prev, cand)
     guard budget > 0 && cand >= cutoff else { break }
   }
   (best_len << 16) | best_dist
 }
 
 ///|
-/// Record position `i` in the hash chain so later positions can match it.
 fn insert_pos(data : Bytes, finder : MatchFinder, i : Int, n : Int) -> Unit {
-  if i + 3 <= n {
-    let h = hash3(data, i)
-    finder.prev[i & WINDOW_MASK] = finder.head[h]
-    finder.head[h] = i
+  if n - i >= 4 {
+    let product = read_match_word(data, i) * 0x1E35A7BDU
+    let h = long_hash_product(product, shift=finder.long_shift)
+    let stamped = i + finder.position_base
+    finder.short_head[short_hash_product(product, shift=finder.short_shift)] = stamped
+    set_chain_previous(finder.prev, i, finder.head[h] - finder.position_base)
+    finder.head[h] = stamped
+  } else if n - i >= 3 {
+    finder.short_head[short_hash3(data, i, shift=finder.short_shift)] = i +
+      finder.position_base
   }
 }
 
 ///|
-fn insert_window_pos(
-  data : FixedArray[Byte],
-  finder : MatchFinder,
-  i : Int,
-  end : Int,
-) -> Unit {
-  if i + 3 <= end {
-    let h = hash3_window(data, i)
-    finder.prev[i & WINDOW_MASK] = finder.head[h]
-    finder.head[h] = i
-  }
-}
-
-///|
-/// Batch the interior of a committed match, as in libdeflate's skip_bytes
-/// path. Check the available lookahead once and carry the overlapping bytes
-/// between hashes. Every position is still inserted in the original order.
+// One packed load and multiplication feed both hash tables. The loop proves
+// four available bytes. Masked indices address the private fixed-size tables.
 fn insert_positions(
   data : Bytes,
   finder : MatchFinder,
@@ -415,21 +573,52 @@ fn insert_positions(
 ) -> Unit {
   let end = end.min(available_end - 2)
   guard start < end else { return }
+  let long_end = end.min(available_end - 3)
   let head = finder.head
+  let short_head = finder.short_head
   let prev = finder.prev
-  for position = start, a = data[start].to_int(), b = data[start + 1].to_int() {
-    guard position < end else { break }
-    let c = data[position + 2].to_int()
-    let hash = (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
-    prev[position & WINDOW_MASK] = head[hash]
-    head[hash] = position
-    continue position + 1, b, c
+  let base = finder.position_base
+  let short_shift = finder.short_shift
+  let long_shift = finder.long_shift
+  for position in start..<long_end {
+    let product = read_match_word(data, position) * 0x1E35A7BDU
+    let h = long_hash_product(product, shift=long_shift)
+    let stamped = position + base
+    short_head.unsafe_set(
+      short_hash_product(product, shift=short_shift),
+      stamped,
+    )
+    set_chain_previous(prev, position, head.unsafe_get(h) - base)
+    head.unsafe_set(h, stamped)
+  }
+  if long_end < end {
+    insert_pos(data, finder, long_end, available_end)
   }
 }
 
 ///|
-/// Streaming counterpart: carry bytes across the mirrored ring boundary,
-/// while retaining absolute positions in the hash chains.
+fn insert_window_pos(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  i : Int,
+  n : Int,
+) -> Unit {
+  if n - i >= 4 {
+    let product = read_window_match_word(data, i) * 0x1E35A7BDU
+    let h = long_hash_product(product, shift=finder.long_shift)
+    let stamped = i + finder.position_base
+    finder.short_head[short_hash_product(product, shift=finder.short_shift)] = stamped
+    set_chain_previous(finder.prev, i, finder.head[h] - finder.position_base)
+    finder.head[h] = stamped
+  } else if n - i >= 3 {
+    finder.short_head[hash3_window(data, i, shift=finder.short_shift)] = i +
+      finder.position_base
+  }
+}
+
+///|
+// One packed load and multiplication feed both hash tables. The loop proves
+// four available bytes. Masked indices address the private fixed-size tables.
 fn insert_window_positions(
   data : FixedArray[Byte],
   finder : MatchFinder,
@@ -439,16 +628,26 @@ fn insert_window_positions(
 ) -> Unit {
   let end = end.min(available_end - 2)
   guard start < end else { return }
+  let long_end = end.min(available_end - 3)
   let head = finder.head
+  let short_head = finder.short_head
   let prev = finder.prev
-  let offset = start & STREAM_RING_MASK
-  for position = start, a = data[offset].to_int(), b = data[offset + 1].to_int() {
-    guard position < end else { break }
-    let c = data[(position & STREAM_RING_MASK) + 2].to_int()
-    let hash = (a ^ (b << 5) ^ (c << 10)) & ((1 << HASH_BITS) - 1)
-    prev[position & WINDOW_MASK] = head[hash]
-    head[hash] = position
-    continue position + 1, b, c
+  let base = finder.position_base
+  let short_shift = finder.short_shift
+  let long_shift = finder.long_shift
+  for position in start..<long_end {
+    let product = read_window_match_word(data, position) * 0x1E35A7BDU
+    let h = long_hash_product(product, shift=long_shift)
+    let stamped = position + base
+    short_head.unsafe_set(
+      short_hash_product(product, shift=short_shift),
+      stamped,
+    )
+    set_chain_previous(prev, position, head.unsafe_get(h) - base)
+    head.unsafe_set(h, stamped)
+  }
+  if long_end < end {
+    insert_window_pos(data, finder, long_end, available_end)
   }
 }
 
@@ -484,7 +683,11 @@ fn commit_match(
   ll_freq[257 + len_to_idx[length]] += 1
   d_freq[dist_index(dist)] += 1
   let match_end = start + length
-  insert_positions(data, finder, start + 1, match_end, n)
+  if length >= 32 {
+    insert_matched_positions(data, finder, start + 1, match_end, n)
+  } else {
+    insert_positions(data, finder, start + 1, match_end, n)
+  }
   match_end
 }
 
@@ -505,7 +708,11 @@ fn commit_window_match(
   ll_freq[257 + len_to_idx[length]] += 1
   d_freq[dist_index(dist)] += 1
   let match_end = start + length
-  insert_window_positions(data, finder, start + 1, match_end, end)
+  if length >= 32 {
+    insert_matched_window_positions(data, finder, start + 1, match_end, end)
+  } else {
+    insert_window_positions(data, finder, start + 1, match_end, end)
+  }
   match_end
 }
 
@@ -542,8 +749,26 @@ fn tokenize(
   d_freq : FixedArray[Int],
 ) -> Int {
   let n = data.length()
+  // The default level uses a distance-aware lazy decision. Other levels
+  // retain their existing search policy and budgets.
+  // Tiny blocks have too little evidence for the sampled literal-cost model.
+  let cost_model = cfg == level_configs[6] &&
+    (finder.min_match_length > 0 || n - start >= 1024)
+  if cost_model && finder.min_match_length == 0 && n - start >= 512 {
+    let used = FixedArray::make(256, 0)
+    for j in start..<(start + 4096).min(n) {
+      used[data[j].to_int()] = 1
+    }
+    let mut distinct = 0
+    for j in 0..<256 {
+      distinct += used[j]
+    }
+    finder.min_match_length = minimum_match_length(distinct)
+  }
+  let min_length = if cost_model { finder.min_match_length.max(3) } else { 3 }
+  let max_lazy = if cost_model { 65 } else { cfg.max_lazy }
   // LZ77 with hash chains: head[hash] is the most recent position with a
-  // given 3-byte hash, prev[pos] the next-older. "Lazy" means a match found
+  // given 4-byte hash, prev[pos] the next-older. "Lazy" means a match found
   // at i is held back to see if i+1 starts a longer one.
   let mut i = start
   let mut prev_len = 0
@@ -552,17 +777,43 @@ fn tokenize(
   while i < end {
     // Skip the search when the deferred match is already >= max_lazy: it is
     // good enough to commit without looking for a longer one (zlib).
-    let searching = i + 3 <= n && !(have_prev && prev_len >= cfg.max_lazy)
-    let base = if have_prev { prev_len } else { 0 }
+    let searching = i + 3 <= n && !(have_prev && prev_len >= max_lazy)
+    let base = if have_prev {
+      prev_len - (if cost_model { 1 } else { 0 })
+    } else {
+      min_length - 1
+    }
+    let search_cfg = if cost_model {
+      {
+        good_length: 259,
+        max_lazy: 65,
+        nice_length: 65,
+        max_chain: if have_prev {
+          17
+        } else {
+          35
+        },
+      }
+    } else {
+      cfg
+    }
     let match_info = if searching {
-      find_match(data, finder, i, n, base, cfg)
+      find_match(data, finder, i, n, base, search_cfg)
     } else {
       0
     }
     let cur_len = match_info >> 16
     let cur_dist = match_info & 0xFFFF
     // The deferred match (starting at i-1) wins: emit it.
-    guard !have_prev || cur_dist > 0 else {
+    let prefer_current = cur_dist > 0 &&
+      (
+        !cost_model ||
+        (
+          cur_len >= prev_len &&
+          4 * (cur_len - prev_len) + cur_dist.clz() - prev_dist.clz() > 2
+        )
+      )
+    guard !have_prev || prefer_current else {
       i = commit_match(
         data,
         finder,
@@ -589,7 +840,9 @@ fn tokenize(
       continue
     }
     // No match at i: literal.
-    guard cur_dist > 0 && cur_len >= 3 else {
+    guard cur_dist > 0 &&
+      cur_len >= min_length &&
+      !(cost_model && cur_len == 3 && cur_dist > 8192) else {
       emit_literal(tokens, ll_freq, data[i].to_int())
       i = i + 1
       continue
@@ -639,22 +892,65 @@ fn tokenize_window(
   ll_freq : FixedArray[Int],
   d_freq : FixedArray[Int],
 ) -> Int {
+  // The default level uses a distance-aware lazy decision. Other levels
+  // retain their existing search policy and budgets.
+  let cost_model = cfg == level_configs[6] &&
+    (finder.min_match_length > 0 || available_end - start >= 1024)
+  if cost_model && finder.min_match_length == 0 && available_end - start >= 512 {
+    let used = FixedArray::make(256, 0)
+    for j in start..<(start + 4096).min(available_end) {
+      used[data[j & STREAM_RING_MASK].to_int()] = 1
+    }
+    let mut distinct = 0
+    for j in 0..<256 {
+      distinct += used[j]
+    }
+    finder.min_match_length = minimum_match_length(distinct)
+  }
+  let min_length = if cost_model { finder.min_match_length.max(3) } else { 3 }
+  let max_lazy = if cost_model { 65 } else { cfg.max_lazy }
   let mut i = start
   let mut prev_len = 0
   let mut prev_dist = 0
   let mut have_prev = false
   while i < token_end {
     let searching = i + 3 <= available_end &&
-      !(have_prev && prev_len >= cfg.max_lazy)
-    let base = if have_prev { prev_len } else { 0 }
+      !(have_prev && prev_len >= max_lazy)
+    let base = if have_prev {
+      prev_len - (if cost_model { 1 } else { 0 })
+    } else {
+      min_length - 1
+    }
+    let search_cfg = if cost_model {
+      {
+        good_length: 259,
+        max_lazy: 65,
+        nice_length: 65,
+        max_chain: if have_prev {
+          17
+        } else {
+          35
+        },
+      }
+    } else {
+      cfg
+    }
     let match_info = if searching {
-      find_window_match(data, finder, i, available_end, base, cfg)
+      find_window_match(data, finder, i, available_end, base, search_cfg)
     } else {
       0
     }
     let cur_len = match_info >> 16
     let cur_dist = match_info & 0xFFFF
-    guard !have_prev || cur_dist > 0 else {
+    let prefer_current = cur_dist > 0 &&
+      (
+        !cost_model ||
+        (
+          cur_len >= prev_len &&
+          4 * (cur_len - prev_len) + cur_dist.clz() - prev_dist.clz() > 2
+        )
+      )
+    guard !have_prev || prefer_current else {
       i = commit_window_match(
         data,
         finder,
@@ -678,7 +974,9 @@ fn tokenize_window(
       i = i + 1
       continue
     }
-    guard cur_dist > 0 && cur_len >= 3 else {
+    guard cur_dist > 0 &&
+      cur_len >= min_length &&
+      !(cost_model && cur_len == 3 && cur_dist > 8192) else {
       emit_literal(tokens, ll_freq, data[i & STREAM_RING_MASK].to_int())
       i = i + 1
       continue
@@ -708,4 +1006,125 @@ fn tokenize_window(
     )
   }
   i
+}
+
+///|
+#inline
+fn set_chain_previous(
+  chain : FixedArray[Byte],
+  position : Int,
+  previous : Int,
+) -> Unit {
+  // Every reachable predecessor is older. Saturate expired links to a
+  // distance beyond the window, which also fits in an unsigned 16-bit slot.
+  let delta = (position - previous).min(WINDOW_SIZE + 1)
+  let index = (position & WINDOW_MASK) * 2
+  chain.unsafe_set(index, delta.to_byte())
+  chain.unsafe_set(index + 1, (delta >> 8).to_byte())
+}
+
+///|
+#cfg(any(target="native", target="wasm"))
+#inline
+fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
+  let index = (position & WINDOW_MASK) * 2
+  // The ring has two padding bytes for the final unaligned four-byte load;
+  // only the low halfword belongs to this link.
+  let delta = match_window_as_bytes(chain).unsafe_read_uint32_le(index) & 0xFFFF
+  position - delta.reinterpret_as_int()
+}
+
+///|
+#cfg(not(any(target="native", target="wasm")))
+#inline
+fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
+  let index = (position & WINDOW_MASK) * 2
+  let delta = chain.unsafe_get(index).to_int() |
+    (chain.unsafe_get(index + 1).to_int() << 8)
+  position - delta
+}
+
+///|
+// Each complete four-byte word inside the match already occurs within the
+// live window, so its predecessor distance needs no saturation. The final
+// three positions may cross the match boundary and use general insertion.
+// Callers have already proved a match length of at least 32 bytes.
+fn insert_matched_positions(
+  data : Bytes,
+  finder : MatchFinder,
+  start : Int,
+  end : Int,
+  available_end : Int,
+) -> Unit {
+  let end = end.min(available_end - 2)
+  let long_end = (end - 3).min(available_end - 3)
+  let head = finder.head
+  let short_head = finder.short_head
+  let prev = finder.prev
+  let base = finder.position_base
+  let short_shift = finder.short_shift
+  let long_shift = finder.long_shift
+  for position in start..<long_end {
+    let product = read_match_word(data, position) * 0x1E35A7BDU
+    let h = long_hash_product(product, shift=long_shift)
+    let stamped = position + base
+    short_head.unsafe_set(
+      short_hash_product(product, shift=short_shift),
+      stamped,
+    )
+    let delta = stamped - head.unsafe_get(h)
+    let index = (position & WINDOW_MASK) * 2
+    prev.unsafe_set(index, delta.to_byte())
+    prev.unsafe_set(index + 1, (delta >> 8).to_byte())
+    head.unsafe_set(h, stamped)
+  }
+  insert_positions(data, finder, long_end, end, available_end)
+}
+
+///|
+fn insert_matched_window_positions(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  start : Int,
+  end : Int,
+  available_end : Int,
+) -> Unit {
+  let end = end.min(available_end - 2)
+  let long_end = (end - 3).min(available_end - 3)
+  let head = finder.head
+  let short_head = finder.short_head
+  let prev = finder.prev
+  let base = finder.position_base
+  let short_shift = finder.short_shift
+  let long_shift = finder.long_shift
+  for position in start..<long_end {
+    let product = read_window_match_word(data, position) * 0x1E35A7BDU
+    let h = long_hash_product(product, shift=long_shift)
+    let stamped = position + base
+    short_head.unsafe_set(
+      short_hash_product(product, shift=short_shift),
+      stamped,
+    )
+    let delta = stamped - head.unsafe_get(h)
+    let index = (position & WINDOW_MASK) * 2
+    prev.unsafe_set(index, delta.to_byte())
+    prev.unsafe_set(index + 1, (delta >> 8).to_byte())
+    head.unsafe_set(h, stamped)
+  }
+  insert_window_positions(data, finder, long_end, end, available_end)
+}
+
+///|
+// Fewer distinct literals mean cheaper literal codes, making short matches
+// less attractive. Sample once after at least 512 input bytes are available.
+fn minimum_match_length(distinct : Int) -> Int {
+  match () {
+    _ if distinct >= 80 => 3
+    _ if distinct >= 45 => 4
+    _ if distinct >= 16 => 5
+    _ if distinct >= 10 => 6
+    _ if distinct >= 8 => 7
+    _ if distinct >= 6 => 8
+    _ => 9
+  }
 }

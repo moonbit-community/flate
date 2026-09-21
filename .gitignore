@@ -12,3 +12,9 @@ bisect.coverage
 *~
 .#*
 \#*#
+
+# Local-only ZIP profiling source and package configuration
+/benchmark/local_zip_profile/
+
+# Local analysis reports and supporting evidence (survive moon clean)
+/.local-analysis/

@@ -5,27 +5,16 @@ compares raw DEFLATE with reused codecs and preallocated output on both sides.
 fzip is not included: its public compression API does not provide equivalent
 caller-owned output and reusable workspace.
 
-Latest retained decode change (2026-09-12): fetch the next literal/length
-primary entry before output copying and carry it into the next iteration.
-Only complete nine-bit prefixes are reused; secondary lookup and invalid-code
-handling remain after refill. No additional allocation or output-size assumption.
-The latest three-way rerun (3 serial rounds, >=200 ms, 162 validated samples,
-95.7 seconds) reproduces JSON gains of +13.0% / +14.0% for
-flate/libdeflate-produced fixtures. Libdeflate 1.25 is 1.095× / 1.173× faster
-there. Source-4k improves 8.3% / 7.7%, with libdeflate 1.226× / 1.249× faster.
-There is no universal libdeflate multiplier: on other eligible fixtures it is
-1.058–1.302× faster when it wins, while flate wins some repetitive fixtures.
-The flate-produced large-source fixture spreads 17.1%, so its improvement and
-libdeflate ratio are suppressed; the libdeflate-produced source fixture has a
-stable 1.234× libdeflate advantage. Precompressed libdeflate samples are also
-suppressed for 25.9–38.9% spread. Noisy cases are not no-regression evidence.
-Native debug/release 295 tests and JS/Wasm/Wasm GC 283 each pass, including
-consecutive 48-bit tokens and invalid lookahead after a committed match.
-Source/JSON `moon run --profile` and assembly inspection confirm the changed
-lookup placement; profile symbol shares alone do not measure lookup latency.
-Public APIs are unchanged. Raw samples/hashes:
-`.local/decode-next-primary-20260912/final-three-way-all-3r-200ms-diagnostic.json`
-(SHA-256 `152f2423039ce690b432254babb0a0cd73b4e151abb54ca35dabe484ad54e55b).
+Latest measured revision: **`83b26bb` (2026-09-21)**, including the default
+compression parser, predecessor-table, Huffman and block-size optimizations.
+A fresh **3-round, >=200 ms** quick run covers **23 configurations and
+414 timed samples**, with `fast_store=false`. Both current encoders generated
+fixtures; both decoders and Python zlib validated them. See the
+[MacBook Pro M3 Max results](./results-macbook-pro-m3-max.md) for current
+compression/decompression rates, compressed sizes, paired ratios and noisy rows.
+This replaces the stale overview of the earlier decoder-only studies; it is
+not an isolated before/after measurement. Full local evidence is retained in
+`.local-analysis/bench-20260921-83b26bb/`.
 
 ## Run
 
@@ -41,8 +30,10 @@ python3 benchmark/run.py --corpus /path/to/application-data.bin
 python3 benchmark/run.py --corpus-manifest /path/to/old-run/corpus.json
 ```
 
-Each run builds fresh runners and saves results to a new output directory. Use
-`--output DIR` to choose its location. Timed workloads run sequentially; a run
+Each run builds fresh runners and saves results to a new output directory
+(default: `.local/bench/`). Use `--output .local-analysis/<run-name>` to keep
+reports outside the build cache and separate from the `.local` ZIP input. The
+output directory must not already exist. Timed workloads run sequentially; a run
 takes several minutes.
 
 `--validate-only` builds the actual release runners, exports both producers'

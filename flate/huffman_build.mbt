@@ -31,7 +31,7 @@ fn reverse_bits(number : UInt, bit_length : Int) -> UInt {
 ///|
 /// Number of codes assigned to each bit length (index = length). Requires
 /// `nodes` sorted by ascending frequency, with `n >= 3`.
-fn bit_counts(
+fn bounded_bit_counts(
   nodes : Array[Node],
   n : Int,
   max_bits_in : Int,
@@ -168,4 +168,43 @@ fn gen_huffman(
   })
   let bit_count = bit_counts(nodes, count, max_bits)
   assign_codes(bit_count, nodes, code_len, code_val)
+}
+
+///|
+// Two sorted queues build an unrestricted optimal tree in linear time.
+// Internal nodes are created after their children; walking parents backward
+// then replaces indices with depths. Use the length-limited construction only
+// when a depth exceeds the DEFLATE limit.
+fn bit_counts(nodes : Array[Node], n : Int, max_bits : Int) -> FixedArray[Int] {
+  let parents = FixedArray::make(2 * n - 1, 0)
+  let weights = FixedArray::make(n - 1, 0)
+  let mut leaf = 0
+  let mut branch = 0
+  for built in 0..<(n - 1) {
+    let mut sum = 0
+    for _ in 0..<2 {
+      if leaf < n && (branch == built || nodes[leaf].freq < weights[branch]) {
+        sum += nodes[leaf].freq
+        parents[leaf] = n + built
+        leaf += 1
+      } else {
+        sum += weights[branch]
+        parents[n + branch] = n + built
+        branch += 1
+      }
+    }
+    weights[built] = sum
+  }
+  let counts = FixedArray::make(max_bits + 1, 0)
+  for i = 2 * n - 3; i >= 0; i = i - 1 {
+    let depth = parents[parents[i]] + 1
+    guard depth <= max_bits else {
+      return bounded_bit_counts(nodes, n, max_bits)
+    }
+    parents[i] = depth
+    if i < n {
+      counts[depth] += 1
+    }
+  }
+  counts
 }

@@ -67,10 +67,11 @@ test "rebasing preserves live match distances and pending ring bytes" {
   d.parse_pos = position
   d.pending_end = position
   d.hashed_through = position - 2
+  d.finder.short_head[0] = position - 3
+  d.finder.short_head[1] = 0
   d.finder.head[0] = position - 3
-  d.finder.prev[(position - 3) & WINDOW_MASK] = position - 9
+  set_chain_previous(d.finder.prev, position - 3, position - 9)
   d.finder.head[1] = 0 // stale history becomes a negative sentinel
-  d.finder.prev[0] = 0
   d.push_pending_byte(b'a')
   d.push_pending_byte(b'b')
   d.push_pending_byte(b'c')
@@ -78,12 +79,16 @@ test "rebasing preserves live match distances and pending ring bytes" {
   @test.assert_eq(d.parse_pos, position - offset)
   @test.assert_eq(d.pending_bytes(), 3)
   @test.assert_eq(d.hashed_through, position - 2 - offset)
+  @test.assert_eq(d.finder.short_head[0], d.parse_pos - 3)
+  @test.assert_eq(d.finder.short_head[1], -offset)
+  @test.assert_eq(d.finder.short_head[2], -1)
   @test.assert_eq(d.finder.head[0], d.parse_pos - 3)
-  @test.assert_eq(d.finder.prev[(position - 3) & WINDOW_MASK], d.parse_pos - 9)
+  @test.assert_eq(
+    chain_previous(d.finder.prev, position - 3 - offset),
+    d.parse_pos - 9,
+  )
   @test.assert_eq(d.finder.head[1], -offset)
-  @test.assert_eq(d.finder.prev[0], -offset)
   @test.assert_eq(d.finder.head[2], -1)
-  @test.assert_eq(d.finder.prev[1], -1)
   d.maybe_rebase()
   @test.assert_eq(d.parse_pos, position - offset)
   d.record_chained_positions(d.parse_pos - 3)
