@@ -95,7 +95,9 @@ fn Compressor::encode(self : Compressor, input : Bytes, w : BitWriter) -> Int? {
   // The default level amortizes block construction over 65535 bytes; a
   // boundary match may overhang, so `processed` (not `target`) sets the next
   // start.
-  let block_size = if self.level == 6 { 65535 } else { DEFLATE_BLOCK_SIZE }
+  // Whole-buffer callers can amortize one Huffman header over the largest
+  // legal DEFLATE block; the streaming encoder keeps its smaller cadence.
+  let block_size = 65535
   let mut pos = 0
   for ;; {
     let target = (pos + block_size).min(n)
@@ -155,7 +157,7 @@ pub fn deflate_all(
   }
   let cfg = level_configs[lv]
   let finder = MatchFinder(input_size=n)
-  let block_size = if lv == 6 { 65535 } else { DEFLATE_BLOCK_SIZE }
+  let block_size = 65535
   let mut pos = 0
   for ;; {
     let target = (pos + block_size).min(n)

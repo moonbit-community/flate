@@ -374,13 +374,15 @@ fn match_candidate_can_beat(
 ///|
 /// Find a recent length-3 match, then search the independent 4-byte chain.
 /// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
-fn find_match(
+fn find_match_hashed(
   data : Bytes,
   finder : MatchFinder,
   i : Int,
   n : Int,
   base : Int,
   cfg : LevelConfig,
+  prefix : UInt,
+  product : UInt,
 ) -> Int {
   let limit = (n - i).min(258)
   guard base < limit else { return base << 16 }
@@ -391,27 +393,11 @@ fn find_match(
   }
   guard budget > 0 else { return base << 16 }
   let cutoff = (i - WINDOW_SIZE).max(0)
-  let position = i
   let mut best_len = base
   let mut best_dist = 0
-  guard limit >= 4 else {
-    let short = finder.short_head[short_hash3(data, i, shift=finder.short_shift)] -
-      finder.position_base
-    if base < 3 && short >= cutoff {
-      let candidate = short
-      if data[candidate] == data[position] &&
-        data[candidate + 1] == data[position + 1] &&
-        data[candidate + 2] == data[position + 2] {
-        return (3 << 16) | (i - short)
-      }
-    }
-    return base << 16
-  }
-  let prefix = read_match_word(data, i)
-  let product = prefix * 0x1E35A7BDU
   if base < 3 {
     let short_hash = short_hash_product(product, shift=finder.short_shift)
-    let short = finder.short_head[short_hash] - finder.position_base
+    let short = finder.short_head.unsafe_get(short_hash) - finder.position_base
     // Every long-chain insertion also updates this short head. If even
     // the newest short-hash candidate expired, no four-byte match can exist.
     guard short >= cutoff else { return base << 16 }
@@ -420,7 +406,9 @@ fn find_match(
       best_dist = i - short
     }
   }
-  let mut cand = finder.head[long_hash_product(product, shift=finder.long_shift)] -
+  let mut cand = finder.head.unsafe_get(
+      long_hash_product(product, shift=finder.long_shift),
+    ) -
     finder.position_base
   guard cand >= cutoff else { return (best_len << 16) | best_dist }
   let prev = finder.prev
@@ -457,15 +445,53 @@ fn find_match(
 }
 
 ///|
+fn find_match(
+  data : Bytes,
+  finder : MatchFinder,
+  i : Int,
+  n : Int,
+  base : Int,
+  cfg : LevelConfig,
+) -> Int {
+  let limit = (n - i).min(258)
+  if limit < 4 {
+    let budget = if base >= cfg.good_length {
+      cfg.max_chain >> 2
+    } else {
+      cfg.max_chain
+    }
+    guard base < limit && budget > 0 else { return base << 16 }
+    let cutoff = (i - WINDOW_SIZE).max(0)
+    let short = finder.short_head.unsafe_get(
+        short_hash3(data, i, shift=finder.short_shift),
+      ) -
+      finder.position_base
+    if base < 3 && short >= cutoff {
+      if data[short] == data[i] &&
+        data[short + 1] == data[i + 1] &&
+        data[short + 2] == data[i + 2] {
+        return (3 << 16) | (i - short)
+      }
+    }
+    return base << 16
+  }
+  let prefix = read_match_word(data, i)
+  let product = prefix * 0x1E35A7BDU
+  find_match_hashed(data, finder, i, n, base, cfg, prefix, product)
+}
+
+///|
 /// Find a recent length-3 match, then search the independent 4-byte chain.
 /// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
-fn find_window_match(
+fn find_window_match_hashed(
   data : FixedArray[Byte],
   finder : MatchFinder,
   i : Int,
   end : Int,
   base : Int,
   cfg : LevelConfig,
+  prefix : UInt,
+  product : UInt,
 ) -> Int {
   let limit = (end - i).min(258)
   guard base < limit else { return base << 16 }
@@ -476,31 +502,11 @@ fn find_window_match(
   }
   guard budget > 0 else { return base << 16 }
   let cutoff = (i - WINDOW_SIZE).max(0)
-  let position = i & STREAM_RING_MASK
   let mut best_len = base
   let mut best_dist = 0
-  guard limit >= 4 else {
-    let short = finder.short_head[hash3_window(
-        data,
-        i,
-        shift=finder.short_shift,
-      )] -
-      finder.position_base
-    if base < 3 && short >= cutoff {
-      let candidate = short & STREAM_RING_MASK
-      if data[candidate] == data[position] &&
-        data[candidate + 1] == data[position + 1] &&
-        data[candidate + 2] == data[position + 2] {
-        return (3 << 16) | (i - short)
-      }
-    }
-    return base << 16
-  }
-  let prefix = read_window_match_word(data, i)
-  let product = prefix * 0x1E35A7BDU
   if base < 3 {
     let short_hash = short_hash_product(product, shift=finder.short_shift)
-    let short = finder.short_head[short_hash] - finder.position_base
+    let short = finder.short_head.unsafe_get(short_hash) - finder.position_base
     // Every long-chain insertion also updates this short head. If even
     // the newest short-hash candidate expired, no four-byte match can exist.
     guard short >= cutoff else { return base << 16 }
@@ -509,7 +515,9 @@ fn find_window_match(
       best_dist = i - short
     }
   }
-  let mut cand = finder.head[long_hash_product(product, shift=finder.long_shift)] -
+  let mut cand = finder.head.unsafe_get(
+      long_hash_product(product, shift=finder.long_shift),
+    ) -
     finder.position_base
   guard cand >= cutoff else { return (best_len << 16) | best_dist }
   let prev = finder.prev
@@ -547,17 +555,68 @@ fn find_window_match(
 }
 
 ///|
+fn find_window_match(
+  data : FixedArray[Byte],
+  finder : MatchFinder,
+  i : Int,
+  end : Int,
+  base : Int,
+  cfg : LevelConfig,
+) -> Int {
+  let limit = (end - i).min(258)
+  if limit < 4 {
+    let budget = if base >= cfg.good_length {
+      cfg.max_chain >> 2
+    } else {
+      cfg.max_chain
+    }
+    guard base < limit && budget > 0 else { return base << 16 }
+    let cutoff = (i - WINDOW_SIZE).max(0)
+    let short = finder.short_head.unsafe_get(
+        hash3_window(data, i, shift=finder.short_shift),
+      ) -
+      finder.position_base
+    if base < 3 && short >= cutoff {
+      let candidate = short & STREAM_RING_MASK
+      let position = i & STREAM_RING_MASK
+      if data[candidate] == data[position] &&
+        data[candidate + 1] == data[position + 1] &&
+        data[candidate + 2] == data[position + 2] {
+        return (3 << 16) | (i - short)
+      }
+    }
+    return base << 16
+  }
+  let prefix = read_window_match_word(data, i)
+  let product = prefix * 0x1E35A7BDU
+  find_window_match_hashed(data, finder, i, end, base, cfg, prefix, product)
+}
+
+///|
+fn insert_pos_hashed(finder : MatchFinder, i : Int, product : UInt) -> Unit {
+  let h = long_hash_product(product, shift=finder.long_shift)
+  let stamped = i + finder.position_base
+  finder.short_head.unsafe_set(
+    short_hash_product(product, shift=finder.short_shift),
+    stamped,
+  )
+  set_chain_previous(
+    finder.prev,
+    i,
+    finder.head.unsafe_get(h) - finder.position_base,
+  )
+  finder.head.unsafe_set(h, stamped)
+}
+
+///|
 fn insert_pos(data : Bytes, finder : MatchFinder, i : Int, n : Int) -> Unit {
   if n - i >= 4 {
-    let product = read_match_word(data, i) * 0x1E35A7BDU
-    let h = long_hash_product(product, shift=finder.long_shift)
-    let stamped = i + finder.position_base
-    finder.short_head[short_hash_product(product, shift=finder.short_shift)] = stamped
-    set_chain_previous(finder.prev, i, finder.head[h] - finder.position_base)
-    finder.head[h] = stamped
+    insert_pos_hashed(finder, i, read_match_word(data, i) * 0x1E35A7BDU)
   } else if n - i >= 3 {
-    finder.short_head[short_hash3(data, i, shift=finder.short_shift)] = i +
-      finder.position_base
+    finder.short_head.unsafe_set(
+      short_hash3(data, i, shift=finder.short_shift),
+      i + finder.position_base,
+    )
   }
 }
 
@@ -597,6 +656,26 @@ fn insert_positions(
 }
 
 ///|
+fn insert_window_pos_hashed(
+  finder : MatchFinder,
+  i : Int,
+  product : UInt,
+) -> Unit {
+  let h = long_hash_product(product, shift=finder.long_shift)
+  let stamped = i + finder.position_base
+  finder.short_head.unsafe_set(
+    short_hash_product(product, shift=finder.short_shift),
+    stamped,
+  )
+  set_chain_previous(
+    finder.prev,
+    i,
+    finder.head.unsafe_get(h) - finder.position_base,
+  )
+  finder.head.unsafe_set(h, stamped)
+}
+
+///|
 fn insert_window_pos(
   data : FixedArray[Byte],
   finder : MatchFinder,
@@ -604,15 +683,16 @@ fn insert_window_pos(
   n : Int,
 ) -> Unit {
   if n - i >= 4 {
-    let product = read_window_match_word(data, i) * 0x1E35A7BDU
-    let h = long_hash_product(product, shift=finder.long_shift)
-    let stamped = i + finder.position_base
-    finder.short_head[short_hash_product(product, shift=finder.short_shift)] = stamped
-    set_chain_previous(finder.prev, i, finder.head[h] - finder.position_base)
-    finder.head[h] = stamped
+    insert_window_pos_hashed(
+      finder,
+      i,
+      read_window_match_word(data, i) * 0x1E35A7BDU,
+    )
   } else if n - i >= 3 {
-    finder.short_head[hash3_window(data, i, shift=finder.short_shift)] = i +
-      finder.position_base
+    finder.short_head.unsafe_set(
+      hash3_window(data, i, shift=finder.short_shift),
+      i + finder.position_base,
+    )
   }
 }
 
@@ -767,6 +847,34 @@ fn tokenize(
   }
   let min_length = if cost_model { finder.min_match_length.max(3) } else { 3 }
   let max_lazy = if cost_model { 65 } else { cfg.max_lazy }
+  // A broad byte alphabet makes long hash chains mostly collision probes;
+  // cap their work aggressively while retaining a larger budget for text.
+  let chain_budget = if min_length >= 5 {
+    17
+  } else if min_length >= 4 {
+    24
+  } else {
+    8
+  }
+  let chain_budget_after_prev = if min_length >= 5 {
+    8
+  } else if min_length >= 4 {
+    12
+  } else {
+    4
+  }
+  let cost_cfg = {
+    good_length: 259,
+    max_lazy: 65,
+    nice_length: 65,
+    max_chain: chain_budget,
+  }
+  let cost_cfg_after_prev = {
+    good_length: 259,
+    max_lazy: 65,
+    nice_length: 65,
+    max_chain: chain_budget_after_prev,
+  }
   // LZ77 with hash chains: head[hash] is the most recent position with a
   // given 4-byte hash, prev[pos] the next-older. "Lazy" means a match found
   // at i is held back to see if i+1 starts a longer one.
@@ -775,6 +883,16 @@ fn tokenize(
   let mut prev_dist = 0
   let mut have_prev = false // a match found at i-1 is pending a decision
   while i < end {
+    // The current position is searched and inserted in the same iteration.
+    // Carry its packed word/hash across both operations so incompressible
+    // input pays for one load and multiply instead of two.
+    let has_word = i + 4 <= n
+    let mut prefix = 0U
+    let mut product = 0U
+    if has_word {
+      prefix = read_match_word(data, i)
+      product = prefix * 0x1E35A7BDU
+    }
     // Skip the search when the deferred match is already >= max_lazy: it is
     // good enough to commit without looking for a longer one (zlib).
     let searching = i + 3 <= n && !(have_prev && prev_len >= max_lazy)
@@ -784,21 +902,20 @@ fn tokenize(
       min_length - 1
     }
     let search_cfg = if cost_model {
-      {
-        good_length: 259,
-        max_lazy: 65,
-        nice_length: 65,
-        max_chain: if have_prev {
-          17
-        } else {
-          35
-        },
+      if have_prev {
+        cost_cfg_after_prev
+      } else {
+        cost_cfg
       }
     } else {
       cfg
     }
     let match_info = if searching {
-      find_match(data, finder, i, n, base, search_cfg)
+      if has_word {
+        find_match_hashed(data, finder, i, n, base, search_cfg, prefix, product)
+      } else {
+        find_match(data, finder, i, n, base, search_cfg)
+      }
     } else {
       0
     }
@@ -830,7 +947,11 @@ fn tokenize(
     }
     // A deferred commit inserts i as an interior position. Insert it here
     // only when that commit did not happen, so prev never links to itself.
-    insert_pos(data, finder, i, n)
+    if has_word {
+      insert_pos_hashed(finder, i, product)
+    } else {
+      insert_pos(data, finder, i, n)
+    }
     // A longer match starts at i: emit a literal for i-1, keep deferring.
     guard !have_prev else {
       emit_literal(tokens, ll_freq, data[i - 1].to_int())
@@ -909,11 +1030,46 @@ fn tokenize_window(
   }
   let min_length = if cost_model { finder.min_match_length.max(3) } else { 3 }
   let max_lazy = if cost_model { 65 } else { cfg.max_lazy }
+  // Match the whole-buffer parser's collision budget in the ring path.
+  let chain_budget = if min_length >= 5 {
+    17
+  } else if min_length >= 4 {
+    24
+  } else {
+    8
+  }
+  let chain_budget_after_prev = if min_length >= 5 {
+    8
+  } else if min_length >= 4 {
+    12
+  } else {
+    4
+  }
+  let cost_cfg = {
+    good_length: 259,
+    max_lazy: 65,
+    nice_length: 65,
+    max_chain: chain_budget,
+  }
+  let cost_cfg_after_prev = {
+    good_length: 259,
+    max_lazy: 65,
+    nice_length: 65,
+    max_chain: chain_budget_after_prev,
+  }
   let mut i = start
   let mut prev_len = 0
   let mut prev_dist = 0
   let mut have_prev = false
   while i < token_end {
+    // Reuse the current four-byte hash between the match probe and insertion.
+    let has_word = i + 4 <= available_end
+    let mut prefix = 0U
+    let mut product = 0U
+    if has_word {
+      prefix = read_window_match_word(data, i)
+      product = prefix * 0x1E35A7BDU
+    }
     let searching = i + 3 <= available_end &&
       !(have_prev && prev_len >= max_lazy)
     let base = if have_prev {
@@ -922,21 +1078,22 @@ fn tokenize_window(
       min_length - 1
     }
     let search_cfg = if cost_model {
-      {
-        good_length: 259,
-        max_lazy: 65,
-        nice_length: 65,
-        max_chain: if have_prev {
-          17
-        } else {
-          35
-        },
+      if have_prev {
+        cost_cfg_after_prev
+      } else {
+        cost_cfg
       }
     } else {
       cfg
     }
     let match_info = if searching {
-      find_window_match(data, finder, i, available_end, base, search_cfg)
+      if has_word {
+        find_window_match_hashed(
+          data, finder, i, available_end, base, search_cfg, prefix, product,
+        )
+      } else {
+        find_window_match(data, finder, i, available_end, base, search_cfg)
+      }
     } else {
       0
     }
@@ -966,7 +1123,11 @@ fn tokenize_window(
       continue
     }
     // The deferred commit above already inserts its interior positions.
-    insert_window_pos(data, finder, i, available_end)
+    if has_word {
+      insert_window_pos_hashed(finder, i, product)
+    } else {
+      insert_window_pos(data, finder, i, available_end)
+    }
     guard !have_prev else {
       emit_literal(tokens, ll_freq, data[(i - 1) & STREAM_RING_MASK].to_int())
       prev_len = cur_len
