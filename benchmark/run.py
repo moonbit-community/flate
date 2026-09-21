@@ -42,7 +42,7 @@ def corpora(directory, profile, extra):
     phrase = b"The quick brown fox jumps over the lazy dog. Pack my box. "
     repetitive = (phrase * (size // len(phrase) + 1))[:size]
     random = hashlib.shake_256(b"flate-bench-v2/random/seed-1").digest(size)
-    paths = sorted(ROOT.glob("*.mbt")) + sorted((ROOT / "inspect").glob("*.mbt"))
+    paths = sorted((ROOT / "flate").glob("*.mbt")) + sorted((ROOT / "flate" / "inspect").glob("*.mbt"))
     source = b"\n".join(p.read_bytes() for p in paths)
     records = []
     for i in range(4000):
@@ -277,8 +277,9 @@ def main():
     c_binary = directory / "bench_libdeflate"
     build_c = cc + ["-O3", "-DNDEBUG", "-Wall", "-Wextra", "-Werror",
                     ROOT / "benchmark/bench_libdeflate.c"] + cflags + ["-o", c_binary]
-    build_moon = ["moon", "build", "--release", "--target", "native", "--verbose",
-                  "--target-dir", directory / "build", "benchmark/runner"]
+    build_moon = ["moon", "-C", str(ROOT / "benchmark"), "build", "--release",
+                  "--target", "native", "--verbose",
+                  "--target-dir", directory / "build", "runner"]
     print(f"Building runners; results: {directory}", flush=True)
     (directory / "build-moon-commands.log").write_text(command(build_moon + ["--dry-run"]) + "\n")
     for name, cmd in (("c", build_c), ("moon", build_moon)):
@@ -287,7 +288,8 @@ def main():
         (directory / f"build-{name}.log").write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError(f"build failed; see {directory / ('build-' + name + '.log')}")
-    candidates = list((directory / "build").glob("native/release/build/benchmark/runner/*.exe"))
+    candidates = list((directory / "build").glob(
+        "native/release/build/moonbit-community/flate-benchmark/runner/*.exe"))
     if len(candidates) != 1:
         raise RuntimeError(f"expected one MoonBit executable, got {candidates}")
     binaries = {"flate": candidates[0], "libdeflate": c_binary}
@@ -320,8 +322,9 @@ def main():
         metadata["linked_libraries"] = command(["otool", "-L", c_binary])
     (directory / "source.diff").write_text(command(["git", "diff", "HEAD", "--", "."]))
     # Includes untracked runner files, which git diff alone cannot preserve.
-    source_files = list(ROOT.glob("*.mbt")) + list(ROOT.glob("*.pkg")) + [ROOT / "moon.mod"]
-    for package in ("benchmark", "checksum", "gzip", "zlib"):
+    source_files = (list((ROOT / "flate").glob("*.mbt")) + list((ROOT / "flate").glob("*.pkg"))
+                    + [ROOT / "flate" / "moon.mod"])
+    for package in ("benchmark", "flate/checksum", "flate/gzip", "flate/zlib"):
         source_files += [p for p in (ROOT / package).rglob("*") if p.is_file() and
                          p.suffix in {".mbt", ".pkg", ".c", ".py"}]
     metadata["source_sha256"] = {str(p.relative_to(ROOT)): digest(p.read_bytes()) for p in sorted(source_files)}
