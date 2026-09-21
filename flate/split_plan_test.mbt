@@ -1,6 +1,31 @@
 // Tests for the public `deflate_all_split` entry point: round-trips, the
 // never-worse-than-fixed arbitration guarantee, and edge cases (stored level,
 // empty input, large multi-chunk inputs).
+//
+// The fixture generators below were inlined from the benchmark module so this
+// test stays in the library module and keeps contributing to its coverage.
+
+///|
+fn bench_repetitive(size : Int) -> Bytes {
+  let unit = b"The quick brown fox jumps over the lazy dog. Pack my box. "
+  Bytes::makei(size, i => unit[i % unit.length()])
+}
+
+///|
+/// Effectively incompressible: bytes from a deterministic LCG.
+#coverage.skip
+fn bench_random(size : Int) -> Bytes {
+  let mut s = 0x12345678U
+  Bytes::makei(size, _ => {
+    s = s * 1103515245U + 12345U
+    ((s >> 16) & 0xFF).reinterpret_as_int().to_byte()
+  })
+}
+
+///|
+fn bench_mixed(size : Int) -> Bytes {
+  bench_repetitive(size / 2) + bench_random(size - size / 2)
+}
 
 ///|
 fn split_prose(size : Int) -> Bytes {
@@ -109,8 +134,8 @@ test "deflate_all_split never worse than fixed cadence" {
       ("code", split_code(1048576)),
       ("drift", split_drift(524288)),
       ("midmix", split_midmix(524288)),
-      ("repetitive", @benchmark.bench_repetitive(262144)),
-      ("mixed", @benchmark.bench_mixed(262144)),
+      ("repetitive", bench_repetitive(262144)),
+      ("mixed", bench_mixed(262144)),
     ]
     for t in inputs {
       let (name, data) = t

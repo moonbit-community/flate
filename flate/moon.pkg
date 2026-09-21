@@ -13,3 +13,5 @@ import {
 // intentionally accepts that alert for its internal SIMD hot paths.
 
 warnings = "-alert_experimental-unused_package"
+
+// @v128.v128_store

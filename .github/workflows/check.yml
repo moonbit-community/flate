@@ -43,25 +43,34 @@ jobs:
           moon version --all
           moonrun --version
 
-      - name: moon check
+      - name: moon check (library module)
+        working-directory: flate
         run: |
           moon update
           moon check --target all --deny-warn
 
-      - name: moon info and moon fmt
+      - name: moon check and build (benchmark module)
+        working-directory: benchmark
+        run: |
+          moon update
+          moon check --target all --deny-warn
+          moon build --release --target native
+
+      - name: moon info and moon fmt (all modules)
         shell: bash
         run: |
-          moon info
-          moon fmt
+          (cd flate && moon info && moon fmt)
+          (cd benchmark && moon info && moon fmt)
           git diff --exit-code
-          untracked_mbti="$(git ls-files --others --exclude-standard -- pkg.generated.mbti ':(glob)**/pkg.generated.mbti')"
+          untracked_mbti="$(git ls-files --others --exclude-standard -- ':(glob)**/pkg.generated.mbti')"
           if [ -n "$untracked_mbti" ]; then
             echo "moon info generated untracked interface files:"
             printf '%s\n' "$untracked_mbti"
             exit 1
           fi
 
-      - name: moon test
+      - name: moon test (library module)
+        working-directory: flate
         env:
           OCAMLRUNPARAM: b
         run: |
@@ -76,6 +85,11 @@ jobs:
 
       - name: coverage gate
         if: ${{ matrix.os.name == 'ubuntu-latest' }}
+        working-directory: flate
+        env:
+          # The coverage tool resolves source paths against the module root;
+          # disable the workspace so it does not look them up at the repo root.
+          MOON_WORK: "off"
         shell: bash
         run: |
           coverage_file="$RUNNER_TEMP/flate-coverage.txt"
