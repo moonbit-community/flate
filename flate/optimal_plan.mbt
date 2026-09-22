@@ -22,7 +22,7 @@ const OPTIMAL_MAX_BLOCKS : Int = 15
 /// Exact cost in bits of one block (3-bit header included): the cheapest of
 /// stored / fixed / dynamic, mirroring `emit_block`'s choice. Judges both
 /// split candidates and squeeze iterations. Delegates the accounting to the
-/// shared `build_dynamic_codes` + `estimate_block_cost` pair, so the planner
+/// shared dynamic-length builder + `estimate_block_cost` pair, so the planner
 /// can never drift from what the writer actually emits.
 fn block_cost_bits(
   byte_len : Int,
@@ -32,8 +32,8 @@ fn block_cost_bits(
   let ll_freq = FixedArray::make(286, 0)
   ll_freq_in.blit_to(ll_freq, len=286)
   ll_freq[256] += 1
-  let codes = build_dynamic_codes(ll_freq, d_freq)
-  let cost = estimate_block_cost(codes, byte_len, ll_freq, d_freq)
+  let lengths = build_dynamic_code_lengths(ll_freq, d_freq)
+  let cost = estimate_block_cost(lengths, byte_len, ll_freq, d_freq)
   cost.stored.min(cost.fixed).min(cost.dynamic)
 }
 
@@ -348,7 +348,9 @@ pub fn deflate_all_optimal(
     return Bytes::from_array(w.out)
   }
   let mut pos = 0
-  let finder = MatchFinder(input_size=n)
+  let long_hash_bits = long_hash_bits_for_input(input)
+  let finder = MatchFinder(input_size=n, long_hash_bits~)
+  finder.reset_for_input(input, long_hash_bits~)
   for ;; {
     let target = (pos + OPTIMAL_MASTER_BLOCK).min(n)
     let chunk = optimal_parse_chunk(input, finder, pos, target, iters)

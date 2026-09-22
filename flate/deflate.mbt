@@ -54,6 +54,9 @@ pub struct Deflater {
   priv fast_store : Bool
   priv level : Int // compression level 0-9 (0 = stored only)
   priv cfg : LevelConfig // match-search tuning for `level`
+  priv tokens : Array[Int]
+  priv ll_freq : FixedArray[Int]
+  priv d_freq : FixedArray[Int]
 }
 
 ///|
@@ -87,6 +90,9 @@ pub fn Deflater::Deflater(
     level: lv,
     fast_store,
     cfg: level_configs[lv],
+    tokens: [],
+    ll_freq: FixedArray::make(MAX_NUM_LIT, 0),
+    d_freq: FixedArray::make(MAX_NUM_DIST, 0),
   }
   if dictionary is Some(dict) {
     deflater.preload_dictionary(dict)

@@ -88,20 +88,26 @@ priv struct BlockCost {
 }
 
 ///|
-/// Code tables of one dynamic-Huffman block, built once and shared between
-/// cost estimation and `emit_block`'s write path so both always see the same
-/// `hlit`/`hdist`/`hclen`, code lengths, and code words.
-priv struct DynamicCodes {
+/// Code lengths and RLE header metadata for one dynamic-Huffman block. The
+/// encoder builds this cheaper form before deciding whether dynamic coding
+/// wins; code words are materialized only for a selected dynamic block.
+priv struct DynamicCodeLengths {
   dll_len : FixedArray[Int]
-  dll_val : FixedArray[UInt]
   dd_len : FixedArray[Int]
-  dd_val : FixedArray[UInt]
   hlit : Int
   hdist : Int
   codelen_syms : Array[CodeLenSym]
   codelen_code_len : FixedArray[Int]
-  codelen_code_val : FixedArray[UInt]
   hclen : Int
+}
+
+///|
+/// Complete code tables for a dynamic-Huffman block that will be emitted.
+priv struct DynamicCodes {
+  lengths : DynamicCodeLengths
+  dll_val : FixedArray[UInt]
+  dd_val : FixedArray[UInt]
+  codelen_code_val : FixedArray[UInt]
 }
 
 ///|
@@ -112,18 +118,16 @@ priv enum BlockEncoding {
 }
 
 ///|
-/// Build the dynamic-Huffman code tables for one block from its symbol
+/// Build dynamic-Huffman code lengths for one block from its symbol
 /// frequencies. `ll_freq` must already include the end-of-block symbol.
-fn build_dynamic_codes(
+fn build_dynamic_code_lengths(
   ll_freq : FixedArray[Int],
   d_freq : FixedArray[Int],
-) -> DynamicCodes {
+) -> DynamicCodeLengths {
   let dll_len = FixedArray::make(286, 0)
-  let dll_val = FixedArray::make(286, 0U)
-  gen_huffman(ll_freq, 286, 15, dll_len, code_val=dll_val)
+  gen_huffman(ll_freq, 286, 15, dll_len)
   let dd_len = FixedArray::make(30, 0)
-  let dd_val = FixedArray::make(30, 0U)
-  gen_huffman(d_freq, 30, 15, dd_len, code_val=dd_val)
+  gen_huffman(d_freq, 30, 15, dd_len)
   if !dd_len.any(length => length > 0) {
     dd_len[0] = 1 // DEFLATE requires at least one distance code
   }
@@ -141,23 +145,54 @@ fn build_dynamic_codes(
     codelen_freq[it.sym] += 1
   }
   let codelen_code_len = FixedArray::make(19, 0)
-  let codelen_code_val = FixedArray::make(19, 0U)
-  gen_huffman(codelen_freq, 19, 7, codelen_code_len, code_val=codelen_code_val)
+  gen_huffman(codelen_freq, 19, 7, codelen_code_len)
   let mut hclen = 19
   while hclen > 4 && codelen_code_len[code_order[hclen - 1]] == 0 {
     hclen = hclen - 1
   }
+  { dll_len, dd_len, hlit, hdist, codelen_syms, codelen_code_len, hclen, }
+}
+
+///|
+/// Generate bit-reversed canonical code words from already-computed lengths.
+/// This is only needed after a block has won the dynamic-Huffman comparison.
+fn canonical_code_values(
+  code_len : FixedArray[Int],
+  max_bits : Int,
+) -> FixedArray[UInt] {
+  let counts = FixedArray::make(max_bits + 1, 0)
+  for length in code_len {
+    if length > 0 {
+      counts[length] += 1
+    }
+  }
+  let next_code = FixedArray::make(max_bits + 1, 0)
+  for length in 1..<=max_bits {
+    next_code[length] = (next_code[length - 1] + counts[length - 1]) << 1
+  }
+  let values = FixedArray::make(code_len.length(), 0U)
+  for symbol in 0..<code_len.length() {
+    let length = code_len[symbol]
+    if length > 0 {
+      values[symbol] = reverse_bits(
+        next_code[length].reinterpret_as_uint(),
+        length,
+      )
+      next_code[length] += 1
+    }
+  }
+  values
+}
+
+///|
+/// Materialize the code words for a dynamic block after its lengths have
+/// already been used for exact cost estimation.
+fn materialize_dynamic_codes(lengths : DynamicCodeLengths) -> DynamicCodes {
   {
-    dll_len,
-    dll_val,
-    dd_len,
-    dd_val,
-    hlit,
-    hdist,
-    codelen_syms,
-    codelen_code_len,
-    codelen_code_val,
-    hclen,
+    lengths,
+    dll_val: canonical_code_values(lengths.dll_len, 15),
+    dd_val: canonical_code_values(lengths.dd_len, 15),
+    codelen_code_val: canonical_code_values(lengths.codelen_code_len, 7),
   }
 }
 
@@ -167,7 +202,7 @@ fn build_dynamic_codes(
 /// Shared by `emit_block`'s encoding choice and the optimal planner's split
 /// decisions, so both always use the same accounting.
 fn estimate_block_cost(
-  codes : DynamicCodes,
+  codes : DynamicCodeLengths,
   byte_len : Int,
   ll_freq : FixedArray[Int],
   d_freq : FixedArray[Int],
@@ -219,12 +254,12 @@ fn choose_block_encoding(
   d_freq : FixedArray[Int],
 ) -> BlockEncoding {
   ll_freq[256] += 1 // end-of-block
-  let codes = build_dynamic_codes(ll_freq, d_freq)
-  let cost = estimate_block_cost(codes, byte_len, ll_freq, d_freq)
+  let lengths = build_dynamic_code_lengths(ll_freq, d_freq)
+  let cost = estimate_block_cost(lengths, byte_len, ll_freq, d_freq)
   if cost.stored < cost.fixed && cost.stored < cost.dynamic {
     Stored
   } else if cost.dynamic < cost.fixed {
-    Dynamic(codes)
+    Dynamic(materialize_dynamic_codes(lengths))
   } else {
     Fixed
   }
@@ -249,6 +284,7 @@ fn write_huffman_block(
 /// Write the length extra bits for one match token (RFC 1951 §3.2.5), shared
 /// by the fixed- and dynamic-Huffman write paths. The distance extras stay at
 /// the call site, after the distance symbol that precedes them.
+#inline
 fn write_length_extras(w : BitWriter, length : Int) -> Unit {
   let lidx = len_to_idx[length]
   if len_extra[lidx] > 0 {
@@ -311,16 +347,16 @@ fn write_dynamic_block(
   tokens : ArrayView[Int],
 ) -> Unit {
   w.write_bits(2, 2) // BTYPE = 10 (dynamic)
-  w.write_bits(codes.hlit - 257, 5)
-  w.write_bits(codes.hdist - 1, 5)
-  w.write_bits(codes.hclen - 4, 4)
-  for k in 0..<codes.hclen {
-    w.write_bits(codes.codelen_code_len[code_order[k]], 3)
+  w.write_bits(codes.lengths.hlit - 257, 5)
+  w.write_bits(codes.lengths.hdist - 1, 5)
+  w.write_bits(codes.lengths.hclen - 4, 4)
+  for k in 0..<codes.lengths.hclen {
+    w.write_bits(codes.lengths.codelen_code_len[code_order[k]], 3)
   }
-  for it in codes.codelen_syms {
+  for it in codes.lengths.codelen_syms {
     w.write_rcode(
       codes.codelen_code_val[it.sym],
-      codes.codelen_code_len[it.sym],
+      codes.lengths.codelen_code_len[it.sym],
     )
     if it.nextra > 0 {
       w.write_bits(it.extra, it.nextra)
@@ -330,11 +366,11 @@ fn write_dynamic_block(
     w,
     tokens,
     codes.dll_val,
-    codes.dll_len,
+    codes.lengths.dll_len,
     codes.dd_val,
-    codes.dd_len,
+    codes.lengths.dd_len,
   )
-  w.write_rcode(codes.dll_val[256], codes.dll_len[256]) // EOB
+  w.write_rcode(codes.dll_val[256], codes.lengths.dll_len[256]) // EOB
 }
 
 ///|

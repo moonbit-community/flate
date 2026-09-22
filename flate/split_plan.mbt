@@ -284,7 +284,9 @@ pub fn deflate_all_split(
   // Keep splitter chunks aligned with the ordinary whole-buffer cadence so
   // exact-cost arbitration compares the same legal block boundaries.
   let master_size = block_size
-  let finder = MatchFinder(input_size=n)
+  let long_hash_bits = long_hash_bits_for_input(input)
+  let finder = MatchFinder(input_size=n, long_hash_bits~)
+  finder.reset_for_input(input, long_hash_bits~)
   let mut pos = 0
   for ;; {
     let target = (pos + master_size).min(n)
