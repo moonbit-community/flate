@@ -272,3 +272,63 @@ test "split planner cuts and resets observations across literal-class changes" {
   writer.flush()
   @test.assert_eq(inflate_all(Bytes::from_array(writer.out)), data)
 }
+
+///|
+fn coverage_divergent_bytes(size : Int) -> Bytes {
+  let mut state = 0x12345678U
+  Bytes::makei(size, i => {
+    state = state * 1103515245U + 12345U
+    let raw = ((state >> 16) & 0x3FU).reinterpret_as_int()
+    match i / 16384 % 4 {
+      0 => (0x40 + raw).to_byte()
+      1 => (0x80 + raw).to_byte()
+      2 => (0x20 + raw).to_byte()
+      _ => (0xC0 + raw).to_byte()
+    }
+  })
+}
+
+///|
+test "split planner covers partition and arbitration paths" {
+  let tokens : Array[Int] = [97, 98]
+  let cost_positions : FixedArray[Int] = [0, 70000, 70001]
+  let fixed = fixed_cadence_cuts(tokens, cost_positions, 0, 65535)
+  assert_eq(fixed, [1])
+  assert_true(partition_cost(tokens, cost_positions, fixed) > 0)
+
+  let emit_positions : FixedArray[Int] = [0, 1, 2]
+  let writer = BitWriter()
+  emit_split_blocks(writer, b"ab", tokens, emit_positions, [1], 2)
+  writer.flush()
+  assert_eq(inflate_all(Bytes::from_array(writer.out)), b"ab")
+
+  // This input makes the adaptive partition cheaper than the fixed cadence,
+  // so the public planner takes its split-cuts branch as well.
+  let data = coverage_divergent_bytes(65535)
+  let compressed = deflate_all_split(data)
+  assert_eq(inflate_all(compressed), data)
+}
+
+///|
+test "reusable compressor covers multi-block encode loop" {
+  // The public whole-buffer helper tests normally fit in one block. A
+  // reusable compressor must also carry its workspace into a second block.
+  // A different suffix prevents a boundary-spanning periodic match from
+  // making the first parse consume the entire input.
+  let source = Bytes::makei(65535, i => {
+      match i % 4 {
+        0 => b'W'
+        1 => b'X'
+        2 => b'Y'
+        _ => b'Z'
+      }
+    }) +
+    Bytes::make(257, b'\x00')
+  let codec = Compressor(level=6)
+  let compressed = codec.compress(source)
+  assert_eq(inflate_all(compressed), source)
+  assert_eq(
+    codec.compress(b"reuse after multi-block"),
+    deflate_all(b"reuse after multi-block"),
+  )
+}
