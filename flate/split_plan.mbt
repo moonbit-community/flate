@@ -8,12 +8,6 @@
 // `emit_block`, so the writer is untouched and output stays standard DEFLATE.
 
 ///|
-/// Master chunk size for the splitter: the whole chunk is tokenized at once,
-/// then partitioned. Bounds the planner's working memory exactly like the
-/// optimal planner's `OPTIMAL_MASTER_BLOCK`.
-const SPLIT_MASTER_CHUNK : Int = 65536
-
-///|
 /// Number of literal observation classes (libdeflate `NUM_LITERAL_OBSERVATION_TYPES`):
 /// literals are bucketed by bits 7,6,0 — a cheap proxy separating
 /// case/digit/punctuation regimes.
@@ -286,11 +280,10 @@ pub fn deflate_all_split(
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
-  let block_size = if lv == 6 { 65535 } else { DEFLATE_BLOCK_SIZE }
-  // At level 6, use the same outer boundaries as the ordinary encoder.
-  // Otherwise a 65536-byte master chunk can add a tiny extra stored block
-  // compared with its 65535-byte baseline, invalidating the cost comparison.
-  let master_size = if lv == 6 { block_size } else { SPLIT_MASTER_CHUNK }
+  let block_size = 65535
+  // Keep splitter chunks aligned with the ordinary whole-buffer cadence so
+  // exact-cost arbitration compares the same legal block boundaries.
+  let master_size = block_size
   let finder = MatchFinder(input_size=n)
   let mut pos = 0
   for ;; {
@@ -308,7 +301,7 @@ pub fn deflate_all_split(
     // This must run even when `split_cuts` is empty: a single undivided block
     // can still lose to the fixed cadence when the chunk drifts slowly.
     let fixed_cuts = fixed_cadence_cuts(tokens, all_pos, pos, block_size)
-    let cuts = if partition_cost(tokens, all_pos, split_cuts) <=
+    let cuts = if partition_cost(tokens, all_pos, split_cuts) <
       partition_cost(tokens, all_pos, fixed_cuts) {
       split_cuts
     } else {
