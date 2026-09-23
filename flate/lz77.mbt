@@ -97,7 +97,7 @@ const NARROW_LONG_HASH_BITS : Int = 16
 const MID_LONG_HASH_BITS : Int = 17
 
 ///|
-const LONG_HASH_BITS : Int = 19
+const LONG_HASH_BITS : Int = 18
 
 ///|
 /// Decide whether a complete input benefits from the wide long-match table.
@@ -217,10 +217,7 @@ fn MatchFinder::MatchFinder(
     input_size.min(16384) * 2,
     1 << HASH_BITS,
   )
-  let long_size = match_table_capacity(
-    input_size.min(32768) * 8,
-    1 << long_hash_bits,
-  )
+  let long_size = long_match_table_capacity(input_size, long_hash_bits)
   {
     min_match_length: 0,
     position_base: 0,
@@ -242,6 +239,14 @@ fn match_table_capacity(requested : Int, maximum : Int) -> Int {
 }
 
 ///|
+// Keep compact tables for small inputs; sampled inputs use the selected width
+// in full. Construction and reset must use the same logical capacity.
+fn long_match_table_capacity(input_size : Int, long_hash_bits : Int) -> Int {
+  guard input_size < 32768 else { return 1 << long_hash_bits }
+  match_table_capacity(input_size.min(16384) * 4, 1 << long_hash_bits)
+}
+
+///|
 // Logical size depends only on this input, even when larger backing tables
 // are retained from an earlier stream. Cold and reused codecs choose the same
 // candidates; allocations grow only when a larger input first needs them.
@@ -254,10 +259,7 @@ fn MatchFinder::size_for_input(
     input_size.min(16384) * 2,
     1 << HASH_BITS,
   )
-  let long_size = match_table_capacity(
-    input_size.min(32768) * 8,
-    1 << long_hash_bits,
-  )
+  let long_size = long_match_table_capacity(input_size, long_hash_bits)
   if self.short_head.length() < short_size {
     self.short_head = FixedArray::make(short_size, -1)
   }

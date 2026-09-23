@@ -540,6 +540,35 @@ test "streaming dual hash backfills a fourth byte exactly once" {
 }
 
 ///|
+test "match table sizing preserves compact small-input workspaces" {
+  for (size, capacity) in [(4096, 16384), (8192, 32768)] {
+    let input = Bytes::makei(size, i => (i & 255).to_byte())
+    let fresh = MatchFinder(input_size=size)
+    let reused = MatchFinder(input_size=0)
+    reused.reset_for_input(input)
+    @test.assert_eq(fresh.head.length(), capacity)
+    @test.assert_eq(reused.head.length(), capacity)
+    @test.assert_eq(reused.long_shift, fresh.long_shift)
+  }
+}
+
+///|
+test "match table sizing realizes each selected adaptive width" {
+  for (alphabet, expected_bits) in [(16, 16), (80, 17), (256, 18)] {
+    let input = Bytes::makei(65536, i => (i % alphabet).to_byte())
+    let bits = long_hash_bits_for_input(input)
+    @test.assert_eq(bits, expected_bits)
+    let fresh = MatchFinder(input_size=input.length(), long_hash_bits=bits)
+    let reused = MatchFinder(input_size=0)
+    reused.reset_for_input(input)
+    @test.assert_eq(fresh.head.length(), 1 << bits)
+    @test.assert_eq(reused.head.length(), 1 << bits)
+    @test.assert_eq(fresh.long_shift, 32 - bits)
+    @test.assert_eq(reused.long_shift, fresh.long_shift)
+  }
+}
+
+///|
 test "stamped heads isolate successive inputs without clearing tables" {
   let finder = MatchFinder()
   let sources = [
