@@ -95,9 +95,9 @@ fn Deflater::emit_capped(self : Deflater) -> Unit {
   if self.try_fast_store(target, is_final=false) {
     return
   }
-  let tokens : Array[Int] = []
-  let ll_freq = FixedArray::make(286, 0)
-  let d_freq = FixedArray::make(30, 0)
+  self.tokens.clear()
+  self.ll_freq.fill(0)
+  self.d_freq.fill(0)
   self.chain_ready_history()
   let processed = tokenize_window(
     self.pending,
@@ -106,18 +106,18 @@ fn Deflater::emit_capped(self : Deflater) -> Unit {
     target,
     self.pending_end,
     self.cfg,
-    tokens,
-    ll_freq,
-    d_freq,
+    self.tokens,
+    self.ll_freq,
+    self.d_freq,
   )
   emit_window_block(
     self.w,
     self.pending,
     self.parse_pos,
     processed,
-    tokens[:],
-    ll_freq,
-    d_freq,
+    self.tokens[:],
+    self.ll_freq,
+    self.d_freq,
     is_final=false,
   )
   self.parse_pos = processed
@@ -151,9 +151,9 @@ fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
   if self.try_fast_store(end, is_final~) {
     return end
   }
-  let tokens : Array[Int] = []
-  let ll_freq = FixedArray::make(286, 0)
-  let d_freq = FixedArray::make(30, 0)
+  self.tokens.clear()
+  self.ll_freq.fill(0)
+  self.d_freq.fill(0)
   self.chain_ready_history()
   let processed = tokenize_window(
     self.pending,
@@ -162,18 +162,18 @@ fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
     self.pending_end,
     self.pending_end,
     self.cfg,
-    tokens,
-    ll_freq,
-    d_freq,
+    self.tokens,
+    self.ll_freq,
+    self.d_freq,
   )
   emit_window_block(
     self.w,
     self.pending,
     self.parse_pos,
     processed,
-    tokens[:],
-    ll_freq,
-    d_freq,
+    self.tokens[:],
+    self.ll_freq,
+    self.d_freq,
     is_final~,
   )
   self.parse_pos = processed

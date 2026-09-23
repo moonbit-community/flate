@@ -88,7 +88,67 @@ fn short_hash3(data : Bytes, position : Int, shift? : Int = 9) -> Int {
 }
 
 ///|
-const LONG_HASH_BITS : Int = 16
+// Wider tables are useful for high-entropy input, where a narrow table turns
+// most probes into collision walks. Keep ordinary data at 16 bits and reserve
+// the larger tables for whole-buffer inputs selected by a cheap sample.
+const NARROW_LONG_HASH_BITS : Int = 16
+
+///|
+const MID_LONG_HASH_BITS : Int = 17
+
+///|
+const LONG_HASH_BITS : Int = 18
+
+///|
+/// Decide whether a complete input benefits from the wide long-match table.
+/// Sampling four separated 1 KiB regions avoids classifying a mixed buffer by
+/// its prefix alone. The threshold keeps structured/textual inputs on the
+/// cache-friendly narrow table while selecting the wide table for binary and
+/// high-diversity source data.
+fn long_hash_bits_for_input(data : Bytes) -> Int {
+  let n = data.length()
+  guard n >= 32768 else { return NARROW_LONG_HASH_BITS }
+  let sample = n.min(1024)
+  let span = n - sample
+  let used = FixedArray::make(256, 0)
+  let local_used = FixedArray::make(256, 0)
+  let mut distinct = 0
+  let mut high_regions = 0
+  for region in 0..<4 {
+    let start = match region {
+      0 => 0
+      1 => span / 3
+      2 => span / 3 * 2
+      _ => span
+    }
+    // A merged byte alphabet hides the shape of mixed inputs. Track each
+    // region separately so a wide table is reserved for uniformly diverse
+    // data rather than a stream with only one random half.
+    local_used.fill(0)
+    let mut local_distinct = 0
+    for i in start..<(start + sample) {
+      let byte = data[i].to_int()
+      if used[byte] == 0 {
+        used[byte] = 1
+        distinct += 1
+      }
+      if local_used[byte] == 0 {
+        local_used[byte] = 1
+        local_distinct += 1
+      }
+    }
+    if local_distinct >= 128 {
+      high_regions += 1
+    }
+  }
+  if high_regions == 4 {
+    LONG_HASH_BITS
+  } else if distinct >= 64 {
+    MID_LONG_HASH_BITS
+  } else {
+    NARROW_LONG_HASH_BITS
+  }
+}
 
 ///|
 #inline
@@ -149,15 +209,15 @@ priv struct MatchFinder {
 }
 
 ///|
-fn MatchFinder::MatchFinder(input_size? : Int = WINDOW_SIZE) -> MatchFinder {
+fn MatchFinder::MatchFinder(
+  input_size? : Int = WINDOW_SIZE,
+  long_hash_bits? : Int = NARROW_LONG_HASH_BITS,
+) -> MatchFinder {
   let short_size = match_table_capacity(
     input_size.min(16384) * 2,
     1 << HASH_BITS,
   )
-  let long_size = match_table_capacity(
-    input_size.min(16384) * 4,
-    1 << LONG_HASH_BITS,
-  )
+  let long_size = long_match_table_capacity(input_size, long_hash_bits)
   {
     min_match_length: 0,
     position_base: 0,
@@ -179,18 +239,27 @@ fn match_table_capacity(requested : Int, maximum : Int) -> Int {
 }
 
 ///|
+// Keep compact tables for small inputs; sampled inputs use the selected width
+// in full. Construction and reset must use the same logical capacity.
+fn long_match_table_capacity(input_size : Int, long_hash_bits : Int) -> Int {
+  guard input_size < 32768 else { return 1 << long_hash_bits }
+  match_table_capacity(input_size.min(16384) * 4, 1 << long_hash_bits)
+}
+
+///|
 // Logical size depends only on this input, even when larger backing tables
 // are retained from an earlier stream. Cold and reused codecs choose the same
 // candidates; allocations grow only when a larger input first needs them.
-fn MatchFinder::size_for_input(self : MatchFinder, input_size : Int) -> Unit {
+fn MatchFinder::size_for_input(
+  self : MatchFinder,
+  input_size : Int,
+  long_hash_bits : Int,
+) -> Unit {
   let short_size = match_table_capacity(
     input_size.min(16384) * 2,
     1 << HASH_BITS,
   )
-  let long_size = match_table_capacity(
-    input_size.min(16384) * 4,
-    1 << LONG_HASH_BITS,
-  )
+  let long_size = long_match_table_capacity(input_size, long_hash_bits)
   if self.short_head.length() < short_size {
     self.short_head = FixedArray::make(short_size, -1)
   }
@@ -231,9 +300,18 @@ fn MatchFinder::reset_stream(self : MatchFinder, previous_size : Int) -> Unit {
 // decode to negative positions and are rejected without clearing either table.
 // Predecessor distances are overwritten before their head becomes
 // reachable. Reset before Int overflow; empty inputs cannot publish a head.
-fn MatchFinder::reset_for_input(self : MatchFinder, input : Bytes) -> Unit {
+fn MatchFinder::reset_for_input(
+  self : MatchFinder,
+  input : Bytes,
+  long_hash_bits? : Int = -1,
+) -> Unit {
   self.min_match_length = 0
-  self.size_for_input(input.length())
+  let bits = if long_hash_bits >= 0 {
+    long_hash_bits
+  } else {
+    long_hash_bits_for_input(input)
+  }
+  self.size_for_input(input.length(), bits)
   if input.length() > 2147483647 - self.next_base {
     self.short_head.fill(-1)
     self.head.fill(-1)

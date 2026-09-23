@@ -156,14 +156,22 @@ pub fn deflate_all(
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
-  let finder = MatchFinder(input_size=n)
+  let long_hash_bits = long_hash_bits_for_input(input)
+  let finder = MatchFinder(input_size=n, long_hash_bits~)
   let block_size = 65535
+  // Reuse token and frequency storage across blocks. A whole-buffer stream
+  // can span several legal blocks; reallocating these fixed workspaces for
+  // every block only adds GC pressure and does not improve the parse.
+  let tokens : Array[Int] = []
+  let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
+  let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
+  finder.reset_for_input(input, long_hash_bits~)
   let mut pos = 0
   for ;; {
     let target = (pos + block_size).min(n)
-    let tokens : Array[Int] = []
-    let ll_freq = FixedArray::make(286, 0)
-    let d_freq = FixedArray::make(30, 0)
+    tokens.clear()
+    ll_freq.fill(0)
+    d_freq.fill(0)
     let processed = tokenize(
       input, finder, pos, target, cfg, tokens, ll_freq, d_freq,
     )

@@ -21,6 +21,16 @@ test "canonical Huffman codes retain symbol order across frequency groups" {
 }
 
 ///|
+test "canonical Huffman assigns values for two symbols" {
+  let frequencies : FixedArray[Int] = [3, 0, 2]
+  let lengths = FixedArray::make(3, 0)
+  let values = FixedArray::make(3, 0U)
+  gen_huffman(frequencies, 3, 15, lengths, code_val=values)
+  @test.assert_eq(lengths, [1, 0, 1])
+  @test.assert_eq(values, [0U, 0U, 1U])
+}
+
+///|
 test "linear Huffman construction retains optimal bounded cost" {
   let rng = MatchLenDifferentialRng(0x142BCE83U)
   for n in [3, 5, 8, 19, 30, 64, 128, 286] {
