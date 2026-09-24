@@ -5,16 +5,19 @@ compares raw DEFLATE with reused codecs and preallocated output on both sides.
 fzip is not included: its public compression API does not provide equivalent
 caller-owned output and reusable workspace.
 
-Latest measured revision: **`83b26bb` (2026-09-21)**, including the default
-compression parser, predecessor-table, Huffman and block-size optimizations.
-A fresh **3-round, >=200 ms** quick run covers **23 configurations and
-414 timed samples**, with `fast_store=false`. Both current encoders generated
-fixtures; both decoders and Python zlib validated them. See the
+Latest measured revision: **`d32b69f` (2026-09-24 Asia/Shanghai)**, including
+the LZ77 and workspace/hash-table optimizations in #4 and #5. Fresh baseline
+(`83b26bb`) and current **3-round, >=200 ms** quick runs each cover
+**23 configurations and 414 timed samples**, with `fast_store=false` and the
+same frozen inputs. Both encoders generated fixtures; both decoders and Python
+zlib validated them. L6 random, mixed, JSON and precompressed throughput improved
+by roughly **38–52%** over the remeasured baseline; source improved **15%** with
+a **0.42%** size increase, while repetitive-1m was **1.7%** slower. See the
 [MacBook Pro M3 Max results](./results-macbook-pro-m3-max.md) for current
 compression/decompression rates, compressed sizes, paired ratios and noisy rows.
-This replaces the stale overview of the earlier decoder-only studies; it is
-not an isolated before/after measurement. Full local evidence is retained in
-`.local-analysis/bench-20260921-83b26bb/`.
+The comparison uses a newly measured same-input baseline. Cross-run timing
+drift still limits attribution. Raw samples and frozen inputs for these results
+are not included in the repository.
 
 ## Run
 
@@ -31,10 +34,9 @@ python3 benchmark/run.py --corpus-manifest /path/to/old-run/corpus.json
 ```
 
 Each run builds fresh runners and saves results to a new output directory
-(default: `.local/bench/`). Use `--output .local-analysis/<run-name>` to keep
-reports outside the build cache and separate from the `.local` ZIP input. The
-output directory must not already exist. Timed workloads run sequentially; a run
-takes several minutes.
+(default: `.local/bench/`). Use `--output /path/to/new-run-directory` to choose
+another location. The output directory must not already exist. Timed workloads
+run sequentially; a run takes several minutes.
 
 `--validate-only` builds the actual release runners, exports both producers'
 fixtures, and validates compression and cross-decoding without timing loops.
