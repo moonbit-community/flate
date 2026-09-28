@@ -23,6 +23,6 @@ description = "Streaming ZIP command-line frontend for flate."
 preferred_target = "native"
 
 import {
-  "moonbitlang/async@0.22.1",
+  "moonbitlang/async@0.22.4",
   "moonbit-community/flate@0.8.4",
 }
