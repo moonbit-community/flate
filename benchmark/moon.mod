@@ -14,5 +14,5 @@ description = "Benchmark and tooling module for flate. Kept as a separate worksp
 
 import {
   "moonbitlang/x@0.5.5",
-  "moonbit-community/flate@0.8.4",
+  "moonbit-community/flate@0.8.5",
 }

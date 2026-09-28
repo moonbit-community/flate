@@ -24,5 +24,5 @@ preferred_target = "native"
 
 import {
   "moonbitlang/async@0.22.4",
-  "moonbit-community/flate@0.8.4",
+  "moonbit-community/flate@0.8.5",
 }
