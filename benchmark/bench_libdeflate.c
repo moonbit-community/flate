@@ -1,4 +1,4 @@
-// libdeflate runner for the paired benchmark protocol in benchmark/run.py.
+// libdeflate runner for the paired benchmark protocol in benchmark/run.mbtx.
 // Codec setup, fixture I/O and validation stay outside the timed samples.
 
 #define _POSIX_C_SOURCE 200809L
@@ -380,7 +380,11 @@ static int sample_main(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+    puts(LIBDEFLATE_VERSION_STRING);
+    return EXIT_SUCCESS;
+  }
   if (argc < 2 || strcmp(argv[1], "--sample") != 0)
-    die("use benchmark/run.py to invoke the paired runner");
+    die("use benchmark/run.mbtx to invoke the paired runner");
   return sample_main(argc, argv);
 }

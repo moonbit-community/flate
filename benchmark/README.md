@@ -21,16 +21,24 @@ are not included in the repository.
 
 ## Run
 
-From the repository root; requires Python 3.10+, MoonBit, a C compiler,
-`pkg-config`, and the libdeflate development package.
+From the repository root; requires Python 3.10+, MoonBit, and `clang` with
+libdeflate headers and libraries already available in its search paths. The
+driver invokes `clang` with `-ldeflate`; configure the environment before running
+it. The driver is in `run.mbtx`. `oracle.py` retains Python standard-library SHAKE generation,
+zlib fixture creation/validation, and runtime metadata; SHA-256 uses the existing
+`moonbitlang/x/crypto` package. No third-party Python packages are needed.
 
 ```sh
-python3 benchmark/run.py                                      # raw direct: 7 rounds, >=150 ms
-python3 benchmark/run.py --profile smoke --validate-only       # no timing, warmup or calibration
-python3 benchmark/run.py --profile full                       # broader corpus and levels
-python3 benchmark/run.py --include-oneshot                     # separate application-cost tables
-python3 benchmark/run.py --corpus /path/to/application-data.bin
-python3 benchmark/run.py --corpus-manifest /path/to/old-run/corpus.json
+# Raw direct: 7 rounds, >=150 ms
+moon run --target native benchmark/run.mbtx
+# Validate without timing, warmup or calibration
+moon run --target native benchmark/run.mbtx -- --profile smoke --validate-only
+# Broader corpus and levels
+moon run --target native benchmark/run.mbtx -- --profile full
+# Separate application-cost tables
+moon run --target native benchmark/run.mbtx -- --include-oneshot
+moon run --target native benchmark/run.mbtx -- --corpus /path/to/application-data.bin
+moon run --target native benchmark/run.mbtx -- --corpus-manifest /path/to/old-run/corpus.json
 ```
 
 Each run builds fresh runners and saves results to a new output directory
@@ -97,20 +105,14 @@ Each completed run contains:
 - `comparisons.json`: raw direct paired ratios and ranges, including noisy or
   short-run estimates for auditing; use report eligibility rules before citing.
 - `samples.jsonl`: raw measurements.
-- `metadata.json`, build logs and source snapshot: versions, commands and hashes.
+- `metadata.json`, build logs and `source.diff`: versions, commands and working-tree changes.
 - Corpus/fixture manifests and exact input/compressed files.
 
 An incomplete run has no final report. Local artifacts are ignored by Git;
 the linked device report records the key results.
 
-Harness checks:
-
-```sh
-python3 -m unittest discover -s benchmark -p '*_test.py'
-```
-
 Runner protocol: `bound|export|compress|decompress MODE FORMAT LEVEL INPUT
 FIXTURE MILLISECONDS OUTPUT_CAPACITY` (C additionally takes `--sample`). `bound`
 queries the raw compression bound without measuring. Direct export/compression
 requires the shared bound; direct decode requires N. A zero duration validates
-without timing. Prefer `run.py` over calling runners with manually chosen bounds.
+without timing. Prefer `run.mbtx` over calling runners with manually chosen bounds.

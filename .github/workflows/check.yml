@@ -56,6 +56,11 @@ jobs:
           moon check --target all --deny-warn
           moon build --release --target native
 
+      - name: benchmark script
+        run: |
+          moon fmt --check benchmark/run.mbtx
+          moon check --target native benchmark/run.mbtx --deny-warn
+
       - name: moon info and moon fmt (all modules)
         shell: bash
         run: |

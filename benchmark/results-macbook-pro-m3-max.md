@@ -16,10 +16,10 @@ This update includes a fresh same-input comparison of **`83b26bb` → `d32b69f`*
 - Caller-buffer allocation, construction and file I/O are outside timing. Per-stream reset and Huffman construction remain inside; this is not a zero-internal-allocation claim.
 - Every fixture is independently validated by Python zlib, including full stream termination; both benchmark decoders validate its contents. Timed workloads execute sequentially and alternate implementation/operation order.
 
-Run the repository's [benchmark harness](./run.py) from the repository root:
+Run the repository's [benchmark harness](./run.mbtx) from the repository root:
 
 ```sh
-python3 benchmark/run.py --profile quick --rounds 3 --milliseconds 200
+moon run --target native benchmark/run.mbtx -- --profile quick --rounds 3 --milliseconds 200
 ```
 
 This command generates inputs from the checkout. Raw samples and frozen inputs

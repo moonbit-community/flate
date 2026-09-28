@@ -1,0 +1,1085 @@
+///|
+/// Paired native benchmark driver. Run this script explicitly:
+/// moon run --target native benchmark/run.mbtx -- --profile smoke --validate-only
+import {
+  "moonbitlang/async@0.22.1",
+  "moonbitlang/async@0.22.1/fs",
+  "moonbitlang/async@0.22.1/io",
+  "moonbitlang/async@0.22.1/shell",
+  "moonbitlang/core/argparse",
+  "moonbitlang/core/bench",
+  "moonbitlang/core/env",
+  "moonbitlang/core/json",
+  "moonbitlang/core/string",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/x@0.5.5/crypto",
+  "moonbitlang/x@0.5.5/path",
+}
+
+///|
+suberror BenchmarkError {
+  Invalid(String)
+  CommandFailed(Array[String], Int, String)
+}
+
+///|
+struct Corpus {
+  name : String
+  bytes : Int
+  sha256 : String
+  file : String
+} derive(ToJson, FromJson)
+
+///|
+struct Configuration {
+  corpus : Corpus
+  mode : String
+  format : String
+  level : Int
+}
+
+///|
+struct Sample {
+  corpus : String
+  mode : String
+  format : String
+  level : Int
+  operation : String
+  producer : String
+  implementation : String
+  round : Int
+  input_sha256 : String
+  fixture_sha256 : String
+  output_capacity : Int?
+  input_bytes : Int
+  fixture_bytes : Int
+  iterations : Int
+  seconds : Double
+  output_bytes : Int
+  sink : Json
+} derive(ToJson)
+
+///|
+struct SampleKey {
+  corpus : String
+  mode : String
+  format : String
+  level : Int
+  operation : String
+  producer : String
+} derive(Eq, Hash, ToJson)
+
+///|
+struct Ratio {
+  median : Double
+  min : Double
+  max : Double
+  rounds : Int
+} derive(ToJson)
+
+///|
+struct Summary {
+  corpus : String
+  mode : String
+  format : String
+  level : Int
+  operation : String
+  producer : String
+  implementation : String
+  median_seconds : Double
+  min_seconds : Double
+  max_seconds : Double
+  spread_pct : Double
+  mib_s : Double
+  input_bytes : Int
+  output_bytes : Int
+  fixture_bytes : Int
+  rounds : Int
+} derive(ToJson)
+
+///|
+fn Sample::key(self : Sample) -> SampleKey {
+  {
+    corpus: self.corpus,
+    mode: self.mode,
+    format: self.format,
+    level: self.level,
+    operation: self.operation,
+    producer: self.producer,
+  }
+}
+
+///|
+fn Summary::key(self : Summary) -> SampleKey {
+  {
+    corpus: self.corpus,
+    mode: self.mode,
+    format: self.format,
+    level: self.level,
+    operation: self.operation,
+    producer: self.producer,
+  }
+}
+
+///|
+fn digest(data : Bytes) -> String {
+  @crypto.bytes_to_hex_string(@crypto.sha256(data))
+}
+
+///|
+fn median(values : Array[Double]) -> Double {
+  let sorted = values.copy()
+  sorted.sort()
+  let middle = sorted.length() / 2
+  if sorted.length() % 2 == 1 {
+    sorted[middle]
+  } else {
+    (sorted[middle - 1] + sorted[middle]) / 2.0
+  }
+}
+
+///|
+fn configurations(
+  manifest : Array[Corpus],
+  profile : String,
+  include_oneshot : Bool,
+) -> Array[Configuration] {
+  let configs = []
+  for corpus in manifest {
+    let levels = match profile {
+      "full" => [0, 1, 6, 9]
+      "smoke" => [0, 6]
+      _ if ["source-4k", "repetitive-512", "repetitive-1m"].contains(
+          corpus.name,
+        ) => [6]
+      _ => [1, 6, 9]
+    }
+    for level in levels {
+      configs.push({ corpus, mode: "direct", format: "raw", level, })
+    }
+    if profile == "quick" && ["random-256k", "source"].contains(corpus.name) {
+      configs.push({ corpus, mode: "direct", format: "raw", level: 0, })
+    }
+    let wrappers = profile != "quick" ||
+      ["repetitive-256k", "random-256k", "source"].contains(corpus.name)
+    if wrappers && include_oneshot {
+      for format in ["raw", "zlib", "gzip"] {
+        configs.push({ corpus, mode: "oneshot", format, level: 6, })
+      }
+    }
+  }
+  configs
+}
+
+///|
+fn paired_ratios(
+  samples : Array[Sample],
+) -> Map[SampleKey, Ratio] raise BenchmarkError {
+  let groups : Map[SampleKey, Map[Int, Map[String, Sample]]] = Map([])
+  for sample in samples {
+    let key = sample.key()
+    let rounds = groups.get_or_init(key, () => Map([]))
+    let pair = rounds.get_or_init(sample.round, () => Map([]))
+    guard !pair.contains(sample.implementation) else {
+      raise Invalid("duplicate implementation in paired round")
+    }
+    pair[sample.implementation] = sample
+  }
+  let result = Map([])
+  for key, rounds in groups {
+    let ratios = []
+    for _, pair in rounds {
+      guard pair.length() == 2 &&
+        pair.get("flate") is Some(m) &&
+        pair.get("libdeflate") is Some(c) else {
+        raise Invalid("incomplete paired round")
+      }
+      guard m.input_sha256 == c.input_sha256 else {
+        raise Invalid("paired input hash mismatch")
+      }
+      guard key.mode != "direct" || m.output_capacity == c.output_capacity else {
+        raise Invalid("paired output capacity mismatch")
+      }
+      guard key.operation != "decompress" ||
+        m.fixture_sha256 == c.fixture_sha256 else {
+        raise Invalid("paired decode fixture mismatch")
+      }
+      ratios.push(
+        m.seconds /
+        m.iterations.to_double() /
+        (c.seconds / c.iterations.to_double()),
+      )
+    }
+    let sorted = ratios.copy()
+    sorted.sort()
+    result[key] = {
+      median: median(sorted),
+      min: sorted[0],
+      max: sorted[sorted.length() - 1],
+      rounds: sorted.length(),
+    }
+  }
+  result
+}
+
+///|
+fn summarize(samples : Array[Sample]) -> Array[Summary] {
+  let groups : Map[(SampleKey, String), Array[Sample]] = Map([])
+  for sample in samples {
+    groups
+    .get_or_init((sample.key(), sample.implementation), () => [])
+    .push(sample)
+  }
+  let summaries = []
+  for (key, implementation), group in groups {
+    let values = group.map(sample => {
+      sample.seconds / sample.iterations.to_double()
+    })
+    values.sort()
+    let middle = median(values)
+    let minimum = values[0]
+    let maximum = values[values.length() - 1]
+    let first = group[0]
+    summaries.push({
+      corpus: key.corpus,
+      mode: key.mode,
+      format: key.format,
+      level: key.level,
+      operation: key.operation,
+      producer: key.producer,
+      implementation,
+      median_seconds: middle,
+      min_seconds: minimum,
+      max_seconds: maximum,
+      spread_pct: 100.0 * (maximum - minimum) / middle,
+      mib_s: first.input_bytes.to_double() / 1048576.0 / middle,
+      input_bytes: first.input_bytes,
+      output_bytes: first.output_bytes,
+      fixture_bytes: first.fixture_bytes,
+      rounds: values.length(),
+    })
+  }
+  summaries
+}
+
+///|
+fn dirname(path : String) -> String {
+  @path.Path(path).dirname().to_string()
+}
+
+///|
+fn basename(path : String) -> String {
+  @path.Path(path).basename().to_owned()
+}
+
+///|
+fn stem(path : String) -> String {
+  let name = basename(path)
+  guard name.rev_find(".") is Some(dot) && dot > 0 && dot < name.length() - 1 else {
+    return name
+  }
+  name[:dot].to_owned()
+}
+
+///|
+async fn repository_root() -> String {
+  command(@env.current_dir().unwrap_or("."), [
+    "git", "rev-parse", "--show-toplevel",
+  ])
+}
+
+///|
+async fn command(root : String, args : Array[String]) -> String {
+  let output = @shell.Cmd(args[0], args[1:].to_owned(), cwd=root).output(
+    timeout_ms=180000,
+    max_output_bytes=64 * 1024 * 1024,
+  )
+  guard output.exit_code() == 0 else {
+    raise CommandFailed(
+      args,
+      output.exit_code(),
+      output.stdout() + output.stderr(),
+    )
+  }
+  output.stdout().trim().to_owned()
+}
+
+///|
+async fn[T : ToJson] write_json(path : String, value : T) -> Unit {
+  @fs.write_file(path, value.to_json().stringify(indent=2) + "\n")
+}
+
+///|
+async fn read_bytes(path : String) -> Bytes {
+  let file = @fs.open(path, mode=ReadOnly)
+  defer file.close()
+  file.read_exactly(file.size().to_int())
+}
+
+///|
+async fn oracle(root : String, args : Array[String]) -> String {
+  command(root, ["python3", root + "/benchmark/oracle.py", ..args])
+}
+
+///|
+async fn validate_fixture(
+  root : String,
+  source : String,
+  fixture : String,
+  format : String,
+) -> Unit {
+  ignore(oracle(root, ["validate", source, fixture, format]))
+}
+
+///|
+async fn source_paths(directory : String) -> Array[String] {
+  let paths = @fs.readdir(directory)
+    .filter(name => name.has_suffix(".mbt"))
+    .map(name => directory + "/" + name)
+  paths.sort_by(compare_paths)
+  paths
+}
+
+///|
+struct StructuredRecord {
+  id : Int
+  status : String
+  name : String
+  group : Int
+  value : Int
+  tags : Array[String]
+} derive(ToJson)
+
+///|
+async fn corpora(
+  root : String,
+  directory : String,
+  profile : String,
+  extra : Array[String],
+) -> Array[Corpus] {
+  let size = 262144
+  let phrase = b"The quick brown fox jumps over the lazy dog. Pack my box. "
+  let repetitive = Bytes::makei(size, i => phrase[i % phrase.length()])
+  let random = shake256(root, "flate-bench-v2/random/seed-1", size)
+  let source_buffer = Buffer()
+  let paths = [
+    ..source_paths(root + "/flate"),
+    ..source_paths(root + "/flate/inspect"),
+  ]
+  for i, path in paths {
+    if i > 0 {
+      source_buffer.write_byte(b'\n')
+    }
+    source_buffer.write_bytes(read_bytes(path))
+  }
+  let source = source_buffer.to_bytes()
+  let mixed = repetitive[:size / 2].to_owned() + random[:size / 2].to_owned()
+  let data : Map[String, Bytes] = if profile == "smoke" {
+    {
+      "empty": b"",
+      "single": b"x",
+      "source-4k": source[:source.length().min(4096)].to_owned(),
+      "mixed-256k": mixed,
+    }
+  } else {
+    let records : Array[StructuredRecord] = Array::makei(4000, i => {
+      id: i,
+      status: ["open", "closed", "pending"][i % 3],
+      name: "record-\{i}",
+      group: i % 97,
+      value: (i.to_int64() * 2654435761L % 1000003L).to_int(),
+      tags: ["tag-\{i % 31}", "tag-\{i % 17}"],
+    })
+    let structured = @utf8.encode(records.to_json().stringify())
+    let source_path = directory + "/.source"
+    let precompressed_path = directory + "/.precompressed"
+    @fs.write_file(source_path, source)
+    ignore(oracle(root, ["compress", source_path, precompressed_path, "zlib"]))
+    let precompressed = read_bytes(precompressed_path)
+    @fs.remove(source_path)
+    @fs.remove(precompressed_path)
+    {
+      "repetitive-256k": repetitive,
+      "random-256k": random,
+      "mixed-256k": mixed,
+      "source": source[:source.length().min(size)].to_owned(),
+      "json-256k": structured[:structured.length().min(size)].to_owned(),
+      "precompressed": precompressed,
+      "source-4k": source[:source.length().min(4096)].to_owned(),
+      "repetitive-512": repetitive[:512].to_owned(),
+      "repetitive-1m": repetitive + repetitive + repetitive + repetitive,
+    }
+  }
+  if profile == "full" {
+    data["random-4k"] = random[:4096].to_owned()
+    data["source-64k"] = source[:source.length().min(65536)].to_owned()
+    data["random-1m"] = shake256(root, "flate-bench-v2/large", 1048576)
+    data["distance-one-256k"] = Bytes::make(size, b'a')
+  }
+  for i, path in extra {
+    data["external-\{i}-\{stem(path)}"] = read_bytes(path)
+  }
+  let manifest = []
+  for name, payload in data {
+    @fs.write_file(directory + "/" + name + ".bin", payload)
+    manifest.push({
+      name,
+      bytes: payload.length(),
+      sha256: digest(payload),
+      file: "corpus/" + name + ".bin",
+    })
+  }
+  manifest
+}
+
+///|
+async fn replay_corpora(
+  manifest_path : String,
+  directory : String,
+) -> Array[Corpus] {
+  let manifest : Array[Corpus] = @json.from_json(
+    @json.parse(@fs.read_file(manifest_path).text()),
+  )
+  let names : Map[String, Unit] = Map([])
+  let replayed = []
+  for row in manifest {
+    let name = row.name
+    guard name != "" &&
+      basename(name) == name &&
+      name != "." &&
+      name != ".." &&
+      !names.contains(name) else {
+      raise Invalid("invalid or duplicate corpus name")
+    }
+    names[name] = ()
+    let path = if row.file.has_prefix("/") {
+      row.file
+    } else {
+      dirname(manifest_path) + "/" + row.file
+    }
+    let payload = read_bytes(path)
+    guard payload.length() == row.bytes && digest(payload) == row.sha256 else {
+      raise Invalid("corpus hash/size mismatch: \{name}")
+    }
+    @fs.write_file(directory + "/" + name + ".bin", payload)
+    replayed.push({ ..row, file: "corpus/" + name + ".bin", })
+  }
+  guard !replayed.is_empty() else { raise Invalid("empty corpus manifest") }
+  replayed
+}
+
+///|
+fn decimal(value : Double, places : Int) -> String {
+  let scale = if places == 1 { 10L } else { 100L }
+  let scaled = value * scale.to_double()
+  let lower = scaled.floor().to_int64()
+  let fraction = scaled - lower.to_double()
+  let rounded = if fraction > 0.5 || (fraction == 0.5 && lower % 2L != 0L) {
+    lower + 1L
+  } else {
+    lower
+  }
+  let tail = (rounded % scale).to_string()
+  "\{rounded / scale}.\{String::make(places - tail.length(), '0')}\{tail}"
+}
+
+///|
+struct ReportMetadata {
+  profile : String
+  started_utc : String
+  revision : String
+  libdeflate_version : String
+  milliseconds : Int
+  rounds : Int
+}
+
+///|
+struct Report {
+  summaries : Array[Summary]
+  comparisons : Array[Json]
+  markdown : String
+}
+
+///|
+fn show_multiplier(
+  metadata : ReportMetadata,
+  mode : String,
+  spread_pct : Double,
+) -> Bool {
+  mode == "direct" &&
+  metadata.rounds >= 3 &&
+  metadata.profile != "smoke" &&
+  spread_pct <= 10.0
+}
+
+///|
+fn render_report(
+  samples : Array[Sample],
+  metadata : ReportMetadata,
+) -> Report raise BenchmarkError {
+  let summaries = summarize(samples)
+  let ratios = paired_ratios(samples)
+  let comparisons = []
+  for key, ratio in ratios {
+    guard key.mode == "direct" else { continue }
+    let object : Map[String, Json] = {
+      "corpus": key.corpus.to_json(),
+      "mode": key.mode.to_json(),
+      "format": key.format.to_json(),
+      "level": key.level.to_json(),
+      "operation": key.operation.to_json(),
+      "producer": key.producer.to_json(),
+      "median": ratio.median.to_json(),
+      "min": ratio.min.to_json(),
+      "max": ratio.max.to_json(),
+      "rounds": ratio.rounds.to_json(),
+    }
+    comparisons.push(Json::object(object))
+  }
+  let lines = [
+    "# Paired native benchmark",
+    "",
+    "Profile: `\{metadata.profile}`. Started: \{metadata.started_utc}.",
+    "flate: `\{metadata.revision}`; libdeflate: `\{metadata.libdeflate_version}`.",
+    "Minimum batch: \{metadata.milliseconds} ms; rounds: \{metadata.rounds}.",
+    "",
+    "Each rate uses the median seconds/operation. Spread is (max-min)/median.",
+    "A spread above 10% is marked `NOISY`; rerun before drawing conclusions.",
+    "Compression rows compare the same level, not equal compressed size.",
+    "Decode rows always use the same exact fixture for both implementations.",
+    "Direct: reused codecs; equal preallocated output capacities. Both decoders receive N bytes.",
+    "Direct compression capacity is the maximum of both codec bounds, computed outside timing.",
+    "Speed ratios are median paired per-round flate time / libdeflate time; range is min..max.",
+    "One-shot includes codec/output allocation and release. C decode knows output size;",
+    "MoonBit grows output. One-shot is an application comparison; no parity multiplier is shown.",
+    "Wrapper inputs contain one member and no trailing bytes. Both verify checksums.",
+    "These are warm-buffer, single-process-at-a-time runs without CPU pinning or thermal isolation.",
+    "Build logs, source diff, fixture hashes and raw samples accompany this report.",
+    "",
+  ]
+  if metadata.profile == "smoke" || metadata.rounds < 3 {
+    lines.append([
+      "VALIDATION ONLY: fewer than three rounds or smoke profile; multipliers suppressed.",
+      "",
+    ])
+  }
+  let index : Map[SampleKey, Map[String, Summary]] = Map([])
+  for row in summaries {
+    index.get_or_init(row.key(), () => Map([]))[row.implementation] = row
+  }
+  for mode in ["direct", "oneshot"] {
+    guard summaries.any(row => row.mode == mode) else { continue }
+    lines.append([
+      "## \{mode}",
+      "",
+      "| Format / corpus | L | Operation / fixture | flate MiB/s | C MiB/s | C / flate speed (paired range) | Compressed bytes (flate / C, or shared fixture) | Spread flate / C |",
+      "| --- | ---: | --- | ---: | ---: | ---: | ---: | --- |",
+    ])
+    for key, pair in index {
+      guard key.mode == mode &&
+        pair.length() == 2 &&
+        pair.get("flate") is Some(m) &&
+        pair.get("libdeflate") is Some(c) else {
+        continue
+      }
+      let ratio = ratios[key]
+      let noisy = m.spread_pct.max(c.spread_pct) > 10.0
+      let multiplier = if show_multiplier(
+          metadata,
+          mode,
+          m.spread_pct.max(c.spread_pct),
+        ) {
+        "\{decimal(ratio.median, 2)}x (\{decimal(ratio.min, 2)}..\{decimal(ratio.max, 2)})"
+      } else {
+        "n/a"
+      }
+      let sizes = if key.operation == "compress" {
+        "\{m.output_bytes} / \{c.output_bytes}"
+      } else {
+        m.fixture_bytes.to_string()
+      }
+      let noise_mark = if noisy { " NOISY" } else { "" }
+      lines.push(
+        "| \{key.format} / \{key.corpus} | \{key.level} | \{key.operation} / \{key.producer} | \{decimal(m.mib_s, 1)} | \{decimal(c.mib_s, 1)} | \{multiplier} | \{sizes} | \{decimal(m.spread_pct, 1)}% / \{decimal(c.spread_pct, 1)}%\{noise_mark} |",
+      )
+    }
+    lines.push("")
+  }
+  lines.append([
+    "Empty-input throughput is zero; use summary.json median_seconds for latency.",
+    "", "Full-stream validation uses Python zlib in addition to both benchmark decoders.",
+    "Synthetic SHAKE bytes are deterministic; source is a snapshot of this repository,",
+    "JSON is synthetic structured data, and precompressed is zlib-compressed source.",
+    "Use --corpus FILE to add actual application data. Inspect time and size together",
+    "across levels; the tables do not assert equal quality or a universal aggregate speedup.",
+    "",
+  ])
+  { summaries, comparisons, markdown: lines.join("\n"), }
+}
+
+///|
+struct Options {
+  profile : String
+  rounds : Int
+  milliseconds : Int
+  corpus : Array[String]
+  output : String?
+  include_oneshot : Bool
+  corpus_manifest : String?
+  validate_only : Bool
+}
+
+///|
+fn parse_options() -> Options raise {
+  let parsed = @argparse.Command(
+    "run.mbtx",
+    about="Build and run paired native benchmarks.",
+    options=[
+      @argparse.OptionArg("profile", default_values=["quick"]),
+      @argparse.OptionArg("rounds", allow_hyphen_values=true),
+      @argparse.OptionArg("milliseconds", allow_hyphen_values=true),
+      @argparse.OptionArg("corpus", action=Append, conflicts_with=[
+        "corpus-manifest",
+      ]),
+      @argparse.OptionArg(
+        "output",
+        about="New output directory (must not exist)",
+      ),
+      @argparse.OptionArg("corpus-manifest", conflicts_with=["corpus"]),
+    ],
+    flags=[
+      @argparse.FlagArg(
+        "include-oneshot",
+        about="Also measure allocation-inclusive application APIs",
+      ),
+      @argparse.FlagArg(
+        "validate-only",
+        about="Build and cross-validate without timing",
+      ),
+    ],
+  ).parse()
+  let value = name => {
+    parsed.values.get(name).map_or(None, values => values.get(0))
+  }
+  let profile = value("profile").unwrap_or("quick")
+  guard ["smoke", "quick", "full"].contains(profile) else {
+    raise Invalid("profile must be smoke, quick or full")
+  }
+  let rounds = @string.parse_int(
+    value("rounds").unwrap_or(if profile == "smoke" { "1" } else { "7" }),
+  )
+  let milliseconds = @string.parse_int(
+    value("milliseconds").unwrap_or(
+      if profile == "smoke" {
+        "2"
+      } else {
+        "150"
+      },
+    ),
+  )
+  guard rounds > 0 && milliseconds > 0 else {
+    raise Invalid("rounds and milliseconds must be positive")
+  }
+  let validate_only = parsed.flags.get("validate-only").unwrap_or(false)
+  {
+    profile,
+    rounds: if validate_only {
+      1
+    } else {
+      rounds
+    },
+    milliseconds: if validate_only {
+      0
+    } else {
+      milliseconds
+    },
+    corpus: parsed.values.get("corpus").unwrap_or([]),
+    output: value("output"),
+    include_oneshot: parsed.flags.get("include-oneshot").unwrap_or(false),
+    corpus_manifest: value("corpus-manifest"),
+    validate_only,
+  }
+}
+
+///|
+fn runner_args(
+  binary : String,
+  implementation : String,
+  operation : String,
+  mode : String,
+  format : String,
+  level : Int,
+  source : String,
+  fixture : String,
+  milliseconds : Int,
+  capacity : Int,
+) -> Array[String] {
+  [
+    binary,
+    ..if implementation == "libdeflate" {
+      ["--sample"]
+    } else {
+      []
+    },
+    operation,
+    mode,
+    format,
+    level.to_string(),
+    source,
+    fixture,
+    milliseconds.to_string(),
+    capacity.to_string(),
+  ]
+}
+
+///|
+struct Timing {
+  iterations : Int
+  seconds : Double
+  output_bytes : Int
+  sink : Json
+} derive(FromJson)
+
+///|
+struct Fixture {
+  path : String
+  bytes : Int
+  sha256 : String
+}
+
+///|
+async fn run_benchmark(options : Options) -> Unit {
+  let root = repository_root()
+  let metadata : Map[String, Json] = @json.from_json(
+    @json.parse(oracle(root, ["info"])),
+  )
+  let stamp : String = @json.from_json(metadata["started_utc"])
+  let requested = options.output.unwrap_or(root + "/.local/bench/" + stamp)
+  guard !@fs.exists(requested) else {
+    raise Invalid("output directory already exists")
+  }
+  ensure_directory(dirname(requested))
+  @fs.mkdir(requested)
+  let directory = @fs.realpath(requested)
+  @fs.mkdir(directory + "/corpus")
+  @fs.mkdir(directory + "/fixtures")
+  let started = @bench.monotonic_clock_start()
+  let c_binary = directory + "/bench_libdeflate"
+  let build_c = [
+    "clang",
+    "-O3",
+    "-DNDEBUG",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    root + "/benchmark/bench_libdeflate.c",
+    "-ldeflate",
+    "-o",
+    c_binary,
+  ]
+  let build_moon = [
+    "moon",
+    "-C",
+    root + "/benchmark",
+    "build",
+    "--release",
+    "--target",
+    "native",
+    "--verbose",
+    "--target-dir",
+    directory + "/build",
+    "runner",
+  ]
+  println("Building runners; results: \{directory}")
+  for (name, args) in [("c", build_c), ("moon", build_moon)] {
+    let output = @shell.Cmd(args[0], args[1:].to_owned(), cwd=root).output(
+      timeout_ms=180000,
+      max_output_bytes=64 * 1024 * 1024,
+    )
+    @fs.write_file(
+      directory + "/build-\{name}.log",
+      output.stdout() + output.stderr(),
+    )
+    guard output.exit_code() == 0 else {
+      raise Invalid("build failed; see \{directory}/build-\{name}.log")
+    }
+  }
+  let moon_binary = directory +
+    "/build/native/release/build/moonbit-community/flate-benchmark/runner/runner.exe"
+  let binaries = { "flate": moon_binary, "libdeflate": c_binary }
+  metadata["schema"] = (2).to_json()
+  metadata["driver"] = "MoonBit mbtx".to_json()
+  metadata["profile"] = options.profile.to_json()
+  metadata["validate_only"] = options.validate_only.to_json()
+  metadata["include_oneshot"] = options.include_oneshot.to_json()
+  let manifest_path = if options.corpus_manifest is Some(path) {
+    Some(@fs.realpath(path))
+  } else {
+    None
+  }
+  metadata["corpus_manifest"] = manifest_path.to_json()
+  metadata["direct_policy"] = {
+    "decode_capacity": "exact uncompressed size for both",
+    "compress_capacity": "max of both codec bounds",
+    "workspace": "reused; per-stream reset and table building timed",
+    "cache": "warm reused buffers",
+  }.to_json()
+  metadata["rounds"] = options.rounds.to_json()
+  metadata["milliseconds"] = options.milliseconds.to_json()
+  let revision = command(root, ["git", "rev-parse", "HEAD"])
+  let libdeflate_version = command(root, [c_binary, "--version"])
+  metadata["revision"] = revision.to_json()
+  metadata["libdeflate_version"] = libdeflate_version.to_json()
+  for
+    (name, args) in [
+      ("git_status", ["git", "status", "--short"]),
+      ("moon", ["moon", "version", "--all"]),
+      ("cc", ["clang", "--version"]),
+    ] {
+    metadata[name] = command(root, args).to_json()
+  }
+  metadata["build_commands"] = [build_c, build_moon].to_json()
+  metadata["command"] = @env.args().to_json()
+  @fs.write_file(
+    directory + "/source.diff",
+    command(root, ["git", "diff", "HEAD", "--", "."]),
+  )
+  let manifest = if manifest_path is Some(path) {
+    replay_corpora(path, directory + "/corpus")
+  } else {
+    corpora(root, directory + "/corpus", options.profile, options.corpus)
+  }
+  write_json(directory + "/corpus.json", manifest)
+  write_json(directory + "/metadata.json", metadata)
+  let configs = configurations(
+    manifest,
+    options.profile,
+    options.include_oneshot,
+  )
+  let samples = []
+  let fixtures = []
+  let results_name = if options.validate_only {
+    "validation.jsonl"
+  } else {
+    "samples.jsonl"
+  }
+  let raw = @fs.create(directory + "/" + results_name, allow_existing=false)
+  defer raw.close()
+  for index, config in configs {
+    let { corpus, mode, format, level, } = config
+    let source = directory + "/" + corpus.file
+    let payload = read_bytes(source)
+    let capacity = if mode == "direct" {
+      let limits = []
+      for implementation, binary in binaries {
+        limits.push(
+          @string.parse_int(
+            command(
+              root,
+              runner_args(
+                binary, implementation, "bound", mode, format, level, source, source,
+                0, 0,
+              ),
+            ),
+          ),
+        )
+      }
+      let capacity = limits[0].max(limits[1])
+      guard capacity > 0 else {
+        raise Invalid(
+          "shared compression capacity exceeds MoonBit buffer limits",
+        )
+      }
+      capacity
+    } else {
+      0
+    }
+    let paths : Map[String, Fixture] = Map([])
+    for implementation, binary in binaries {
+      let name = "fixtures/\{corpus.name}-\{mode}-\{format}-L\{level}-\{implementation}.bin"
+      let path = directory + "/" + name
+      ignore(
+        command(
+          root,
+          runner_args(
+            binary, implementation, "export", mode, format, level, source, path,
+            0, capacity,
+          ),
+        ),
+      )
+      let data = read_bytes(path)
+      validate_fixture(root, source, path, format)
+      let hash = digest(data)
+      paths[implementation] = { path, bytes: data.length(), sha256: hash, }
+      fixtures.push({
+        "corpus": corpus.name.to_json(),
+        "mode": mode.to_json(),
+        "format": format.to_json(),
+        "level": level.to_json(),
+        "producer": implementation.to_json(),
+        "bytes": data.length().to_json(),
+        "sha256": hash.to_json(),
+        "file": name.to_json(),
+      })
+    }
+    let jobs = [
+      ("compress", "none"),
+      ("decompress", "flate"),
+      ("decompress", "libdeflate"),
+    ]
+    for round_index in 0..<options.rounds {
+      for job_index in 0..<jobs.length() {
+        let (operation, producer) = jobs[if round_index % 2 == 0 {
+            job_index
+          } else {
+            jobs.length() - 1 - job_index
+          }]
+        let order = if (round_index + index + 1) % 2 == 0 {
+          ["flate", "libdeflate"]
+        } else {
+          ["libdeflate", "flate"]
+        }
+        for implementation in order {
+          let fixture = paths[if operation == "compress" {
+              implementation
+            } else {
+              producer
+            }]
+          let output_capacity = if operation == "decompress" {
+            payload.length()
+          } else {
+            capacity
+          }
+          let timing : Timing = @json.from_json(
+            @json.parse(
+              command(
+                root,
+                runner_args(
+                  binaries[implementation],
+                  implementation,
+                  operation,
+                  mode,
+                  format,
+                  level,
+                  source,
+                  fixture.path,
+                  options.milliseconds,
+                  output_capacity,
+                ),
+              ),
+            ),
+          )
+          if options.validate_only {
+            guard timing.iterations == 0 && timing.seconds == 0.0 else {
+              raise Invalid("validation unexpectedly timed work")
+            }
+          } else {
+            guard timing.iterations >= 1 && timing.seconds > 0.0 else {
+              raise Invalid("invalid timing sample")
+            }
+          }
+          let expected_size = if operation == "decompress" {
+            payload.length()
+          } else {
+            fixture.bytes
+          }
+          guard timing.output_bytes == expected_size else {
+            raise Invalid("timed output size differs from validated fixture")
+          }
+          let sample : Sample = {
+            corpus: corpus.name,
+            mode,
+            format,
+            level,
+            operation,
+            producer,
+            implementation,
+            round: round_index,
+            input_sha256: corpus.sha256,
+            fixture_sha256: fixture.sha256,
+            output_capacity: if mode == "direct" {
+              Some(output_capacity)
+            } else {
+              None
+            },
+            input_bytes: payload.length(),
+            fixture_bytes: fixture.bytes,
+            iterations: timing.iterations,
+            seconds: timing.seconds,
+            output_bytes: timing.output_bytes,
+            sink: timing.sink,
+          }
+          raw.write(@json.to_json(sample).stringify() + "\n")
+          samples.push(sample)
+        }
+      }
+    }
+    let elapsed = @bench.monotonic_clock_end(started) / 1000000.0
+    println(
+      "[\{index + 1}/\{configs.length()}] \{corpus.name} \{mode} \{format} L\{level} (\{decimal(elapsed, 1)}s)",
+    )
+  }
+  metadata["elapsed_seconds"] = (@bench.monotonic_clock_end(started) / 1000000.0).to_json()
+  write_json(directory + "/metadata.json", metadata)
+  write_json(directory + "/fixtures.json", fixtures)
+  if options.validate_only {
+    write_json(directory + "/validation.json", {
+      "passed": true.to_json(),
+      "cases": samples.length().to_json(),
+    })
+    println("Validation: \{directory}/validation.json (no timing)")
+  } else {
+    let report = render_report(samples, {
+      profile: options.profile,
+      started_utc: stamp,
+      revision,
+      libdeflate_version,
+      milliseconds: options.milliseconds,
+      rounds: options.rounds,
+    })
+    write_json(directory + "/comparisons.json", report.comparisons)
+    write_json(directory + "/summary.json", report.summaries)
+    @fs.write_file(directory + "/report.md", report.markdown)
+    println("Report: \{directory}/report.md")
+  }
+}
+
+///|
+async fn main {
+  run_benchmark(parse_options())
+}
+
+///|
+async fn shake256(root : String, seed : String, size : Int) -> Bytes {
+  let output = @shell.Cmd(
+    "python3",
+    [root + "/benchmark/oracle.py", "shake", seed, size.to_string()],
+    cwd=root,
+  ).output(timeout_ms=180000, max_output_bytes=size + 65536)
+  output.check()
+  output.stdout_bytes()
+}
+
+///|
+async fn ensure_directory(path : String) -> Unit {
+  guard !@fs.exists(path) else { return }
+  @fs.mkdir(path, recursive=true)
+}
+
+///|
+/// Python's corpus manifest sorts names lexically; String::compare sorts by
+/// length first, which would silently change the source corpus after migration.
+fn compare_paths(left : String, right : String) -> Int {
+  let left_chars = left.iter()
+  let right_chars = right.iter()
+  for ;; {
+    let left_char = left_chars.next()
+    let right_char = right_chars.next()
+    guard left_char is Some(a) else {
+      return if right_char is None { 0 } else { -1 }
+    }
+    guard right_char is Some(b) else { return 1 }
+    let order = a.compare(b)
+    guard order == 0 else { return order }
+  }
+}
