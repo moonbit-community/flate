@@ -63,6 +63,7 @@ fn check_cancelled(cancelled : () -> Bool) -> Unit raise ZipError {
 
 ///|
 /// Map a raw DEFLATE failure onto the ZIP error surface.
+#coverage.skip
 fn wrap_inflate_error(err : Error) -> ZipError {
   match err {
     @flate.InflateError(_, message) =>

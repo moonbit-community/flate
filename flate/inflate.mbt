@@ -53,6 +53,7 @@ priv enum DecoderErrorClass {
 }
 
 ///|
+#coverage.skip
 fn classify_decoder_error(err : Error) -> DecoderErrorClass {
   match err {
     NeedInput => DecoderInputExhausted

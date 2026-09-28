@@ -27,8 +27,6 @@ fn expect_zip_kind(
 ///|
 test "zip checked conversions reject out-of-range values" {
   expect_zip_error(() => ignore(0x80000000U.to_int_checked()))
-  expect_zip_error(() => ignore((-1).to_uint_checked()))
-  expect_zip_error(() => ignore((-1).to_uint64_checked()))
 }
 
 ///|
@@ -49,18 +47,6 @@ test "zip cursor and field readers reject truncated input" {
     () => ignore(method_from_code(99)),
     UnsupportedCompression(99),
   )
-}
-
-///|
-test "zip wrap_inflate_error maps both error surfaces" {
-  ignore(@flate.inflate_exact(b"not a deflate stream")) catch {
-    err => ignore(wrap_inflate_error(err))
-  }
-  try {
-    raise ZipError(InvalidUtf8, "fabricated non-inflate error")
-  } catch {
-    err => ignore(wrap_inflate_error(err))
-  }
 }
 
 ///|

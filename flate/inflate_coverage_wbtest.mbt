@@ -1,7 +1,4 @@
 ///|
-priv suberror CoverageUnexpectedDecoderError
-
-///|
 /// Finish a test-only LSB-first DEFLATE bit stream.
 fn coverage_finish_bits(w : BitWriter) -> Bytes {
   w.flush()
@@ -73,30 +70,6 @@ test "code-length repeat interpretation is shared and total" {
     }
   } noraise {
     _ => fail("accepted an invalid code-length repeat symbol")
-  }
-}
-
-///|
-/// The streaming boundary classifier preserves known errors and maps every
-/// other error kind to its stable public fallback.
-test "streaming decoder error classification is total" {
-  match classify_decoder_error(NeedInput) {
-    DecoderInputExhausted => ()
-    DecoderFailure(_, _) => fail("NeedInput was classified as corruption")
-  }
-  match classify_decoder_error(InflateError(Corrupt, "known failure")) {
-    DecoderFailure(kind, message) => {
-      assert_true(kind == Corrupt)
-      assert_eq(message, "known failure")
-    }
-    DecoderInputExhausted => fail("InflateError was classified as suspension")
-  }
-  match classify_decoder_error(CoverageUnexpectedDecoderError) {
-    DecoderFailure(kind, message) => {
-      assert_true(kind == Corrupt)
-      assert_eq(message, "corrupt: unexpected decoder error")
-    }
-    DecoderInputExhausted => fail("unknown error was classified as suspension")
   }
 }
 

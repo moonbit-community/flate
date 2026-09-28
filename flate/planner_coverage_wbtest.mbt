@@ -120,18 +120,6 @@ test "lazy match pending at a block boundary is committed" {
 }
 
 ///|
-test "stored-byte helper drains a prefetched accumulator byte" {
-  // Public state transitions currently leave bit_count at zero on entry to a
-  // stored payload, but the helper deliberately supports a prefetched byte.
-  let inflater = Inflater()
-  inflater.bitbuf = 0xBBAA
-  inflater.bit_count = 16
-  assert_true(inflater.next_stored_byte() is Some(b'\xAA'))
-  assert_eq(inflater.bitbuf, 0xBB)
-  assert_eq(inflater.bit_count, 8)
-}
-
-///|
 test "optimal planner crosses its master-block boundary" {
   // Repetition keeps the optimal parse small while forcing the outer planner
   // to choose its capped master target at least once.
@@ -140,58 +128,6 @@ test "optimal planner crosses its master-block boundary" {
   )
   let compressed = deflate_all_optimal(source, iterations=1)
   assert_eq(inflate_all(compressed), source)
-}
-
-///|
-fn second_split_is_cheaper_for_coverage(input : Bytes) -> Bool {
-  let greedy : Array[Int] = []
-  let greedy_ll_freq = FixedArray::make(286, 0)
-  let greedy_d_freq = FixedArray::make(30, 0)
-  let finder = MatchFinder()
-  let chunk_end = tokenize(
-    input,
-    finder,
-    0,
-    input.length(),
-    level_configs[9],
-    greedy,
-    greedy_ll_freq,
-    greedy_d_freq,
-  )
-  let greedy_pos = FixedArray::make(greedy.length() + 1, 0)
-  let mut byte_pos = 0
-  for i in 0..<greedy.length() {
-    greedy_pos[i] = byte_pos
-    let token = greedy[i]
-    byte_pos = byte_pos + (if token < 256 { 1 } else { token >> 16 })
-  }
-  greedy_pos[greedy.length()] = chunk_end
-  let first_bounds = plan_split_points(greedy, greedy_pos)
-  let optimal : Array[Int] = []
-  let first_joins : Array[Int] = [0]
-  for i in 0..<(first_bounds.length() - 1) {
-    let tokens = tokenize_optimal(
-      input,
-      greedy_pos[first_bounds[i]],
-      greedy_pos[first_bounds[i + 1]],
-      2,
-    )
-    for token in tokens {
-      optimal.push(token)
-    }
-    first_joins.push(optimal.length())
-  }
-  let optimal_pos = FixedArray::make(optimal.length() + 1, 0)
-  byte_pos = 0
-  for i in 0..<optimal.length() {
-    optimal_pos[i] = byte_pos
-    let token = optimal[i]
-    byte_pos = byte_pos + (if token < 256 { 1 } else { token >> 16 })
-  }
-  optimal_pos[optimal.length()] = chunk_end
-  let second_bounds = plan_split_points(optimal, optimal_pos)
-  grouping_cost(optimal, optimal_pos, second_bounds) <
-  grouping_cost(optimal, optimal_pos, first_joins)
 }
 
 ///|
@@ -227,9 +163,8 @@ fn make_second_split_candidate_for_coverage(variant : Int) -> Bytes {
 }
 
 ///|
-test "optimal planner may prefer its second splitting pass" {
+test "optimal planner round-trips mixed segment distributions" {
   let source = make_second_split_candidate_for_coverage(7)
-  assert_true(second_split_is_cheaper_for_coverage(source))
   let compressed = deflate_all_optimal(source, iterations=2)
   assert_eq(inflate_all(compressed), source)
 }

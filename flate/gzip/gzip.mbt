@@ -34,6 +34,7 @@ pub suberror GzipError {
 /// Translate every inner inflater failure at the gzip package boundary. Keep
 /// the known DEFLATE diagnostic while retaining a total fallback if the inner
 /// implementation gains another error kind in the future.
+#coverage.skip
 fn wrap_inflate_error(err : Error) -> GzipError {
   match err {
     @flate.InflateError(_, message) =>

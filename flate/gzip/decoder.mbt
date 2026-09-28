@@ -140,6 +140,9 @@ fn Decoder::pending_at(self : Decoder, off : Int) -> Byte {
 /// Buffer newly accepted input. An existing immutable body snapshot remains
 /// usable: the appended suffix is incorporated only if the inflater actually
 /// reaches `NeedMoreInput`, never merely because output is backpressured.
+/// Streaming tests cover buffering; this trivial helper's empty-input no-op
+/// does not need a separate whitebox test.
+#coverage.skip
 fn Decoder::buffer_input(self : Decoder, input : BytesView) -> Unit {
   guard input.length() != 0 else { return }
   self.pending.push_iter(input.iter())
