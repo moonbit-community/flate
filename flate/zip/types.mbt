@@ -315,13 +315,6 @@ pub fn Archive::clone(self : Archive) -> Archive {
 }
 
 ///|
-/// Deprecated alias of `Archive::clone`.
-#deprecated("use `Archive::clone` instead")
-pub fn Archive::fork(self : Archive) -> Archive {
-  self.clone()
-}
-
-///|
 /// Conservatively estimates bytes retained by this materialized archive: the
 /// archive comment, captured trailer records, and per-entry payloads, names,
 /// and preserved source records (each with a bookkeeping reserve). Payloads

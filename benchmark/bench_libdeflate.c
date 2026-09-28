@@ -1,16 +1,9 @@
-// Standalone libdeflate throughput benchmark for file-backed corpora.
-// Build on this machine with:
-//   cc -O3 -DNDEBUG bench_libdeflate.c $(pkg-config --cflags --libs libdeflate) -o /tmp/bench_libdeflate
-//
-// This measures codec work only: corpus I/O, allocations, and object creation
-// happen outside the timed loops. Use the same corpus and format with the
-// MoonBit benchmark before comparing results.
+// libdeflate runner for the paired benchmark protocol in benchmark/run.py.
+// Codec setup, fixture I/O and validation stay outside the timed samples.
 
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
-#include <inttypes.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,23 +24,6 @@ static volatile size_t sink;
 static void die(const char *message) {
   fprintf(stderr, "error: %s\n", message);
   exit(EXIT_FAILURE);
-}
-
-static void usage(const char *program) {
-  fprintf(
-    stderr,
-    "Usage: %s [-l level] [-n iterations] [-f raw|zlib|gzip]"
-    " [--write-compressed FILE] [--decompress-fixture FILE] INPUT\n"
-    "\n"
-    "Measures libdeflate compression and decompression over INPUT.\n"
-    "The default iteration count processes about 256 MiB, clamped to 10..100000.\n"
-    "-l, --level       Compression level 0..12 (default: 6)\n"
-    "-n, --iterations  Timed iterations per phase\n"
-    "-f, --format      Stream format: raw, zlib, or gzip (default: raw)\n"
-    "    --write-compressed FILE   Write libdeflate's fixture before timing\n"
-    "    --decompress-fixture FILE  Decode FILE instead of the generated stream\n",
-    program
-  );
 }
 
 static size_t parse_size(const char *value, const char *option) {
@@ -81,18 +57,6 @@ static enum stream_format parse_format(const char *value) {
   }
   die("format must be raw, zlib, or gzip");
   return FORMAT_RAW;
-}
-
-static const char *format_name(enum stream_format format) {
-  switch (format) {
-    case FORMAT_RAW:
-      return "raw-deflate";
-    case FORMAT_ZLIB:
-      return "zlib";
-    case FORMAT_GZIP:
-      return "gzip";
-  }
-  return "unknown";
 }
 
 static uint8_t *read_file(const char *path, size_t *size_out) {
@@ -242,44 +206,6 @@ static double monotonic_seconds(void) {
   return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
 }
 
-static size_t default_iterations(size_t input_size) {
-  const size_t target_bytes = 256 * 1024 * 1024;
-  if (input_size == 0) {
-    return 100000;
-  }
-  size_t iterations = target_bytes / input_size;
-  if (target_bytes % input_size != 0) {
-    iterations = iterations + 1;
-  }
-  if (iterations < 10) {
-    return 10;
-  }
-  if (iterations > 100000) {
-    return 100000;
-  }
-  return iterations;
-}
-
-static void print_rate(
-  const char *name,
-  size_t bytes_per_iteration,
-  size_t iterations,
-  double seconds
-) {
-  double total_mib =
-    (double)bytes_per_iteration * (double)iterations / (1024.0 * 1024.0);
-  double mib_per_second = seconds == 0.0 ? 0.0 : total_mib / seconds;
-  printf(
-    "%s: %.2f MiB/s  %.3f s  %zu iterations  %.1f MiB processed\n",
-    name,
-    mib_per_second,
-    seconds,
-    iterations,
-    total_mib
-  );
-}
-
-// Paired runner protocol. The legacy CLI below remains available for old reports.
 struct sample_context {
   enum stream_format format;
   int level;
@@ -454,202 +380,7 @@ static int sample_main(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-  if (argc > 1 && strcmp(argv[1], "--sample") == 0)
-    return sample_main(argc, argv);
-  int level = 6;
-  size_t iterations = 0;
-  enum stream_format format = FORMAT_RAW;
-  const char *input_path = NULL;
-  const char *write_compressed_path = NULL;
-  const char *decompress_fixture_path = NULL;
-
-  for (int i = 1; i < argc; i++) {
-    const char *arg = argv[i];
-    if (strcmp(arg, "-l") == 0 || strcmp(arg, "--level") == 0) {
-      if (++i == argc) {
-        usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      level = parse_level(argv[i]);
-    } else if (strcmp(arg, "-n") == 0 || strcmp(arg, "--iterations") == 0) {
-      if (++i == argc) {
-        usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      iterations = parse_size(argv[i], "iteration count");
-      if (iterations == 0) {
-        die("iteration count must be positive");
-      }
-    } else if (strcmp(arg, "-f") == 0 || strcmp(arg, "--format") == 0) {
-      if (++i == argc) {
-        usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      format = parse_format(argv[i]);
-    } else if (strcmp(arg, "--write-compressed") == 0) {
-      if (++i == argc) {
-        usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      write_compressed_path = argv[i];
-    } else if (strcmp(arg, "--decompress-fixture") == 0) {
-      if (++i == argc) {
-        usage(argv[0]);
-        return EXIT_FAILURE;
-      }
-      decompress_fixture_path = argv[i];
-    } else if (arg[0] == '-') {
-      usage(argv[0]);
-      return EXIT_FAILURE;
-    } else if (input_path == NULL) {
-      input_path = arg;
-    } else {
-      usage(argv[0]);
-      return EXIT_FAILURE;
-    }
-  }
-  if (input_path == NULL) {
-    usage(argv[0]);
-    return EXIT_FAILURE;
-  }
-
-  size_t input_size;
-  uint8_t *input = read_file(input_path, &input_size);
-  if (iterations == 0) {
-    iterations = default_iterations(input_size);
-  }
-
-  struct libdeflate_compressor *compressor =
-    libdeflate_alloc_compressor(level);
-  struct libdeflate_decompressor *decompressor =
-    libdeflate_alloc_decompressor();
-  if (compressor == NULL || decompressor == NULL) {
-    die("could not allocate a libdeflate codec object");
-  }
-
-  size_t compressed_capacity = compress_bound(format, compressor, input_size);
-  uint8_t *compressed = malloc(compressed_capacity == 0 ? 1 : compressed_capacity);
-  uint8_t *decoded = malloc(input_size == 0 ? 1 : input_size);
-  if (compressed == NULL || decoded == NULL) {
-    die("could not allocate codec buffers");
-  }
-
-  size_t compressed_size = compress_once(
-    format, compressor, input, input_size, compressed, compressed_capacity
-  );
-  if (compressed_size == 0) {
-    die("compression did not fit in its documented bound");
-  }
-  if (write_compressed_path != NULL) {
-    write_file(write_compressed_path, compressed, compressed_size);
-  }
-
-  uint8_t *decompress_input = compressed;
-  size_t decompress_input_size = compressed_size;
-  uint8_t *fixture = NULL;
-  if (decompress_fixture_path != NULL) {
-    fixture = read_file(decompress_fixture_path, &decompress_input_size);
-    decompress_input = fixture;
-  }
-  size_t decoded_size = 0;
-  enum libdeflate_result result = decompress_once(
-    format,
-    decompressor,
-    decompress_input,
-    decompress_input_size,
-    decoded,
-    input_size,
-    &decoded_size
-  );
-  if (
-    result != LIBDEFLATE_SUCCESS || decoded_size != input_size ||
-    memcmp(input, decoded, input_size) != 0
-  ) {
-    die("libdeflate did not round-trip the input");
-  }
-
-  // Warm the codec objects and CPU caches; these calls are deliberately not timed.
-  for (int i = 0; i < 3; i++) {
-    sink += compress_once(
-      format, compressor, input, input_size, compressed, compressed_capacity
-    );
-    result = decompress_once(
-      format,
-      decompressor,
-      decompress_input,
-      decompress_input_size,
-      decoded,
-      input_size,
-      &decoded_size
-    );
-    if (result != LIBDEFLATE_SUCCESS || decoded_size != input_size) {
-      die("decompression failed during warmup");
-    }
-  }
-
-  double started = monotonic_seconds();
-  for (size_t i = 0; i < iterations; i++) {
-    compressed_size = compress_once(
-      format, compressor, input, input_size, compressed, compressed_capacity
-    );
-    if (compressed_size == 0) {
-      die("compression failed during measurement");
-    }
-    sink += compressed_size;
-  }
-  double compression_seconds = monotonic_seconds() - started;
-
-  started = monotonic_seconds();
-  for (size_t i = 0; i < iterations; i++) {
-    result = decompress_once(
-      format,
-      decompressor,
-      decompress_input,
-      decompress_input_size,
-      decoded,
-      input_size,
-      &decoded_size
-    );
-    if (result != LIBDEFLATE_SUCCESS || decoded_size != input_size) {
-      die("decompression failed during measurement");
-    }
-    sink += decoded_size;
-  }
-  double decompression_seconds = monotonic_seconds() - started;
-  if (memcmp(input, decoded, input_size) != 0) {
-    die("decompression changed the input");
-  }
-
-  double ratio = input_size == 0 ? 0.0 :
-    (double)compressed_size / (double)input_size;
-  printf(
-    "libdeflate %s, level %d, input %s (%zu bytes)\n",
-    format_name(format),
-    level,
-    input_path,
-    input_size
-  );
-  printf(
-    "compressed: %zu bytes, ratio %.4f\n",
-    compressed_size,
-    ratio
-  );
-  if (decompress_fixture_path != NULL) {
-    printf(
-      "decompression fixture: %s (%zu bytes)\n",
-      decompress_fixture_path,
-      decompress_input_size
-    );
-  }
-  print_rate("compress", input_size, iterations, compression_seconds);
-  print_rate("decompress", input_size, iterations, decompression_seconds);
-  printf("sink: %zu\n", sink);
-
-  free(fixture);
-  free(decoded);
-  free(compressed);
-  libdeflate_free_decompressor(decompressor);
-  libdeflate_free_compressor(compressor);
-  free(input);
-  return EXIT_SUCCESS;
+  if (argc < 2 || strcmp(argv[1], "--sample") != 0)
+    die("use benchmark/run.py to invoke the paired runner");
+  return sample_main(argc, argv);
 }
