@@ -21,8 +21,8 @@ fn parse_number(value : String) -> Int {
 fn compress(input : Bytes, format : String, level : Int) -> Bytes {
   match format {
     "raw" => @flate.deflate_all(input, level~)
-    "zlib" => @zlib.zlib_compress(input, level~)
-    "gzip" => @gzip.gzip_compress(input, level~)
+    "zlib" => @zlib.compress(input, level~)
+    "gzip" => @gzip.compress(input, level~)
     _ => abort("invalid format")
   }
 }
@@ -36,11 +36,11 @@ fn decompress(input : Bytes, format : String) -> Bytes {
         _ => abort("raw decompression failed")
       }
     "zlib" =>
-      @zlib.zlib_decompress(input) catch {
+      @zlib.decompress(input) catch {
         _ => abort("zlib decompression failed")
       }
     "gzip" =>
-      @gzip.gunzip(input) catch {
+      @gzip.decompress(input) catch {
         _ => abort("gzip decompression failed")
       }
     _ => abort("invalid format")

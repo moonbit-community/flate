@@ -146,19 +146,19 @@ test "bench parity zlib and gzip wrappers" (b : @bench.T) {
     for t in bench_corpora(BENCH_INPUT_SIZE) {
       let (name, data) = t
       b.bench(name="zlib compress L\{level} 256KiB \{name}", () => {
-        b.keep(@zlib.zlib_compress(data, level~))
+        b.keep(@zlib.compress(data, level~))
       })
       b.bench(name="gzip compress L\{level} 256KiB \{name}", () => {
-        b.keep(@gzip.gzip_compress(data, level~))
+        b.keep(@gzip.compress(data, level~))
       })
 
-      let zlib_compressed = @zlib.zlib_compress(data, level~)
+      let zlib_compressed = @zlib.compress(data, level~)
       b.bench(name="zlib decompress L\{level} 256KiB \{name}", () => {
-        b.keep(@zlib.zlib_decompress(zlib_compressed) catch { _ => b"" })
+        b.keep(@zlib.decompress(zlib_compressed) catch { _ => b"" })
       })
-      let gzip_compressed = @gzip.gzip_compress(data, level~)
+      let gzip_compressed = @gzip.compress(data, level~)
       b.bench(name="gzip decompress L\{level} 256KiB \{name}", () => {
-        b.keep(@gzip.gunzip(gzip_compressed) catch { _ => b"" })
+        b.keep(@gzip.decompress(gzip_compressed) catch { _ => b"" })
       })
     }
   }
