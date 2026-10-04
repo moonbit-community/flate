@@ -28,7 +28,7 @@ pub fn Adler32::Adler32() -> Adler32 {
 #cfg(not(any(target="native", target="wasm")))
 #inline
 fn adler_group8(data : BytesView, i : Int) -> Int {
-  // SAFETY: callers prove `i + 8 <= data.length()`.
+  // SAFETY: callers prove `data.length() - i >= 8`.
   let d0 = data.unsafe_get(i).to_int()
   let d1 = data.unsafe_get(i + 1).to_int()
   let d2 = data.unsafe_get(i + 2).to_int()
@@ -54,7 +54,7 @@ fn adler_group8(data : BytesView, i : Int) -> Int {
 #cfg(any(target="native", target="wasm"))
 #inline
 fn adler_group8(data : BytesView, i : Int) -> Int {
-  // SAFETY: callers prove `i + 8 <= data.length()`.
+  // SAFETY: callers prove `data.length() - i >= 8`.
   let x = data.unsafe_read_uint64_le(i)
   let even = x & 0x00FF00FF00FF00FFUL // d0, d2, d4, d6
   let odd = (x >> 8) & 0x00FF00FF00FF00FFUL // d1, d3, d5, d7
@@ -63,6 +63,14 @@ fn adler_group8(data : BytesView, i : Int) -> Int {
   let indexed = ((even * 0x0000000200040006UL) >> 48) +
     ((odd * 0x0001000300050007UL) >> 48)
   (sum | (((sum << 3) - indexed) << 16)).to_int()
+}
+
+///|
+/// The end of the whole eight-byte groups in `start..<end`. Computed from
+/// the span so that no index past `end` is ever formed, even for views
+/// ending near `Int` overflow.
+fn adler_groups_end(start : Int, end : Int) -> Int {
+  end - (end - start) % 8
 }
 
 ///|
@@ -82,7 +90,8 @@ pub fn Adler32::update(self : Adler32, data : BytesView) -> Unit {
     let mut a_sum = 0
     let mut weighted_sum = 0
     let mut i = start
-    while i + 8 <= end {
+    let groups_end = adler_groups_end(start, end)
+    while i < groups_end {
       let packed = adler_group8(data, i)
       let weighted = packed >> 16
       a_sum = a_sum + a
