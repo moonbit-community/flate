@@ -128,12 +128,12 @@ test "stored streaming blocks remain searchable as history" {
   let d = Deflater(fast_store=true)
   let input = fast_store_noise(DEFLATE_BLOCK_SIZE)
   for byte in input {
-    d.push_pending_byte(byte)
+    d.push_pending(Bytes::make(1, byte)[:])
   }
   @test.assert_eq(d.try_fast_store(DEFLATE_BLOCK_SIZE, is_final=false), true)
   let start = d.parse_pos
   for i in 0..<64 {
-    d.push_pending_byte(input[DEFLATE_BLOCK_SIZE - 512 + i])
+    d.push_pending(Bytes::make(1, input[DEFLATE_BLOCK_SIZE - 512 + i])[:])
   }
   d.chain_ready_history()
   let packed_match = find_window_match(

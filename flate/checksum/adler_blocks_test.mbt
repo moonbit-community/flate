@@ -47,3 +47,20 @@ test "Adler mixed updates and finish preserve prefix state across blocks" {
     @test.assert_eq(checksum.finish(), adler_reference(input[:]))
   }
 }
+
+///|
+test "Adler eight-byte groups agree with bytewise reference for any view" {
+  let mut state = 0x9E3779B9U
+  let input = Bytes::makei(9000, _ => {
+    state = state * 1103515245U + 12345U
+    (state >> 24).reinterpret_as_int().to_byte()
+  })
+  for offset in 0..<9 {
+    for length in [0, 1, 7, 8, 9, 15, 16, 17, 63, 3799, 3800, 3807, 3808, 8000] {
+      let view = input[offset:offset + length]
+      let checksum = @checksum.Adler32()
+      checksum.update(view)
+      @test.assert_eq(checksum.finish(), adler_reference(view))
+    }
+  }
+}

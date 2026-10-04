@@ -510,7 +510,7 @@ test "streaming dual hash backfills a fourth byte exactly once" {
   let d = Deflater(dictionary=b"abc")
   @test.assert_eq(d.hashed_through, 0)
   @test.assert_eq(d.finder.short_head[short_hash3(b"abc", 0)], 0)
-  d.push_pending_byte(b'd')
+  d.push_pending(Bytes::make(1, b'd')[:])
   d.chain_ready_history()
   @test.assert_eq(d.hashed_through, 1)
   let bucket = long_hash_product(read_match_word(b"abcd", 0) * 0x1E35A7BDU)
@@ -519,7 +519,7 @@ test "streaming dual hash backfills a fourth byte exactly once" {
   d.chain_ready_history()
   @test.assert_eq(chain_previous(d.finder.prev, 0), -1)
   for byte in b"efabcd" {
-    d.push_pending_byte(byte)
+    d.push_pending(Bytes::make(1, byte)[:])
   }
   let packed = find_window_match(
     d.pending,

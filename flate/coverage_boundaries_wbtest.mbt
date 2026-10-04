@@ -72,9 +72,9 @@ test "rebasing preserves live match distances and pending ring bytes" {
   d.finder.head[0] = position - 3
   set_chain_previous(d.finder.prev, position - 3, position - 9)
   d.finder.head[1] = 0 // stale history becomes a negative sentinel
-  d.push_pending_byte(b'a')
-  d.push_pending_byte(b'b')
-  d.push_pending_byte(b'c')
+  d.push_pending(Bytes::make(1, b'a')[:])
+  d.push_pending(Bytes::make(1, b'b')[:])
+  d.push_pending(Bytes::make(1, b'c')[:])
   d.maybe_rebase()
   @test.assert_eq(d.parse_pos, position - offset)
   @test.assert_eq(d.pending_bytes(), 3)
