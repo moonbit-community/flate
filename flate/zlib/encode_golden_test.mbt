@@ -30,7 +30,15 @@ fn golden_input(size : Int, seed : UInt, alphabet : Int) -> Bytes {
 /// The PDF-writer driving pattern: one `Finish` step per call with a fixed
 /// 32 KiB output window, re-presenting the unconsumed suffix.
 fn golden_zlib_stream(input : Bytes, level : Int, out_chunk : Int) -> Bytes {
-  let encoder = @zlib.Encoder(level~)
+  golden_zlib_drive(@zlib.Encoder(level~), input, out_chunk)
+}
+
+///|
+fn golden_zlib_drive(
+  encoder : @zlib.Encoder,
+  input : Bytes,
+  out_chunk : Int,
+) -> Bytes {
   let out = FixedArray::make(out_chunk, b'\x00')
   let result = Buffer()
   for pos = 0 {
@@ -120,4 +128,30 @@ test "zlib output goldens" {
       #|
     ),
   )
+}
+
+///|
+test "zlib reset streams are identical to fresh encoders" {
+  let first = golden_input(90000, 4, 30)
+  let second = golden_input(70000, 5, 12)
+  let dictionary = golden_input(40000, 6, 12)
+  for level in 0..<=9 {
+    for dict in [None, Some(dictionary), Some(dictionary[:100].to_owned())] {
+      let fresh = golden_zlib_drive(
+        @zlib.Encoder(level~, dictionary?=dict),
+        second,
+        4096,
+      )
+      // Reuse after a finished stream, and after an abandoned partial one.
+      let finished = @zlib.Encoder(level~)
+      ignore(golden_zlib_drive(finished, first, 32768))
+      finished.reset(dictionary?=dict)
+      assert_eq(golden_zlib_drive(finished, second, 4096), fresh)
+      let abandoned = @zlib.Encoder(level~, dictionary~)
+      let out = FixedArray::make(100, b'\x00')
+      ignore(abandoned.step(first[:50000], out.mut_view()))
+      abandoned.reset(dictionary?=dict)
+      assert_eq(golden_zlib_drive(abandoned, second, 4096), fresh)
+    }
+  }
 }

@@ -693,3 +693,132 @@ test "deflate output goldens: other whole-buffer encoders" {
     ),
   )
 }
+
+///|
+/// Fold one streaming step (status, counts and produced bytes) into a digest.
+fn golden_step_digest(
+  h : UInt64,
+  status : @flate.Status,
+  consumed : Int,
+  produced : Int,
+  out : FixedArray[Byte],
+) -> UInt64 {
+  let mut h = h
+  let code = match status {
+    Done => 1
+    NeedMoreInput => 2
+    NeedMoreOutput => 3
+  }
+  for value in [code, consumed, produced] {
+    h = (h ^ value.to_uint64()) * 0x100000001b3UL
+  }
+  for i in 0..<produced {
+    h = (h ^ out[i].to_uint64()) * 0x100000001b3UL
+  }
+  h
+}
+
+///|
+test "deflate output goldens: randomized streaming schedules with reuse" {
+  let corpus = golden_corpus()
+  let source = Buffer()
+  for entry in corpus {
+    source.write_bytes(entry.1)
+  }
+  let source = source.to_bytes()
+  let buf = StringBuilder()
+  for seed in 0..<24 {
+    let rng = GoldenRng::{
+      state: seed.reinterpret_as_uint() * 2654435761U + 1,
+    }
+    let level = rng.next() % 10
+    let fast_store = rng.next() % 4 == 0
+    let deflater = @flate.Deflater(level~, fast_store~)
+    let mut h = 0xcbf29ce484222325UL
+    let mut steps = 0
+    for stream in 0..<3 {
+      if stream > 0 {
+        if rng.next() % 2 == 0 {
+          let start = rng.next() * 7 % (source.length() - 50000)
+          let length = rng.next() % 3 * 17000 + rng.next() % 100
+          deflater.reset(dictionary=source[start:start + length])
+        } else {
+          deflater.reset()
+        }
+      }
+      let start = rng.next() * 13 % (source.length() - 140000)
+      let input = source[start:start + rng.next() * 5 % 140000]
+      let mut pos = 0
+      for ;; {
+        let in_chunk = match rng.next() % 4 {
+          0 => 0
+          1 => rng.next() % 300
+          _ => rng.next() % 30000
+        }
+        let end = (pos + in_chunk).min(input.length())
+        let action : @flate.DeflateAction = if end == input.length() {
+          Finish
+        } else if rng.next() % 6 == 0 {
+          SyncFlush
+        } else {
+          Continue
+        }
+        let out = FixedArray::make(
+          if rng.next() % 8 == 0 {
+            0
+          } else {
+            1 + rng.next() % 9000
+          },
+          b'\x00',
+        )
+        let status = deflater.step(input[pos:end], out.mut_view(), action~)
+        h = golden_step_digest(
+          h,
+          status,
+          deflater.last_consumed(),
+          deflater.last_produced(),
+          out,
+        )
+        pos += deflater.last_consumed()
+        steps += 1
+        if status is Done {
+          break
+        }
+      }
+    }
+    let digest = h.to_string(radix=16)
+    buf.write_string(
+      "seed \{seed} L\{level} fast_store=\{fast_store}: \{steps} steps \{"0".repeat(16 - digest.length())}\{digest}\n",
+    )
+  }
+  inspect(
+    buf.to_string(),
+    content=(
+      #|seed 0 L8 fast_store=false: 77 steps 67887a94f9554bd2
+      #|seed 1 L7 fast_store=false: 56 steps bae1a4eb4a92069a
+      #|seed 2 L3 fast_store=false: 26 steps aa03948aa6f64ed9
+      #|seed 3 L2 fast_store=true: 65 steps 33400cbde3483614
+      #|seed 4 L1 fast_store=true: 73 steps 894723c1ed491f98
+      #|seed 5 L8 fast_store=false: 51 steps ae2eed9667ee25e6
+      #|seed 6 L6 fast_store=false: 66 steps cf7ce7f1eed00e6d
+      #|seed 7 L5 fast_store=false: 72 steps c44e3ccd7246f725
+      #|seed 8 L2 fast_store=false: 52 steps c10ee741fdc44e9e
+      #|seed 9 L1 fast_store=false: 50 steps 2c321ffe42829d1f
+      #|seed 10 L9 fast_store=true: 38 steps 8b06ed2cc73e203d
+      #|seed 11 L6 fast_store=false: 31 steps 5d1b8f1fd5dbb435
+      #|seed 12 L5 fast_store=false: 78 steps fe6dd78aa42b90af
+      #|seed 13 L4 fast_store=false: 66 steps 086981f1519a94a4
+      #|seed 14 L0 fast_store=false: 87 steps a0b9381511aa6b93
+      #|seed 15 L9 fast_store=false: 34 steps d0c7c4c857467c29
+      #|seed 16 L8 fast_store=true: 62 steps 4426f6c79731b1b1
+      #|seed 17 L5 fast_store=true: 58 steps 20cd80b2f82ec5e7
+      #|seed 18 L3 fast_store=false: 64 steps 055c6cadd47a180e
+      #|seed 19 L2 fast_store=false: 54 steps 5be4f35c1b65f5b4
+      #|seed 20 L9 fast_store=false: 22 steps a2f8832c671a0530
+      #|seed 21 L8 fast_store=false: 71 steps 2704f090feb63081
+      #|seed 22 L6 fast_store=false: 71 steps ec5502c5057b6263
+      #|seed 23 L3 fast_store=true: 76 steps 2041b6c7598f233c
+      #|
+    ),
+  )
+}

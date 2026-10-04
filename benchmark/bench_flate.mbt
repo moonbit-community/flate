@@ -285,3 +285,60 @@ test "bench MoonBit-only deflate_all vs deflate_all_split" (b : @bench.T) {
     }
   }
 }
+
+///|
+/// Drive a streaming zlib encoder to completion the way document writers
+/// do: the whole input with `Finish`, drained through a fixed 32 KiB window.
+#coverage.skip
+fn bench_zlib_stream(
+  encoder : @zlib.Encoder,
+  input : Bytes,
+  window : FixedArray[Byte],
+) -> Int {
+  let mut produced = 0
+  for pos = 0 {
+    let status = encoder.step(input[pos:], window.mut_view(), action=Finish)
+    produced = produced + encoder.last_produced()
+    if status is Done {
+      break produced
+    }
+    continue pos + encoder.last_consumed()
+  }
+}
+
+///|
+/// Streaming zlib compression of many small and mid-sized inputs (64 x 4 KiB
+/// and 4 x 64 KiB per sample), with a fresh encoder per stream and with one
+/// encoder reused through `reset`. Per-stream setup is part of the timing.
+#coverage.skip
+test "bench streaming zlib encoder fresh vs reset" (b : @bench.T) {
+  let window = FixedArray::make(32768, b'\x00')
+  for t in bench_corpora(BENCH_INPUT_SIZE) {
+    let (name, data) = t
+    for size in [4096, 65536] {
+      let count = BENCH_INPUT_SIZE / 4 / size
+      // Spread the pieces over the whole corpus.
+      let stride = data.length() / count
+      let pieces = Array::makei(count, i => {
+        data[i * stride:i * stride + size].to_owned()
+      })
+      b.bench(name="zlib stream fresh L6 \{count}x\{size} \{name}", () => {
+        let mut total = 0
+        for piece in pieces {
+          total = total +
+            bench_zlib_stream(@zlib.Encoder(level=6), piece, window)
+        }
+        b.keep(total)
+      })
+      let encoder = @zlib.Encoder(level=6)
+      b.bench(name="zlib stream reset L6 \{count}x\{size} \{name}", () => {
+        let mut total = 0
+        for piece in pieces {
+          encoder.reset()
+          total = total + bench_zlib_stream(encoder, piece, window)
+        }
+        b.keep(total)
+      })
+    }
+  }
+}
