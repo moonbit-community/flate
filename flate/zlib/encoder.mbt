@@ -22,7 +22,7 @@ priv enum EncMode {
 /// with `step`, finalize with `action=Finish`; binds no I/O trait.
 pub struct Encoder {
   priv def : @flate.Deflater
-  priv adler : @checksum.Adler32
+  priv mut adler : @checksum.Adler32
   priv mut mode : EncMode
   priv mut stage : FixedArray[Byte]
   priv mut stage_pos : Int
@@ -45,32 +45,58 @@ pub fn Encoder::Encoder(
   dictionary? : Bytes,
   fast_store? : Bool = false,
 ) -> Encoder {
-  let (def, stage) = if dictionary is Some(dict) {
-    let def = @flate.Deflater(level~, dictionary=dict[:], fast_store~)
-    let id = @checksum.adler32(dict)
-    let h = FixedArray::make(6, b'\x00')
-    // CMF=0x78; FLG=0x20 sets FDICT (0x7820 is a multiple of 31, FCHECK ok),
-    // followed by the 4-byte big-endian DICTID.
-    h[0] = b'\x78'
-    h[1] = b'\x20'
-    h[2] = ((id >> 24) & 0xFF).reinterpret_as_int().to_byte()
-    h[3] = ((id >> 16) & 0xFF).reinterpret_as_int().to_byte()
-    h[4] = ((id >> 8) & 0xFF).reinterpret_as_int().to_byte()
-    h[5] = (id & 0xFF).reinterpret_as_int().to_byte()
-    (def, h)
+  let def = if dictionary is Some(dict) {
+    @flate.Deflater(level~, dictionary=dict[:], fast_store~)
   } else {
-    (Deflater(level~, fast_store~), zlib_header_bytes)
+    Deflater(level~, fast_store~)
   }
   {
     def,
     adler: Adler32(),
     mode: Header,
-    stage,
+    stage: zlib_header(dictionary),
     stage_pos: 0,
     pending_action: Continue,
     step_consumed: 0,
     step_produced: 0,
   }
+}
+
+///|
+/// The zlib header: CMF and FLG, followed by the DICTID of a preset dictionary.
+fn zlib_header(dictionary : Bytes?) -> FixedArray[Byte] {
+  guard dictionary is Some(dict) else { return zlib_header_bytes }
+  let id = @checksum.adler32(dict)
+  let h = FixedArray::make(6, b'\x00')
+  // CMF=0x78; FLG=0x20 sets FDICT (0x7820 is a multiple of 31, FCHECK ok),
+  // followed by the 4-byte big-endian DICTID.
+  h[0] = b'\x78'
+  h[1] = b'\x20'
+  h[2] = ((id >> 24) & 0xFF).reinterpret_as_int().to_byte()
+  h[3] = ((id >> 16) & 0xFF).reinterpret_as_int().to_byte()
+  h[4] = ((id >> 8) & 0xFF).reinterpret_as_int().to_byte()
+  h[5] = (id & 0xFF).reinterpret_as_int().to_byte()
+  h
+}
+
+///|
+/// Reset to the start of a fresh zlib stream, keeping the compression level
+/// and `fast_store` policy and reusing the compressor's allocations. The next
+/// stream's output is identical to that of a newly constructed `Encoder`
+/// with the same options. A preset `dictionary` applies to the new stream
+/// only, exactly as for the constructor.
+pub fn Encoder::reset(self : Encoder, dictionary? : Bytes) -> Unit {
+  match dictionary {
+    Some(dict) => self.def.reset(dictionary=dict[:])
+    None => self.def.reset()
+  }
+  self.adler = Adler32()
+  self.mode = Header
+  self.stage = zlib_header(dictionary)
+  self.stage_pos = 0
+  self.pending_action = Continue
+  self.step_consumed = 0
+  self.step_produced = 0
 }
 
 ///|

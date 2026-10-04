@@ -14,11 +14,19 @@ fn Deflater::pending_bytes(self : Deflater) -> Int {
 }
 
 ///|
-fn Deflater::push_pending_byte(self : Deflater, byte : Byte) -> Unit {
-  let offset = self.pending_end & STREAM_RING_MASK
-  self.pending[offset] = byte
-  self.pending[offset + STREAM_RING_SIZE] = byte
-  self.pending_end = self.pending_end + 1
+/// Append `input` to the ring with bulk copies into both mirrored halves,
+/// split at the ring wrap.
+fn Deflater::push_pending(self : Deflater, input : BytesView) -> Unit {
+  let mut rest = input
+  while rest.length() > 0 {
+    let offset = self.pending_end & STREAM_RING_MASK
+    let count = rest.length().min(STREAM_RING_SIZE - offset)
+    let chunk = rest[:count]
+    self.pending.blit_from_bytesview(offset, chunk)
+    self.pending.blit_from_bytesview(offset + STREAM_RING_SIZE, chunk)
+    self.pending_end = self.pending_end + count
+    rest = rest[count:]
+  }
 }
 
 ///|

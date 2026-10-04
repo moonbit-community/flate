@@ -108,9 +108,7 @@ fn Deflater::preload_dictionary(
   dictionary : BytesView,
 ) -> Unit {
   let start = (dictionary.length() - WINDOW_SIZE).max(0)
-  for i in start..<dictionary.length() {
-    self.push_pending_byte(dictionary[i])
-  }
+  self.push_pending(dictionary[start:])
   for i in 0..<self.pending_end {
     insert_window_pos(self.pending, self.finder, i, self.pending_end)
   }
@@ -224,9 +222,7 @@ fn Deflater::accept_input(
   action : DeflateAction,
 ) -> Int {
   let take = (input_end - consumed).min(capacity)
-  for i in consumed..<(consumed + take) {
-    self.push_pending_byte(input[i])
-  }
+  self.push_pending(input[consumed:consumed + take])
   let consumed = consumed + take
   if take > 0 {
     self.flush_done = false

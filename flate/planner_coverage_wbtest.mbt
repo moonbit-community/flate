@@ -4,7 +4,7 @@ fn fill_deflater_pending_for_coverage(d : Deflater, size : Int) -> Bytes {
   for i in 0..<size {
     let byte = ((i * 73 + i / 17) & 0xFF).to_byte()
     bytes.push(byte)
-    d.push_pending_byte(byte)
+    d.push_pending(Bytes::make(1, byte)[:])
   }
   Bytes::from_array(bytes)
 }

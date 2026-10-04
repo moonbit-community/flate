@@ -118,7 +118,10 @@ test "README streaming Deflater" {
   discard or reset the raw engine; container decoder instances stably rethrow
   the same error.
 - Once `Done` is returned, new input is not consumed; reset the raw engine or
-  create a new wrapper before reuse.
+  the zlib `Encoder` (`reset(dictionary?)`), or create a new wrapper, before
+  reuse. A reset encoder produces exactly the bytes of a freshly constructed
+  one while reusing its ~0.5 MiB of match-finder and window allocations,
+  which dominates the cost of compressing many small streams.
 - Configure a raw preset dictionary through `Deflater(...)`/`Inflater(...)`, or
   while starting a fresh stream through `reset(dictionary=...)`; dictionary
   selection cannot be mutated after a stream begins.

@@ -281,45 +281,15 @@ fn write_huffman_block(
 }
 
 ///|
-/// Write the length extra bits for one match token (RFC 1951 §3.2.5), shared
-/// by the fixed- and dynamic-Huffman write paths. The distance extras stay at
-/// the call site, after the distance symbol that precedes them.
-#inline
-fn write_length_extras(w : BitWriter, length : Int) -> Unit {
-  let lidx = len_to_idx[length]
-  if len_extra[lidx] > 0 {
-    w.write_bits(length - len_base[lidx], len_extra[lidx])
-  }
-}
-
-///|
-/// Write one match token (length symbol, length extras, distance symbol,
-/// distance extras) through the given code tables, shared by the fixed- and
-/// dynamic-Huffman write paths.
-#inline
-fn write_match_token(
-  w : BitWriter,
-  tok : Int,
-  ll_val : FixedArray[UInt],
-  ll_len : FixedArray[Int],
-  dd_val : FixedArray[UInt],
-  dd_len : FixedArray[Int],
-) -> Unit {
-  let length = tok >> 16
-  let dist = tok & 0xFFFF
-  let lsym = 257 + len_to_idx[length]
-  w.write_rcode(ll_val[lsym], ll_len[lsym])
-  write_length_extras(w, length)
-  let didx = dist_index(dist)
-  w.write_rcode(dd_val[didx], dd_len[didx])
-  if dist_extra[didx] > 0 {
-    w.write_bits(dist - dist_base[didx], dist_extra[didx])
-  }
-}
-
-///|
 /// Write a token stream (literals and length/distance matches) through the
 /// given literal/length and distance tables, then the end-of-block symbol.
+///
+/// The bit accumulator lives in locals for the whole stream: codes are
+/// already bit-reversed and below `1 << length`, and extra-bit values are
+/// below `1 << extra`, so no masking is needed. At most 7 bits are pending
+/// before each field and no field exceeds 15 bits, so the 31-bit positive
+/// range of `Int` is never exceeded. Bytes are emitted exactly as by
+/// `write_bits`, which this inlines.
 fn write_tokens(
   w : BitWriter,
   tokens : ArrayView[Int],
@@ -328,13 +298,48 @@ fn write_tokens(
   dd_val : FixedArray[UInt],
   dd_len : FixedArray[Int],
 ) -> Unit {
+  let mut bitbuf = w.bitbuf
+  let mut bit_count = w.bit_count
   for tok in tokens {
     if tok < 256 {
-      w.write_rcode(ll_val[tok], ll_len[tok])
+      bitbuf = bitbuf | (ll_val[tok].reinterpret_as_int() << bit_count)
+      bit_count = bit_count + ll_len[tok]
     } else {
-      write_match_token(w, tok, ll_val, ll_len, dd_val, dd_len)
+      let length = tok >> 16
+      let dist = tok & 0xFFFF
+      let lidx = len_to_idx[length]
+      let lsym = 257 + lidx
+      // Length code (<= 15 bits) and its extra bits (<= 5) together stay
+      // below 31 bits with 7 pending, as do the distance code (<= 15) and
+      // its extra bits (<= 13) after the intermediate flush.
+      bitbuf = bitbuf | (ll_val[lsym].reinterpret_as_int() << bit_count)
+      bit_count = bit_count + ll_len[lsym]
+      bitbuf = bitbuf | ((length - len_base[lidx]) << bit_count)
+      bit_count = bit_count + len_extra[lidx]
+      while bit_count >= 8 {
+        w.write_byte((bitbuf & 0xFF).to_byte())
+        bitbuf = bitbuf >> 8
+        bit_count = bit_count - 8
+      }
+      let didx = dist_index(dist)
+      bitbuf = bitbuf | (dd_val[didx].reinterpret_as_int() << bit_count)
+      bit_count = bit_count + dd_len[didx]
+      while bit_count >= 8 {
+        w.write_byte((bitbuf & 0xFF).to_byte())
+        bitbuf = bitbuf >> 8
+        bit_count = bit_count - 8
+      }
+      bitbuf = bitbuf | ((dist - dist_base[didx]) << bit_count)
+      bit_count = bit_count + dist_extra[didx]
+    }
+    while bit_count >= 8 {
+      w.write_byte((bitbuf & 0xFF).to_byte())
+      bitbuf = bitbuf >> 8
+      bit_count = bit_count - 8
     }
   }
+  w.bitbuf = bitbuf
+  w.bit_count = bit_count
 }
 
 ///|
