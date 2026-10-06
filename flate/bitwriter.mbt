@@ -97,7 +97,7 @@ fn BitWriter::write_byte(self : BitWriter, byte : Byte) -> Unit {
 /// even if a previous header or payload already exhausted the output buffer.
 fn BitWriter::write_bytes(
   self : BitWriter,
-  input : Bytes,
+  input : BytesView,
   offset : Int,
   length : Int,
 ) -> Unit {
@@ -109,7 +109,12 @@ fn BitWriter::write_bytes(
     }
     let count = length.min((output.length() - self.direct_pos).max(0))
     if count > 0 {
-      output.blit_from_bytes(self.direct_pos, input, offset, count)
+      output.blit_from_bytes(
+        self.direct_pos,
+        input.data(),
+        input.start_offset() + offset,
+        count,
+      )
     }
     self.direct_pos = self.direct_pos + length
     if count < length {

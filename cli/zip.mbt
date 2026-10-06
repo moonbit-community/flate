@@ -120,7 +120,7 @@ async fn add_archive_entry(
       defer file.close()
       writer.begin_entry(
         name,
-        compression=@zip.Compression::for_filename(basename),
+        compression=compression_for_filename(basename),
         size=file.size().reinterpret_as_uint64(),
       )
       sink.flush()

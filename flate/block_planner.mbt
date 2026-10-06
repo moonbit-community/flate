@@ -1,12 +1,10 @@
+///|
+const MIN_LOOKAHEAD : Int = 258
+
 // Block planning for the streaming encoder. Input lives in a fixed mirrored
 // ring: the first half is indexed by absolute position modulo 64 KiB and the
 // second half mirrors it for branch-free SIMD comparisons across the wrap.
 // The parser and its 32 KiB matchfinder survive every block boundary.
-
-///|
-/// Bytes of unconsumed lookahead reserved beyond a non-final block boundary so
-/// matches there see their full extent.
-pub const MIN_LOOKAHEAD : Int = 258
 
 ///|
 fn Deflater::pending_bytes(self : Deflater) -> Int {
@@ -123,7 +121,7 @@ fn Deflater::emit_capped(self : Deflater) -> Unit {
     self.pending,
     self.parse_pos,
     processed,
-    self.tokens[:],
+    self.tokens,
     self.ll_freq,
     self.d_freq,
     is_final=false,
@@ -179,7 +177,7 @@ fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
     self.pending,
     self.parse_pos,
     processed,
-    self.tokens[:],
+    self.tokens,
     self.ll_freq,
     self.d_freq,
     is_final~,

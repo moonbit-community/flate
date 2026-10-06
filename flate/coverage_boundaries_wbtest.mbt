@@ -185,7 +185,7 @@ test "stored decoder drains prefetched bytes before staged and external input" {
   d.bitbuf = 97
   d.bit_count = 8
   d.staged_input = [b'b']
-  d.view = b"c"[:]
+  d.view = b"c"
   d.out = output.mut_view()
   d.out_end = 3
   @test.assert_eq(d.run_step(), Done)
@@ -244,14 +244,26 @@ test "growable bit writer preserves prefix when byte payload grows storage" {
   let writer = BitWriter::growing(FixedArray::make(1, b'\x00'))
   writer.write_byte(b'\xaa')
   writer.write_bytes(b"012345", 1, 4)
-  assert_eq(writer.direct_pos, 5)
+  @test.assert_eq(writer.direct_pos, 5)
   assert_false(writer.overflowed)
-  assert_eq(Bytes::from_array(writer.direct_output.unwrap()[:5]), b"\xaa1234")
+  @test.assert_eq(
+    Bytes::from_array(writer.direct_output.unwrap()[:5]),
+    b"\xaa1234",
+  )
 }
 
 ///|
 test "bit writer capacity arithmetic stays within Int at the doubling boundary" {
-  assert_eq(bitwriter_growth_capacity(0x3fff_ffff, 0x4000_0000), 0x7fff_fffe)
-  assert_eq(bitwriter_growth_capacity(0x4000_0000, 0x4000_0001), 0x4000_0001)
-  assert_eq(bitwriter_growth_capacity(0x7fff_fffe, 0x7fff_ffff), 0x7fff_ffff)
+  @test.assert_eq(
+    bitwriter_growth_capacity(0x3fff_ffff, 0x4000_0000),
+    0x7fff_fffe,
+  )
+  @test.assert_eq(
+    bitwriter_growth_capacity(0x4000_0000, 0x4000_0001),
+    0x4000_0001,
+  )
+  @test.assert_eq(
+    bitwriter_growth_capacity(0x7fff_fffe, 0x7fff_ffff),
+    0x7fff_ffff,
+  )
 }

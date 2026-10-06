@@ -392,11 +392,11 @@ fn write_fixed_block(w : BitWriter, tokens : ArrayView[Int]) -> Unit {
 ///|
 /// Write one empty final block (no tokens) — the one-shot drivers' encoding of
 /// an empty input.
-fn emit_empty_block(w : BitWriter, input : Bytes) -> Unit {
+fn emit_empty_block(w : BitWriter, input : BytesView) -> Unit {
   let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
   let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
   let none : FixedArray[Int] = []
-  emit_block(w, input, 0, 0, none[:], ll_freq, d_freq, is_final=true)
+  emit_block(w, input, 0, 0, none, ll_freq, d_freq, is_final=true)
 }
 
 ///|
@@ -408,7 +408,7 @@ fn emit_empty_block(w : BitWriter, input : Bytes) -> Unit {
 /// next block, so the caller flushes once, after the final block.
 fn emit_block(
   w : BitWriter,
-  data : Bytes,
+  data : BytesView,
   start : Int,
   end : Int,
   tokens : ArrayView[Int],
@@ -431,7 +431,7 @@ fn emit_block(
 /// since the mandatory alignment pads the bit stream to a byte boundary.
 fn write_stored(
   w : BitWriter,
-  data : Bytes,
+  data : BytesView,
   start : Int,
   end : Int,
   is_final~ : Bool,

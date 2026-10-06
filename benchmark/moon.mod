@@ -10,7 +10,7 @@ license = "Apache-2.0"
 
 keywords = [ "benchmark", "compression", "deflate" ]
 
-description = "Benchmark and tooling module for flate. Kept as a separate workspace module so the published library module stays free of external dependencies."
+description = "Benchmarks for flate."
 
 import {
   "moonbitlang/x@0.5.5",

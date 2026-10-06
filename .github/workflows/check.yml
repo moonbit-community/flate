@@ -64,8 +64,8 @@ jobs:
       - name: moon info and moon fmt (all modules)
         shell: bash
         run: |
-          (cd flate && moon info && moon fmt)
-          (cd benchmark && moon info && moon fmt)
+          moon info
+          moon fmt
           git diff --exit-code
           untracked_mbti="$(git ls-files --others --exclude-standard -- ':(glob)**/pkg.generated.mbti')"
           if [ -n "$untracked_mbti" ]; then
@@ -91,10 +91,6 @@ jobs:
       - name: coverage gate
         if: ${{ matrix.os.name == 'ubuntu-latest' }}
         working-directory: flate
-        env:
-          # The coverage tool resolves source paths against the module root;
-          # disable the workspace so it does not look them up at the repo root.
-          MOON_WORK: "off"
         shell: bash
         run: |
           coverage_file="$RUNNER_TEMP/flate-coverage.txt"
@@ -105,7 +101,8 @@ jobs:
           # selected by native; both are mutually exclusive source variants.
           moon test --target js --enable-coverage --no-parallelize \
             --deny-warn
-          moon coverage report -- -f summary | tee "$coverage_file"
+          moon coverage report -- -f summary \
+            --source-paths "$PWD" | tee "$coverage_file"
           awk -v minimum="$MIN_COVERAGE_PERCENT" '
             /^Total:/ {
               split($2, counts, "/")
