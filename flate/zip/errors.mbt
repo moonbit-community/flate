@@ -10,13 +10,7 @@ pub(all) enum LimitKind {
   TotalUncompressedBytes
   PreservedSourceBytes
   OutputBytes
-} derive(Eq, Debug)
-
-///|
-pub extend LimitKind with Eq::{not_equal, equal}
-
-///|
-pub extend LimitKind with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
 
 ///|
 /// Machine-readable category for a ZIP container failure. The accompanying
@@ -36,17 +30,15 @@ pub(all) enum ZipErrorKind {
   /// The archive uses a ZIP feature this package does not support (encryption,
   /// multi-disk, ambiguous or inconsistent records, ...).
   UnsupportedFeature
+  /// The entry contains malformed DEFLATE data.
+  InvalidDeflate
+  /// The entry payload does not match its stored CRC-32.
+  ChecksumMismatch
   /// A caller-supplied resource limit was exceeded.
   LimitExceeded(LimitKind, Int, Int)
   /// The caller's cancellation callback returned `true` during a bounded read.
   Cancelled
-} derive(Eq, Debug)
-
-///|
-pub extend ZipErrorKind with Eq::{not_equal, equal}
-
-///|
-pub extend ZipErrorKind with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
 
 ///|
 /// Structured ZIP failure: a stable category plus a human-readable diagnostic.
@@ -62,12 +54,12 @@ fn check_cancelled(cancelled : () -> Bool) -> Unit raise ZipError {
 }
 
 ///|
-/// Map a raw DEFLATE failure onto the ZIP error surface.
-#coverage.skip
-fn wrap_inflate_error(err : Error) -> ZipError {
-  match err {
-    @flate.InflateError(_, message) =>
-      ZipError(UnsupportedFeature, "zip: invalid DEFLATE stream: \{message}")
-    _ => ZipError(UnsupportedFeature, "zip: invalid DEFLATE stream")
+/// Map a raw DEFLATE failure without losing cooperative cancellation.
+fn wrap_inflate_error(err : @flate.InflateError) -> ZipError {
+  let InflateError(kind, message) = err
+  match kind {
+    Cancelled => ZipError(Cancelled, message)
+    Truncated => ZipError(Truncated, message)
+    _ => ZipError(InvalidDeflate, message)
   }
 }

@@ -4,6 +4,9 @@ Pure-MoonBit **DEFLATE** (RFC 1951) — a runtime-agnostic, suspendable, io-free
 compression engine, with thin **gzip** (RFC 1952), **zlib** (RFC 1950), and
 **zip** (APPNOTE.TXT) container wrappers.
 
+CRC-32 and Adler-32 are provided by the `moonbit-community/flate/checksum`
+package. It depends only on MoonBit core and is shared by gzip, zlib, and zip.
+
 ## Install
 
 ```bash
@@ -12,19 +15,22 @@ moon add moonbit-community/flate
 
 ## Quick start
 
-The one-shot API is useful when the complete payload is already in memory:
+The one-shot API is useful when the complete payload is already in memory.
+Read-only codec inputs accept `BytesView`, so a slice of a larger buffer needs
+no ownership conversion or input copy:
 
 ```mbt check
 ///|
 test "README raw DEFLATE round-trip" {
   let source = b"runtime-agnostic streaming compression"
   let compressed = @flate.deflate_all(source)
-  assert_eq(@flate.inflate_all(compressed), source)
+  @test.assert_eq(@flate.inflate_all(compressed), source)
 }
 ```
 
 For whole-buffer callers that already own their output storage, use the direct
-buffer API. `deflate_bound` supplies a conservative DEFLATE capacity;
+buffer API. `deflate_bound` supplies a conservative DEFLATE capacity (it panics
+for a negative input length or an unrepresentable bound);
 compression returns `None` if the supplied buffer is smaller, while decompression
 raises `OutputLimitExceeded`. Reuse `Compressor` and `Decompressor` for many
 streams so their parser and Huffman workspace stays allocated:
@@ -40,13 +46,13 @@ test "README caller-buffer DEFLATE" {
   )
   guard compressor.compress_into(source, compressed_buffer)
     is Some(compressed_len) else {
-    fail("deflate_bound was too small")
+    @test.fail("deflate_bound was too small")
   }
   let compressed = Bytes::from_array(compressed_buffer[:compressed_len])
   let decompressor = @flate.Decompressor()
   let output = FixedArray::make(source.length(), b'\x00')
   let decoded_len = decompressor.decompress_into(compressed, output)
-  assert_eq(Bytes::from_array(output[:decoded_len]), source)
+  @test.assert_eq(Bytes::from_array(output[:decoded_len]), source)
 }
 ```
 
@@ -68,10 +74,10 @@ test "README streaming Deflater" {
   let source = b"small buffers exercise suspension and resume"
   let encoder = @flate.Deflater()
   let chunk = FixedArray::make(3, b'\x00')
-  let compressed = Buffer()
+  let compressed = @buffer.Buffer()
   let mut first = true
   for ;; {
-    let input = if first { source[:] } else { b""[:] }
+    let input = if first { source[:] } else { b"" }
     let status = encoder.step(
       input,
       chunk.mut_view(),
@@ -79,7 +85,7 @@ test "README streaming Deflater" {
     )
     let consumed = encoder.last_consumed()
     let produced = encoder.last_produced()
-    assert_eq(consumed, if first { source.length() } else { 0 })
+    @test.assert_eq(consumed, if first { source.length() } else { 0 })
     first = false
     for i in 0..<produced {
       compressed.write_byte(chunk[i])
@@ -88,7 +94,7 @@ test "README streaming Deflater" {
       break
     }
   }
-  assert_eq(@flate.inflate_all(compressed.to_bytes()), source)
+  @test.assert_eq(@flate.inflate_all(compressed.to_bytes()), source)
 }
 ```
 
@@ -113,6 +119,11 @@ test "README streaming Deflater" {
   and uses bulk window copies. It has the same consumption and backpressure
   semantics as `step`, which accepts arbitrary mutable output views. Both
   release caller buffers after each call.
+- `gzip.Decoder::step_into(input, output)` accepts a complete `FixedArray[Byte]`
+  and checksums decoded output in batches. Use it when the caller owns a fixed
+  output buffer; `step` accepts arbitrary mutable views. Both drain pending
+  body input before accepting more, so output can be produced while
+  `last_consumed()` is zero. Re-present the unaccepted input on the next call.
 - Raw `Inflater::step(..., end=true)` and the container decoders turn physical
   EOF before `Done` into a stable truncation error. After any decoder error,
   discard or reset the raw engine; container decoder instances stably rethrow
@@ -132,7 +143,7 @@ test "README streaming Deflater" {
 - Raw failures expose a stable `InflateErrorKind` (`Truncated`, `Corrupt`,
   `TrailingData`, `OutputLimitExceeded`, or `Cancelled`) alongside diagnostic
   text; gzip/zlib similarly expose `GzipErrorKind`/`ZlibErrorKind`.
-- One-shot decoding (`inflate_all`, `inflate_all_limited`, `inflate_exact`)
+- One-shot decoding (`inflate_all`, `inflate_exact`)
   accepts an optional `cancelled` callback, polled at entry and then every
   ~4-8 KiB of decoded output; returning `true` raises
   `InflateError(Cancelled, _)`, so untrusted-input loops can react to
@@ -142,21 +153,21 @@ test "README streaming Deflater" {
 
 `inflate_all` remains the convenient trusted-input API: it accepts a raw
 DEFLATE prefix and grows its output without a limit. Use `inflate_exact` when the
-input must contain exactly one raw stream, and `inflate_all_limited` when decoded
-size must be bounded:
+input must contain exactly one raw stream. Both accept `max_output` to bound
+the decoded size:
 
 ```mbt check
 ///|
 test "README exact and limited inflate" {
   let source = b"bounded convenience API"
   let compressed = @flate.deflate_all(source)
-  assert_eq(@flate.inflate_exact(compressed), source)
-  assert_eq(
-    @flate.inflate_all_limited(compressed, max_output=source.length()),
+  @test.assert_eq(@flate.inflate_exact(compressed), source)
+  @test.assert_eq(
+    @flate.inflate_all(compressed, max_output=source.length()),
     source,
   )
-  assert_eq(
-    @flate.inflate_exact(compressed, max_output=Some(source.length())),
+  @test.assert_eq(
+    @flate.inflate_exact(compressed, max_output=source.length()),
     source,
   )
 }
@@ -176,14 +187,14 @@ callers that do not need the memory bound.
 The `@zip` package reads and writes ZIP archives using the same compression
 engine. Use `Archive` for in-memory editing and serialization:
 
-```mbt nocheck
+```mbt check
 ///|
 test "README zip round-trip" {
   let archive = @zip.Archive()
   archive.add("hello.txt", b"hello, zip")
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
-  assert_eq(parsed.get("hello.txt"), Some(b"hello, zip"[:]))
+  @test.assert_eq(parsed.get("hello.txt"), Some(b"hello, zip"))
 }
 ```
 
@@ -193,19 +204,23 @@ size, entry count, decompressed sizes, and retained source records, plus a
 `cancelled` callback. Exceeding a limit raises
 `ZipError(LimitExceeded(kind, limit, actual))`.
 
-`write_preserving` reuses unchanged source records; an unmodified archive can
-round-trip byte-for-byte. `write_limited` and `write_preserving_limited` cap the
-output size. These APIs return the complete ZIP as `Bytes`.
+`read` verifies each entry's CRC-32, raising `ChecksumMismatch` for a damaged
+payload. Cancellation remains `Cancelled` throughout parsing, decoding and
+checksum verification.
+
+`write(archive, preserve=true)` reuses unchanged source records; an unmodified
+archive can round-trip byte-for-byte. Supply `max_output_bytes` to bound the
+serialized size before allocating it. `write` returns the complete ZIP as `Bytes`.
 
 For incremental output, use `Writer` with a synchronous sink. `add` accepts a
 complete file; `begin_entry` / `write` / `end_entry` accept chunks. Supply `size`
 when known; unknown sizes use ZIP64.
 
-```mbt nocheck
+```mbt check
 ///|
 test "README incremental ZIP writer" {
   // A real folder adapter passes a buffered file-write callback here.
-  let output = Buffer()
+  let output = @buffer.Buffer()
   let writer = @zip.Writer(chunk => output.write_bytes(chunk))
   writer.add("small.txt", b"small file")
   writer.begin_entry("chunked.txt", size=6UL)
@@ -214,7 +229,7 @@ test "README incremental ZIP writer" {
   writer.end_entry()
   writer.finish()
   let archive = @zip.read(output.to_bytes())
-  assert_eq(archive.get("chunked.txt"), Some(b"abcdef"[:]))
+  @test.assert_eq(archive.get("chunked.txt"), Some(b"abcdef"))
 }
 ```
 
@@ -234,7 +249,7 @@ ENCODE: bytes → raw DEFLATE
 
  deflate_all /    Deflater::step             deflate_all_split(input)   deflate_all_optimal(input)
  Compressor::      streaming, suspendable;    one-shot, adaptive         one-shot, offline
- compress_into     sync flush, preset dict    block splitting            (zopfli-style)
+ compress_into sync flush, preset dict    block splitting            (zopfli-style)
  one-shot, up to
   64 KB blocks
         │              │                           │                        │
@@ -246,7 +261,7 @@ ENCODE: bytes → raw DEFLATE
  │ (levels 1-9; 0 = stored) │    │ split, arbitrated vs      │  │ cost-optimal shortest path │
  ├─ block driver ───────────┤    │ the ordinary block size   │  ├─ planner ──────────────────┤
  │ block_planner.mbt (strm) │    └────────────┬──────────────┘  │ optimal_plan.mbt           │
- │ or deflate_all.mbt inline│                 │                 │ content-driven splitting   │
+ │ or deflate_all.mbt driver│                 │                 │ content-driven splitting   │
  │ streaming: 16 KB blocks  │                 │                 │ (FindMinimum + resplit)    │
  └────────────┬─────────────┘    └─────────────┬──────────────┘
               └────────────┬───────────────────┘
@@ -285,14 +300,14 @@ DECODE: raw DEFLATE → bytes
 CONTAINERS: thin framing over the engine
 ════════════════════════════════════════
 
-  gzip/  Encoder/Decoder, gzip_compress/gunzip            (RFC 1952)
-         10 B header (optional fields skipped in O(1)) + CRC-32 + ISIZE;
+  gzip/  Encoder/Decoder, compress/decompress            (RFC 1952)
+         10 B header (O(1) header memory, FHCRC verified) + CRC-32 + ISIZE;
          decodes concatenated multi-member streams (§2.2)
-  zlib/  Encoder/Decoder, zlib_compress/zlib_decompress   (RFC 1950)
+  zlib/  Encoder/Decoder, compress/decompress   (RFC 1950)
          2 B header (+ FDICT dictionary id) + Adler-32
   zip/   read/write, Archive/Entry, Writer, ZIP64,         (APPNOTE.TXT)
          bounded reads, incremental writes, byte-preserving rewrites
-  checksum/  incremental CRC-32 / Adler-32 digests
+  checksum/  shared CRC-32 / Adler-32 package
 
  shared by both pipelines:
    tables.mbt  RFC 1951 symbol tables, fixed codes, window size
@@ -359,8 +374,35 @@ content-driven block splitting (`optimal_plan.mbt`) — drop-in replacements for
 the greedy parser (`lz77.mbt`) and the threshold planner (`block_planner.mbt`)
 behind the same (tokens, frequencies) → `emit_block` seam.
 
-The containers expose both tiers: `gzip_compress` / `zlib_compress` and their
-streaming `Encoder`s take `level` 0-9; `gzip_compress_optimal` /
-`zlib_compress_optimal` apply the offline zopfli path (one-shot only — a
+The containers expose both tiers: `@gzip.compress` / `@zlib.compress` and their
+streaming `Encoder`s take `level` 0-9; `@gzip.compress_optimal` /
+`@zlib.compress_optimal` apply the offline zopfli path (one-shot only — a
 streaming encoder cannot suspend a whole-input optimal parse), for
 compress-once, serve-forever artifacts.
+
+## API conventions
+
+Read-only inputs accept `BytesView`; existing `Bytes` values convert at the
+call site without copying. `Compressor::compress` and `compress_into` reuse
+workspace for repeated streams, and `@checksum.adler32` accepts views directly.
+
+Both `inflate_all` and `inflate_exact` take a plain optional integer ceiling:
+`max_output=n`. Omit it for unbounded output. `inflate_all` accepts a raw stream
+prefix; `inflate_exact` rejects trailing bytes.
+
+ZIP writing uses `write(archive, preserve=true, max_output_bytes=n)` for
+byte-preserving, bounded output. The options are independent. Construct read
+bounds with `ReadLimits(max_entries=..., max_package_bytes=...,
+max_entry_uncompressed_bytes=..., max_total_uncompressed_bytes=...,
+max_preserved_source_bytes=...)`.
+
+Internal format and tuning constants are private. Use `deflate_bound` to size
+compression output. Filename-based compression selection belongs to the caller;
+the CLI supplies its own policy.
+
+ZIP payload CRC and gzip FHCRC are verified. A damaged checksum raises
+`ChecksumMismatch`; malformed ZIP DEFLATE data raises `InvalidDeflate`, and
+cancellation during ZIP decompression remains `Cancelled`.
+`deflate_bound` rejects negative or unrepresentable capacities.
+
+Use `!=` for inequality and `@debug.Repr(value)` for debugging.

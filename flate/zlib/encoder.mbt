@@ -1,7 +1,7 @@
 // Streaming zlib (RFC 1950) compressor: a push-based, suspendable state machine
 // wrapping the `@flate.Deflater`. It emits the 2-byte header, then the raw
 // DEFLATE stream block-by-block, then the 4-byte big-endian Adler-32 trailer,
-// accumulating the checksum incrementally. The one-shot `zlib_compress` remains
+// accumulating the checksum incrementally. The one-shot `compress` remains
 // for in-memory use.
 
 ///|
@@ -42,7 +42,7 @@ pub struct Encoder {
 /// The default is false.
 pub fn Encoder::Encoder(
   level? : Int = 6,
-  dictionary? : Bytes,
+  dictionary? : BytesView,
   fast_store? : Bool = false,
 ) -> Encoder {
   let def = if dictionary is Some(dict) {
@@ -194,7 +194,7 @@ pub fn Encoder::step(
       }
       Body => {
         let st = self.def.step(
-          b""[:],
+          b"",
           output.mut_view(start=op),
           action=self.pending_action,
         )

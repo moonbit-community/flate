@@ -1,6 +1,9 @@
-// Package "@checksum": non-cryptographic checksums (CRC-32, Adler-32) used by
-// the gzip/zlib/ZIP containers. Not for security — these are error-detection
-// codes, not cryptographic hashes. No dependencies (operates on Bytes).
+import {
+  "moonbitlang/core/builtin",
+}
+
+// Non-cryptographic checksums over byte views. Independent of compression
+// formats, I/O, and cancellation policies.
 
 import {
   "moonbitlang/core/quickcheck",

@@ -25,7 +25,7 @@ fn make_bytes(seed : UInt, len : Int, alpha : Int) -> Bytes {
 /// Compress `data` feeding one input byte per `step` into a one-byte output.
 fn deflate_1b(data : Bytes, level : Int) -> Bytes {
   let def = @flate.Deflater(level~)
-  let comp = Buffer()
+  let comp = @buffer.Buffer()
   let ob = FixedArray::make(1, b'\x00')
   let n = data.length()
   let mut i = 0
@@ -57,7 +57,7 @@ fn deflate_1b(data : Bytes, level : Int) -> Bytes {
 /// exactly once; no growing replay window is required.
 fn inflate_1b(comp : Bytes) -> Bytes raise {
   let inf = @flate.Inflater()
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let ob = FixedArray::make(1, b'\x00')
   let n = comp.length()
   let mut consumed = 0
@@ -86,7 +86,7 @@ test "byte-at-a-time deflate+inflate round-trips (1B in, 1B out)" {
   // Small sizes, cheap levels — exercises match-copy / input / output
   // suspension and the length-258/259 and dist=1 boundaries without the
   // expensive level-9 chain search.
-  let cases = [
+  let cases : ReadOnlyArray[_] = [
     (1, 0),
     (1, 1),
     (1, 2),
@@ -103,13 +103,13 @@ test "byte-at-a-time deflate+inflate round-trips (1B in, 1B out)" {
     let data = make_bytes(seed, len, alpha)
     for level in [0, 1, 6] {
       let comp = deflate_1b(data, level)
-      assert_eq(@flate.inflate_all(comp), data)
-      assert_eq(inflate_1b(comp), data)
+      @test.assert_eq(@flate.inflate_all(comp), data)
+      @test.assert_eq(inflate_1b(comp), data)
     }
   }
   // A long single-byte run: overlapping dist=1 copies, drained one byte/step.
   let run = Bytes::from_array(Array::make(700, b'\x5A'))
-  assert_eq(inflate_1b(deflate_1b(run, 6)), run)
+  @test.assert_eq(inflate_1b(deflate_1b(run, 6)), run)
 }
 
 ///|
@@ -118,9 +118,9 @@ test "byte-at-a-time inflate of one-shot output (1B in, 1B out)" {
   for alpha in [1, 2, 16] {
     seed = lcg(seed)
     let data = make_bytes(seed, 800, alpha)
-    assert_eq(inflate_1b(@flate.deflate_all(data, level=6)), data)
+    @test.assert_eq(inflate_1b(@flate.deflate_all(data, level=6)), data)
   }
   // One small optimal-parsed stream, decoded byte-at-a-time.
   let d = make_bytes(42U, 300, 4)
-  assert_eq(inflate_1b(@flate.deflate_all_optimal(d, iterations=2)), d)
+  @test.assert_eq(inflate_1b(@flate.deflate_all_optimal(d, iterations=2)), d)
 }

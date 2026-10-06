@@ -1,6 +1,6 @@
 ///|
 /// Output storage for the one-shot decoder. Unlike the general-purpose core
-/// `Buffer`, this exposes the fixed backing array needed for DEFLATE's
+/// `@buffer.Buffer`, this exposes the fixed backing array needed for DEFLATE's
 /// overlapping back-reference copies.
 priv struct DecodeOutput {
   mut storage : FixedArray[Byte]
@@ -88,13 +88,18 @@ fn DecodeOutput::append_byte(
 ///|
 fn DecodeOutput::append_bytes(
   self : DecodeOutput,
-  source : Bytes,
+  source : BytesView,
   source_offset : Int,
   length : Int,
 ) -> Unit raise InflateError {
   guard length > 0 else { return }
   self.ensure_capacity(length)
-  self.storage.blit_from_bytes(self.length, source, source_offset, length)
+  self.storage.blit_from_bytes(
+    self.length,
+    source.data(),
+    source.start_offset() + source_offset,
+    length,
+  )
   self.length = self.length + length
 }
 
@@ -194,7 +199,7 @@ fn DecodeOutput::to_bytes(self : DecodeOutput) -> Bytes {
 ///|
 /// In-memory DEFLATE decoder. Reads from a `Bytes` and appends to `out`.
 priv struct MemDecoder {
-  mut input : Bytes
+  mut input : BytesView
   mut pos : Int // next input byte
   mut bitbuf : UInt // LSB-first bit accumulator
   mut bit_count : Int // valid bits in `bitbuf`
@@ -231,7 +236,10 @@ const HUFFMAN_FAST_REFILL_BITS : Int = 24
 const INFLATE_SCRATCH_SIZE : Int = 8192
 
 ///|
-fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
+fn MemDecoder::MemDecoder(
+  input : BytesView,
+  cancelled : () -> Bool,
+) -> MemDecoder {
   {
     input,
     pos: 0,
@@ -254,7 +262,7 @@ fn MemDecoder::MemDecoder(input : Bytes, cancelled : () -> Bool) -> MemDecoder {
 /// back-reference history, so no secondary output allocation is needed.
 fn MemDecoder::reset_into(
   self : MemDecoder,
-  input : Bytes,
+  input : BytesView,
   output : FixedArray[Byte],
   cancelled : (() -> Bool)?,
 ) -> Unit {
@@ -928,14 +936,26 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
 ///|
 /// Decompress a raw DEFLATE stream held entirely in memory. Bytes after the
 /// final block are ignored; use `inflate_exact` when an exact framing boundary
-/// is required. The output grows without bound; for untrusted input use
-/// `inflate_all_limited` or drive `Inflater` with caller-sized output buffers.
-/// If supplied, `cancelled` is polled at entry and then every 4096 produced
-/// bytes; returning `true` raises `InflateError(Cancelled, _)`.
+/// is required. Omit `max_output` for unbounded output, or supply a non-negative
+/// ceiling to raise `OutputLimitExceeded` before returning an oversized result.
+/// If supplied, `cancelled` is polled at entry and every 4096 produced bytes
+/// (8192 with `max_output`); returning `true` raises `InflateError(Cancelled, _)`.
 pub fn inflate_all(
-  input : Bytes,
+  input : BytesView,
+  max_output? : Int,
   cancelled? : () -> Bool,
 ) -> Bytes raise InflateError {
+  if max_output is Some(limit) {
+    guard limit >= 0 else {
+      raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
+    }
+    return inflate_streaming_all(
+      input,
+      Some(limit),
+      false,
+      cancelled.map_or(no_cancellation, callback => callback),
+    )
+  }
   let d = MemDecoder(input, no_cancellation)
   d.set_cancellation(cancelled)
   d.run()
@@ -964,7 +984,7 @@ pub fn Decompressor::Decompressor() -> Decompressor {
 /// buffer to avoid per-stream decoder and result-buffer allocation.
 pub fn Decompressor::decompress_into(
   self : Decompressor,
-  input : Bytes,
+  input : BytesView,
   output : FixedArray[Byte],
   cancelled? : () -> Bool,
 ) -> Int raise InflateError {
@@ -977,7 +997,7 @@ pub fn Decompressor::decompress_into(
 /// One-shot convenience form of `Decompressor::decompress_into`. It creates a
 /// decompressor for this call; use `Decompressor` when decoding many streams.
 pub fn inflate_into(
-  input : Bytes,
+  input : BytesView,
   output : FixedArray[Byte],
   cancelled? : () -> Bool,
 ) -> Int raise InflateError {
@@ -997,7 +1017,7 @@ pub fn inflate_into(
 /// step (every 8192 produced bytes); returning `true` raises
 /// `InflateError(Cancelled, _)`.
 fn inflate_streaming_all(
-  input : Bytes,
+  input : BytesView,
   max_output : Int?,
   exact : Bool,
   cancelled : () -> Bool,
@@ -1053,21 +1073,20 @@ fn inflate_streaming_all(
 ///    of roughly double the decode work; the default `false` grows one buffer
 ///    in a single pass, trading transient memory for one decode pass.
 pub fn inflate_exact(
-  input : Bytes,
-  max_output? : Int? = None,
+  input : BytesView,
+  max_output? : Int,
   cancelled? : () -> Bool = () => false,
   preallocated? : Bool = false,
 ) -> Bytes raise InflateError {
-  let limit = max_output.map_or(max_output, limit => {
+  if max_output is Some(limit) {
     guard limit >= 0 else {
       raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
     }
-    max_output
-  })
+  }
   if preallocated {
-    inflate_preallocated(input, limit, cancelled)
+    inflate_preallocated(input, max_output, cancelled)
   } else {
-    inflate_streaming_all(input, limit, true, cancelled)
+    inflate_streaming_all(input, max_output, true, cancelled)
   }
 }
 
@@ -1079,7 +1098,7 @@ pub fn inflate_exact(
 /// polled once per step and raises `InflateError(Cancelled, _)`.
 fn inflate_drive(
   inflater : Inflater,
-  input : Bytes,
+  input : BytesView,
   max_output : Int?,
   exact : Bool,
   cancelled : () -> Bool,
@@ -1093,7 +1112,7 @@ fn inflate_drive(
     let consumed = inflater.last_consumed()
     let produced = inflater.last_produced()
     input_pos = input_pos + consumed
-    total = total + produced
+    total = checked_decode_output_length(total, produced)
     guard !cancelled() else {
       raise InflateError(Cancelled, "cancelled by caller")
     }
@@ -1133,7 +1152,7 @@ fn validate_preallocation_size(
 /// over an 8 KiB scratch, then replay the deterministic decode into one exact
 /// allocation (the same `Inflater` is reused via `reset`).
 fn inflate_preallocated(
-  input : Bytes,
+  input : BytesView,
   max_output : Int?,
   cancelled : () -> Bool,
 ) -> Bytes raise InflateError {
@@ -1155,21 +1174,10 @@ fn inflate_preallocated(
     }),
   )
   validate_preallocation_size(size, filled)
-  Bytes::from_array(buf)
+  owned_decode_buffer_to_bytes(buf)
 }
 
 ///|
-/// Decompress one raw DEFLATE stream without allowing the returned output to
-/// exceed `max_output`. Bytes after the final block retain `inflate_all`'s
-/// prefix semantics and are ignored. `cancelled` follows `inflate_all`'s
-/// polling contract.
-pub fn inflate_all_limited(
-  input : Bytes,
-  max_output~ : Int,
-  cancelled? : () -> Bool = () => false,
-) -> Bytes raise InflateError {
-  guard max_output >= 0 else {
-    raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
-  }
-  inflate_streaming_all(input, Some(max_output), false, cancelled)
-}
+/// Transfers the completely initialized replay output. The array is local to
+/// `inflate_preallocated`; neither its mutable view nor an alias escapes.
+fn owned_decode_buffer_to_bytes(buffer : FixedArray[Byte]) -> Bytes = "%identity"

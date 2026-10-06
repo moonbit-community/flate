@@ -15,7 +15,7 @@ test "Adler block reduction agrees with bytewise reference at boundaries" {
   for size in [0, 1, 3799, 3800, 3801, 7599, 7600, 7601, 65536, 1048576] {
     for byte in [b'\x00', b'\xFF'] {
       let input = Bytes::make(size, byte)
-      @test.assert_eq(@checksum.adler32(input), adler_reference(input[:]))
+      @test.assert_eq(@checksum.adler32(input), adler_reference(input))
     }
   }
 }
@@ -31,7 +31,7 @@ test "Adler mixed updates and finish preserve prefix state across blocks" {
     while position < input.length() {
       let end = (position + chunk).min(input.length())
       checksum.update(input[position:end])
-      checksum.update(b""[:])
+      checksum.update(b"")
       // finish is non-destructive, including before a subsequent update_byte.
       if chunk > 1 || end == input.length() {
         let expected = adler_reference(input[:end])
@@ -44,7 +44,7 @@ test "Adler mixed updates and finish preserve prefix state across blocks" {
         position = position + 1
       }
     }
-    @test.assert_eq(checksum.finish(), adler_reference(input[:]))
+    @test.assert_eq(checksum.finish(), adler_reference(input))
   }
 }
 

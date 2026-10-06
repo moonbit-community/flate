@@ -7,13 +7,11 @@ import {
 }
 
 // Values
-pub const DECODER_INPUT_LIMIT : Int = 65536
+pub fn compress(BytesView, level? : Int, fast_store? : Bool) -> Bytes
 
-pub fn gunzip(Bytes) -> Bytes raise GzipError
+pub fn compress_optimal(BytesView, iterations? : Int, fast_store? : Bool) -> Bytes
 
-pub fn gzip_compress(Bytes, level? : Int, fast_store? : Bool) -> Bytes
-
-pub fn gzip_compress_optimal(Bytes, iterations? : Int, fast_store? : Bool) -> Bytes
+pub fn decompress(BytesView) -> Bytes raise GzipError
 
 // Errors
 pub suberror GzipError {
@@ -29,6 +27,7 @@ pub fn Decoder::is_finished(Self) -> Bool
 pub fn Decoder::last_consumed(Self) -> Int
 pub fn Decoder::last_produced(Self) -> Int
 pub fn Decoder::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> @flate.Status raise GzipError
+pub fn Decoder::step_into(Self, BytesView, FixedArray[Byte], end? : Bool) -> @flate.Status raise GzipError
 pub fn Decoder::unused_input(Self) -> Bytes
 
 pub struct Encoder {
@@ -48,8 +47,6 @@ pub(all) enum GzipErrorKind {
   LengthMismatch
 } derive(Eq, @debug.Debug)
 pub fn GzipErrorKind::equal(Self, Self) -> Bool
-pub fn GzipErrorKind::not_equal(Self, Self) -> Bool
-pub fn GzipErrorKind::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

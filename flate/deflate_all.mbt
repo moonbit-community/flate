@@ -43,14 +43,19 @@ pub fn Compressor::Compressor(
 /// A conservative output capacity for `deflate_into` or
 /// `Compressor::compress_into`. The returned value covers the fixed 16 KiB
 /// minimum block cadence and final bit padding for a non-negative input length.
+/// Panics if the input length is negative or the bound cannot fit in `Int`.
 pub fn deflate_bound(input_size : Int) -> Int {
-  let input_size = input_size.max(0)
+  guard input_size >= 0 else { abort("negative DEFLATE input size") }
   let block_count = if input_size == 0 {
     1
   } else {
     (input_size - 1) / DEFLATE_BLOCK_SIZE + 1
   }
-  input_size + 5 * block_count + 1
+  let overhead = 5 * block_count + 1
+  guard input_size <= 0x7fffffff - overhead else {
+    abort("DEFLATE output capacity overflow")
+  }
+  input_size + overhead
 }
 
 ///|
@@ -60,7 +65,7 @@ pub fn deflate_bound(input_size : Int) -> Int {
 /// avoid per-stream workspace and result-buffer allocation.
 pub fn Compressor::compress_into(
   self : Compressor,
-  input : Bytes,
+  input : BytesView,
   output : FixedArray[Byte],
 ) -> Int? {
   self.encode(input, BitWriter::into(output))
@@ -69,7 +74,7 @@ pub fn Compressor::compress_into(
 ///|
 /// Compress a complete stream, reusing the parsing and output workspace.
 /// The returned bytes are independent of subsequent calls to this compressor.
-pub fn Compressor::compress(self : Compressor, input : Bytes) -> Bytes {
+pub fn Compressor::compress(self : Compressor, input : BytesView) -> Bytes {
   let writer = BitWriter::growing(self.output)
   ignore(self.encode(input, writer))
   if writer.direct_output is Some(output) {
@@ -79,7 +84,11 @@ pub fn Compressor::compress(self : Compressor, input : Bytes) -> Bytes {
 }
 
 ///|
-fn Compressor::encode(self : Compressor, input : Bytes, w : BitWriter) -> Int? {
+fn Compressor::encode(
+  self : Compressor,
+  input : BytesView,
+  w : BitWriter,
+) -> Int? {
   let n = input.length()
   // Level 0 or an explicit heuristic decision bypasses parsing entirely.
   guard self.level != 0 && !(self.fast_store && should_fast_store(input)) else {
@@ -92,41 +101,15 @@ fn Compressor::encode(self : Compressor, input : Bytes, w : BitWriter) -> Int? {
     }
   }
   self.finder.reset_for_input(input)
-  // The default level amortizes block construction over 65535 bytes; a
-  // boundary match may overhang, so `processed` (not `target`) sets the next
-  // start.
-  // Whole-buffer callers can amortize one Huffman header over the largest
-  // legal DEFLATE block; the streaming encoder keeps its smaller cadence.
-  let block_size = 65535
-  let mut pos = 0
-  for ;; {
-    let target = (pos + block_size).min(n)
-    self.tokens.clear()
-    self.ll_freq.fill(0)
-    self.d_freq.fill(0)
-    let processed = tokenize(
-      input,
-      self.finder,
-      pos,
-      target,
-      self.cfg,
-      self.tokens,
-      self.ll_freq,
-      self.d_freq,
-    )
-    emit_block(
-      w,
-      input,
-      pos,
-      processed,
-      self.tokens[:],
-      self.ll_freq,
-      self.d_freq,
-      is_final=processed >= n,
-    )
-    pos = processed
-    guard pos < n else { break }
-  }
+  encode_blocks(
+    input,
+    self.finder,
+    self.cfg,
+    self.tokens,
+    self.ll_freq,
+    self.d_freq,
+    w,
+  )
   w.flush()
   if w.overflowed {
     None
@@ -142,7 +125,7 @@ fn Compressor::encode(self : Compressor, input : Bytes, w : BitWriter) -> Int? {
 /// is needed. Opt-in `fast_store` may emit stored blocks after a heuristic
 /// check; false (the default) preserves normal compression behavior.
 pub fn deflate_all(
-  input : Bytes,
+  input : BytesView,
   level? : Int = 6,
   fast_store? : Bool = false,
 ) -> Bytes {
@@ -158,7 +141,6 @@ pub fn deflate_all(
   let cfg = level_configs[lv]
   let long_hash_bits = long_hash_bits_for_input(input)
   let finder = MatchFinder(input_size=n, long_hash_bits~)
-  let block_size = 65535
   // Reuse token and frequency storage across blocks. A whole-buffer stream
   // can span several legal blocks; reallocating these fixed workspaces for
   // every block only adds GC pressure and does not improve the parse.
@@ -166,9 +148,41 @@ pub fn deflate_all(
   let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
   let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
   finder.reset_for_input(input, long_hash_bits~)
+  encode_blocks(input, finder, cfg, tokens, ll_freq, d_freq, w)
+  w.flush()
+  Bytes::from_array(w.out)
+}
+
+///|
+/// One-shot convenience form of `Compressor::compress_into`. It creates a
+/// compressor for this call; use `Compressor` when encoding many streams.
+/// Optional `fast_store` has the same opt-in speed/ratio trade-off as `deflate_all`.
+pub fn deflate_into(
+  input : BytesView,
+  output : FixedArray[Byte],
+  level? : Int = 6,
+  fast_store? : Bool = false,
+) -> Int? {
+  Compressor(level~, fast_store~).compress_into(input, output)
+}
+
+///|
+/// Whole-buffer encoders share one block cadence and encoding decision. The
+/// caller owns the match finder and workspaces, so reuse introduces no copies.
+fn encode_blocks(
+  input : BytesView,
+  finder : MatchFinder,
+  cfg : LevelConfig,
+  tokens : Array[Int],
+  ll_freq : FixedArray[Int],
+  d_freq : FixedArray[Int],
+  w : BitWriter,
+) -> Unit {
+  let n = input.length()
+  let block_size = 65535
   let mut pos = 0
   for ;; {
-    let target = (pos + block_size).min(n)
+    let target = pos + (n - pos).min(block_size)
     tokens.clear()
     ll_freq.fill(0)
     d_freq.fill(0)
@@ -180,7 +194,7 @@ pub fn deflate_all(
       input,
       pos,
       processed,
-      tokens[:],
+      tokens,
       ll_freq,
       d_freq,
       is_final=processed >= n,
@@ -188,19 +202,4 @@ pub fn deflate_all(
     pos = processed
     guard pos < n else { break }
   }
-  w.flush()
-  Bytes::from_array(w.out)
-}
-
-///|
-/// One-shot convenience form of `Compressor::compress_into`. It creates a
-/// compressor for this call; use `Compressor` when encoding many streams.
-/// Optional `fast_store` has the same opt-in speed/ratio trade-off as `deflate_all`.
-pub fn deflate_into(
-  input : Bytes,
-  output : FixedArray[Byte],
-  level? : Int = 6,
-  fast_store? : Bool = false,
-) -> Int? {
-  Compressor(level~, fast_store~).compress_into(input, output)
 }

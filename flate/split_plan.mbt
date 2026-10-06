@@ -212,7 +212,7 @@ fn partition_cost(
 /// to the byte offset where it starts (with `all_pos[tokens.length()]` = end).
 fn emit_split_blocks(
   w : BitWriter,
-  data : Bytes,
+  data : BytesView,
   tokens : Array[Int],
   all_pos : FixedArray[Int],
   cuts : Array[Int],
@@ -262,7 +262,7 @@ fn emit_split_blocks(
 /// `fast_store` is disabled by default. Enabling it can bypass this strategy
 /// for heuristically incompressible input, trading output size for speed.
 pub fn deflate_all_split(
-  input : Bytes,
+  input : BytesView,
   level? : Int = 6,
   fast_store? : Bool = false,
 ) -> Bytes {

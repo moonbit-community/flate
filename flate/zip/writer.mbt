@@ -114,7 +114,7 @@ fn Output::finish(self : Output) -> Bytes {
 }
 
 ///|
-fn write_u16_buf(buf : Buffer, value : Int) -> Unit raise ZipError {
+fn write_u16_buf(buf : @buffer.Buffer, value : Int) -> Unit raise ZipError {
   let raw = value.to_uint_checked()
   buf.write_uint16_le(raw.to_uint16())
 }
@@ -138,7 +138,7 @@ fn build_zip64_extra(
   if count == 0 {
     return b""
   }
-  let buf = Buffer()
+  let buf = @buffer.Buffer()
   write_u16_buf(buf, ZIP64_EXTRA_ID)
   write_u16_buf(buf, 8 * count)
   if uncomp is Some(value) {
@@ -861,66 +861,29 @@ fn write_impl(
 }
 
 ///|
-/// Serialize `archive` into a ZIP byte stream, encoding every entry fresh
-/// (DEFLATE by default, STORED when the entry says so). `level` 0-9 trades
-/// speed for ratio on the DEFLATE payloads.
-/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
-/// stored blocks when enabled; ZIP methods and preserved records stay intact.
+/// Serialize `archive` into a ZIP byte stream.
+///
+/// By default every entry is encoded fresh. With `preserve=true`, unchanged
+/// entries retain their original records; a pristine archive round-trips
+/// byte-for-byte. Replaced and newly added entries are encoded normally.
+/// `level` is clamped to 0-9. `fast_store` opts into a speed/ratio heuristic.
+/// If `max_output_bytes` is supplied, the output is sized before allocation
+/// and an oversized archive raises `LimitExceeded(OutputBytes, ...)`.
+/// Negative limits are rejected.
 pub fn write(
   archive : Archive,
+  preserve? : Bool = false,
+  max_output_bytes? : Int,
   level? : Int = 6,
   fast_store? : Bool = false,
 ) -> Bytes raise ZipError {
-  write_impl(archive, false, level, None, fast_store)
-}
-
-///|
-/// Serialize `archive`, re-emitting pristine entries (those read from a
-/// previous archive and never replaced) byte-for-byte from their retained
-/// source records, so unchanged packages round-trip without loss. Entries
-/// created or replaced in memory are encoded fresh.
-/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
-/// stored blocks when enabled; ZIP methods and preserved records stay intact.
-pub fn write_preserving(
-  archive : Archive,
-  level? : Int = 6,
-  fast_store? : Bool = false,
-) -> Bytes raise ZipError {
-  write_impl(archive, true, level, None, fast_store)
-}
-
-///|
-/// Serialize `archive` like `write` while enforcing a hard output ceiling. The
-/// output is sized first, so an over-limit archive raises
-/// `LimitExceeded(OutputBytes, ...)` without materializing a candidate buffer.
-/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
-/// stored blocks when enabled; ZIP methods and preserved records stay intact.
-pub fn write_limited(
-  archive : Archive,
-  max_output_bytes~ : Int,
-  level? : Int = 6,
-  fast_store? : Bool = false,
-) -> Bytes raise ZipError {
-  guard max_output_bytes >= 0 else {
-    raise ZipError(UnsupportedFeature, "zip: output limit must be non-negative")
+  if max_output_bytes is Some(limit) {
+    guard limit >= 0 else {
+      raise ZipError(
+        UnsupportedFeature,
+        "zip: output limit must be non-negative",
+      )
+    }
   }
-  write_impl(archive, false, level, Some(max_output_bytes), fast_store)
-}
-
-///|
-/// Serialize `archive` like `write_preserving` while enforcing a hard output
-/// ceiling (sized first, so an over-limit archive raises without materializing
-/// a candidate buffer).
-/// `fast_store` defaults to false. Fresh DEFLATE payloads may use heuristic
-/// stored blocks when enabled; ZIP methods and preserved records stay intact.
-pub fn write_preserving_limited(
-  archive : Archive,
-  max_output_bytes~ : Int,
-  level? : Int = 6,
-  fast_store? : Bool = false,
-) -> Bytes raise ZipError {
-  guard max_output_bytes >= 0 else {
-    raise ZipError(UnsupportedFeature, "zip: output limit must be non-negative")
-  }
-  write_impl(archive, true, level, Some(max_output_bytes), fast_store)
+  write_impl(archive, preserve, level, max_output_bytes, fast_store)
 }

@@ -108,7 +108,7 @@ fn decode_dynamic_header(
   for i in nclen..<code_order.length() {
     codebits[code_order[i]] = 0
   }
-  if !dyn_litlen.initialize(codebits[:]) {
+  guard dyn_litlen.initialize(codebits) else {
     raise InflateError(Corrupt, "corrupt: bad code-length tree")
   }
   let n = nlit + ndist

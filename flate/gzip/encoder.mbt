@@ -2,7 +2,7 @@
 // wrapping the `@flate.Deflater`. It emits the 10-byte header, then the raw
 // DEFLATE stream block-by-block, then the 8-byte trailer (CRC-32 and ISIZE,
 // little-endian), accumulating the checksum incrementally so it never holds the
-// whole input. The one-shot `gzip_compress` remains for in-memory use.
+// whole input. The one-shot `compress` remains for in-memory use.
 
 ///|
 let gzip_header_bytes : FixedArray[Byte] = [
@@ -156,7 +156,7 @@ pub fn Encoder::step(
       }
       Body => {
         let st = self.def.step(
-          b""[:],
+          b"",
           output.mut_view(start=op),
           action=self.pending_action,
         )

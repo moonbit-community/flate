@@ -1,3 +1,6 @@
+///|
+const DEFLATE_BLOCK_SIZE : Int = 16384
+
 // Streaming DEFLATE compressor (RFC 1951), the push-based counterpart to
 // `Inflater`. Unlike a one-shot `deflate_all`, it emits the stream as a
 // sequence of blocks while input arrives, so memory is bounded and output is
@@ -17,15 +20,6 @@
 //    (the bit stream is continuous; only the final block pads to a byte). Its
 //    byte buffer is drained into the caller's output and reclaimed each block,
 //    suspending with `NeedMoreOutput` whenever that buffer fills.
-
-///|
-/// Target tokenizable bytes per block, shared by the streaming `Deflater` and
-/// one-shot `deflate_all`. 16 KB = zlib's default token-buffer size (memLevel 8
-/// gives `lit_bufsize` = 2^(8+6) = 16384), the field-tested balance: large
-/// enough to amortize the dynamic-Huffman table header over many bytes, small
-/// enough that one table tracks roughly-stationary statistics and that
-/// streaming bounds latency and memory rather than spanning whole megabytes.
-pub const DEFLATE_BLOCK_SIZE : Int = 16384
 
 ///|
 /// Clamp a compression level to 0-9.

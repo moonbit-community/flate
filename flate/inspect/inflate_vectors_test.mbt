@@ -42,24 +42,27 @@ let v_stored_seq : Bytes = [
 
 ///|
 test "inflate a stored block (one-shot)" {
-  assert_eq(@flate.inflate_all(hello_stored), b"hello")
+  @test.assert_eq(@flate.inflate_all(hello_stored), b"hello")
 }
 
 ///|
 test "inflate fixed-Huffman block" {
-  assert_eq(@flate.inflate_all(v_fixed_hello), b"hello")
+  @test.assert_eq(@flate.inflate_all(v_fixed_hello), b"hello")
 }
 
 ///|
 test "inflate fixed-Huffman with back-references" {
-  assert_eq(@flate.inflate_all(v_fixed_aaa), b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  @test.assert_eq(
+    @flate.inflate_all(v_fixed_aaa),
+    b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  )
 }
 
 ///|
 test "inflate dynamic-Huffman block (exercises link table)" {
   let out = @flate.inflate_all(v_dynamic_text)
   inspect(out.length(), content="611")
-  assert_eq(
+  @test.assert_eq(
     out[0:44].to_owned(),
     b"The quick brown fox jumps over the lazy dog.",
   )
@@ -81,5 +84,5 @@ test "inflate_all bulk-copies multi-block stored input" {
   }
   let source = Bytes::from_array(bytes)
   let compressed = @flate.deflate_all(source, level=0)
-  assert_eq(@flate.inflate_all(compressed), source)
+  @test.assert_eq(@flate.inflate_all(compressed), source)
 }

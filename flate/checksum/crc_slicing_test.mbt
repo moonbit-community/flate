@@ -25,12 +25,11 @@ test "CRC slicing matches bitwise reference for unaligned views and tails" {
       let view = data[offset:offset + size]
       let expected = crc_bitwise_reference(view)
       @test.assert_eq(@checksum.crc32(view), expected)
-      @test.assert_eq(@checksum.crc32_cancellable(view), Some(expected))
     }
   }
   for byte in [b'\x00', b'\xFF'] {
     let input = Bytes::make(65537, byte)
-    @test.assert_eq(@checksum.crc32(input), crc_bitwise_reference(input[:]))
+    @test.assert_eq(@checksum.crc32(input), crc_bitwise_reference(input))
   }
 }
 
@@ -45,7 +44,7 @@ test "CRC slicing preserves mixed incremental updates and non-destructive finish
     while position < input.length() {
       let end = (position + chunk).min(input.length())
       crc.update(input[position:end])
-      crc.update(b""[:])
+      crc.update(b"")
       if end % 97 == 0 || end == input.length() {
         let expected = crc_bitwise_reference(input[:end])
         @test.assert_eq(crc.finish(), expected)
@@ -57,7 +56,7 @@ test "CRC slicing preserves mixed incremental updates and non-destructive finish
         position = position + 1
       }
     }
-    @test.assert_eq(crc.finish(), crc_bitwise_reference(input[:]))
+    @test.assert_eq(crc.finish(), crc_bitwise_reference(input))
   }
 }
 

@@ -6,39 +6,9 @@ import {
 }
 
 // Values
-pub const CENTRAL_HEADER_SIG : UInt = 0x02014b50
-
-pub const DATA_DESCRIPTOR_SIG : UInt = 0x08074b50
-
-pub const END_OF_CENTRAL_SIG : UInt = 0x06054b50
-
-pub const FLAG_DATA_DESCRIPTOR : Int = 0x0008
-
-pub const FLAG_DEFLATE_STRENGTH : Int = 0x0006
-
-pub const FLAG_ENCRYPTED : Int = 0x0001
-
-pub const FLAG_UTF8 : Int = 0x0800
-
-pub const LOCAL_HEADER_SIG : UInt = 0x04034b50
-
-pub const MAX_U32 : UInt = 0xFFFFFFFF
-
-pub const ZIP64_EOCD_SIG : UInt = 0x06064b50
-
-pub const ZIP64_EXTRA_ID : Int = 0x0001
-
-pub const ZIP64_LOCATOR_SIG : UInt = 0x07064b50
-
 pub fn read(BytesView, limits? : ReadLimits, cancelled? : () -> Bool) -> Archive raise ZipError
 
-pub fn write(Archive, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
-
-pub fn write_limited(Archive, max_output_bytes~ : Int, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
-
-pub fn write_preserving(Archive, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
-
-pub fn write_preserving_limited(Archive, max_output_bytes~ : Int, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
+pub fn write(Archive, preserve? : Bool, max_output_bytes? : Int, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
 
 // Errors
 pub suberror ZipError {
@@ -65,9 +35,6 @@ pub(all) enum Compression {
   Deflate
 } derive(Eq, @debug.Debug)
 pub fn Compression::equal(Self, Self) -> Bool
-pub fn Compression::for_filename(String) -> Self
-pub fn Compression::not_equal(Self, Self) -> Bool
-pub fn Compression::to_repr(Self) -> @debug.Repr
 
 pub struct Entry {
   // private fields
@@ -89,8 +56,6 @@ pub(all) enum LimitKind {
   OutputBytes
 } derive(Eq, @debug.Debug)
 pub fn LimitKind::equal(Self, Self) -> Bool
-pub fn LimitKind::not_equal(Self, Self) -> Bool
-pub fn LimitKind::to_repr(Self) -> @debug.Repr
 
 pub struct ReadLimits {
   max_package_bytes : Int
@@ -99,12 +64,7 @@ pub struct ReadLimits {
   max_total_uncompressed_bytes : Int
   max_preserved_source_bytes : Int
 }
-pub fn ReadLimits::default() -> Self
-pub fn ReadLimits::with_entries_limit(Self, Int) -> Self
-pub fn ReadLimits::with_entry_limit(Self, Int) -> Self
-pub fn ReadLimits::with_package_limit(Self, Int) -> Self
-pub fn ReadLimits::with_preserved_source_limit(Self, Int) -> Self
-pub fn ReadLimits::with_total_limit(Self, Int) -> Self
+pub fn ReadLimits::ReadLimits(max_package_bytes? : Int, max_entries? : Int, max_entry_uncompressed_bytes? : Int, max_total_uncompressed_bytes? : Int, max_preserved_source_bytes? : Int) -> Self
 
 pub struct Writer {
   // private fields
@@ -126,12 +86,12 @@ pub(all) enum ZipErrorKind {
   UnsupportedCompression(Int)
   InvalidUtf8
   UnsupportedFeature
+  InvalidDeflate
+  ChecksumMismatch
   LimitExceeded(LimitKind, Int, Int)
   Cancelled
 } derive(Eq, @debug.Debug)
 pub fn ZipErrorKind::equal(Self, Self) -> Bool
-pub fn ZipErrorKind::not_equal(Self, Self) -> Bool
-pub fn ZipErrorKind::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

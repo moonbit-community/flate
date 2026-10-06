@@ -55,8 +55,8 @@ test "incremental Crc32/Adler32 match the one-shot result across chunk splits" {
     crc.update(data[i:i + 1])
     adler.update(data[i:i + 1])
   }
-  assert_eq(crc.finish(), @checksum.crc32(data))
-  assert_eq(adler.finish(), @checksum.adler32(data))
+  @test.assert_eq(crc.finish(), @checksum.crc32(data))
+  @test.assert_eq(adler.finish(), @checksum.adler32(data))
   // And an uneven multi-chunk split.
   let crc2 = @checksum.Crc32()
   let adler2 = @checksum.Adler32()
@@ -66,25 +66,9 @@ test "incremental Crc32/Adler32 match the one-shot result across chunk splits" {
   adler2.update(data[0:10])
   adler2.update(data[10:11])
   adler2.update(data[11:data.length()])
-  assert_eq(crc2.finish(), @checksum.crc32(data))
-  assert_eq(adler2.finish(), @checksum.adler32(data))
+  @test.assert_eq(crc2.finish(), @checksum.crc32(data))
+  @test.assert_eq(adler2.finish(), @checksum.adler32(data))
   // An empty stream equals the empty-input one-shot value.
-  assert_eq(@checksum.Crc32().finish(), @checksum.crc32(b""))
-  assert_eq(@checksum.Adler32().finish(), @checksum.adler32(b""))
-}
-
-///|
-/// `crc32_cancellable` agrees with `crc32` and reports cooperative
-/// cancellation on input long enough to require polling.
-test "crc32_cancellable matches crc32 and reports cancellation" {
-  assert_eq(@checksum.crc32_cancellable(b""), Some(0U))
-  let data = Bytes::make(16 * 1024, b'x')
-  assert_eq(@checksum.crc32_cancellable(data), Some(@checksum.crc32(data)))
-  let polls = [0]
-  let result = @checksum.crc32_cancellable(data, cancelled=() => {
-    polls[0] += 1
-    polls[0] >= 4
-  })
-  assert_true(result is None)
-  assert_true(polls[0] >= 4)
+  @test.assert_eq(@checksum.Crc32().finish(), @checksum.crc32(b""))
+  @test.assert_eq(@checksum.Adler32().finish(), @checksum.adler32(b""))
 }

@@ -401,16 +401,16 @@ fn assert_match_len_differential_case(
 
 ///|
 test "packed tokens preserve all DEFLATE boundaries" {
-  let lengths = [3, 3, 258, 258]
-  let distances = [1, 32768, 1, 32768]
+  let lengths : ReadOnlyArray[_] = [3, 3, 258, 258]
+  let distances : ReadOnlyArray[_] = [1, 32768, 1, 32768]
   for i in 0..<lengths.length() {
     let length = lengths[i]
     let distance = distances[i]
     let token = pack_match_token(length, distance)
     assert_true(token > 255)
     assert_true(token < 1 << 25)
-    assert_eq(token >> 16, length)
-    assert_eq(token & 0xFFFF, distance)
+    @test.assert_eq(token >> 16, length)
+    @test.assert_eq(token & 0xFFFF, distance)
   }
 }
 
@@ -418,11 +418,11 @@ test "packed tokens preserve all DEFLATE boundaries" {
 test "v128 match length finds the first unequal lane and scalar tail" {
   for mismatch in [0, 1, 2, 15, 16, 17, 31, 32, 127, 255, 257] {
     let data = match_len_fixture(mismatch~)
-    assert_eq(match_len_up_to(data, 0, 258, 258), mismatch)
+    @test.assert_eq(match_len_up_to(data, 0, 258, 258), mismatch)
   }
   let identical = match_len_fixture()
-  assert_eq(match_len_up_to(identical, 0, 258, 258), 258)
-  assert_eq(match_len_up_to(b"abcabcX", 0, 3, 4), 3)
+  @test.assert_eq(match_len_up_to(identical, 0, 258, 258), 258)
+  @test.assert_eq(match_len_up_to(b"abcabcX", 0, 3, 4), 3)
 }
 
 ///|

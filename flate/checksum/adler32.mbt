@@ -131,7 +131,7 @@ pub fn Adler32::finish(self : Adler32) -> UInt {
 ///|
 /// Compute the Adler-32 checksum of `data` in one shot. Shared primitive:
 /// `@checksum.adler32`.
-pub fn adler32(data : Bytes) -> UInt {
+pub fn adler32(data : BytesView) -> UInt {
   let d = Adler32()
   d.update(data[:])
   d.finish()

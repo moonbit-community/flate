@@ -2,11 +2,9 @@
 package "moonbit-community/flate/checksum"
 
 // Values
-pub fn adler32(Bytes) -> UInt
+pub fn adler32(BytesView) -> UInt
 
 pub fn crc32(BytesView) -> UInt
-
-pub fn crc32_cancellable(BytesView, cancelled? : () -> Bool) -> UInt?
 
 // Errors
 

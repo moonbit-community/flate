@@ -5,11 +5,7 @@
 
 ///|
 fn expect_zip_error(f : () -> Unit raise ZipError) -> Unit raise {
-  try f() catch {
-    ZipError(_, _) => ()
-  } noraise {
-    _ => fail("expected a ZipError")
-  }
+  @test.assert_raise(f)
 }
 
 ///|
@@ -17,11 +13,8 @@ fn expect_zip_kind(
   f : () -> Unit raise ZipError,
   expect : ZipErrorKind,
 ) -> Unit raise {
-  try f() catch {
-    ZipError(kind, _) => assert_eq(kind, expect)
-  } noraise {
-    _ => fail("expected a ZipError")
-  }
+  let ZipError(kind, _) = @test.expect_error(f)
+  @test.assert_eq(kind, expect)
 }
 
 ///|
@@ -36,7 +29,7 @@ test "zip cursor and field readers reject truncated input" {
   expect_zip_error(() => ignore(read_u16_le_at(b"", 0)))
   expect_zip_error(() => ignore(read_u32_le_at_raw(b"", 0)))
   expect_zip_error(() => ignore(read_u64_le_at(b"", 0)))
-  assert_eq(find_end_of_central(b"too short"), None)
+  @test.assert_eq(find_end_of_central(b"too short"), None)
   expect_zip_kind(() => ignore(decode_name(b"\xff")), InvalidUtf8)
   expect_zip_kind(
     () => ensure_flags_supported(FLAG_ENCRYPTED),
@@ -199,7 +192,7 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
     push_u32le(buf, 4)
     bytes_of(buf)
   }
-  assert_eq(
+  @test.assert_eq(
     data_descriptor_size(unsigned, 0, descriptor_meta(crc=0x11223344U), false),
     12,
   )
@@ -212,7 +205,7 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
     push_u32le(buf, 4)
     bytes_of(buf)
   }
-  assert_eq(
+  @test.assert_eq(
     data_descriptor_size(signed, 0, descriptor_meta(crc=0x11223344U), false),
     16,
   )
@@ -224,7 +217,7 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
     push_u64le(buf, 4)
     bytes_of(buf)
   }
-  assert_eq(
+  @test.assert_eq(
     data_descriptor_size(zip64, 0, descriptor_meta(crc=0x11223344U), true),
     20,
   )
@@ -429,13 +422,11 @@ test "zip inflate_entry maps output-limit and corrupt-stream failures" {
         ),
       )
     },
-    UnsupportedFeature,
+    InvalidDeflate,
   )
   let comp = @flate.deflate_all(b"0123456789")
   expect_zip_kind(
-    () => {
-      ignore(inflate_entry(comp[:], 5, EntryUncompressedBytes, 5, () => false))
-    },
+    () => ignore(inflate_entry(comp, 5, EntryUncompressedBytes, 5, () => false)),
     LimitExceeded(EntryUncompressedBytes, 5, 5),
   )
 }
@@ -505,7 +496,7 @@ fn zip64_trailer(
 
 ///|
 test "zip end-of-central parsing rejects inconsistent trailers" {
-  let default_limits = ReadLimits::default()
+  let default_limits = ReadLimits()
   // Multi-disk classic EOCD.
   expect_zip_error(() => {
     ignore(
@@ -576,9 +567,9 @@ test "zip end-of-central parsing rejects inconsistent trailers" {
     default_limits,
     () => false,
   )
-  assert_eq(eocd.entry_count, 3)
-  assert_eq(eocd.central_size, 0)
-  assert_eq(eocd.central_offset, 0)
+  @test.assert_eq(eocd.entry_count, 3)
+  @test.assert_eq(eocd.central_size, 0)
+  @test.assert_eq(eocd.central_offset, 0)
   // Classic fields that mirror the zip64 values still resolve through the
   // zip64 record (only the disk count is sentinel to select the zip64 path).
   let eocd2 = parse_end_of_central(
@@ -586,9 +577,9 @@ test "zip end-of-central parsing rejects inconsistent trailers" {
     default_limits,
     () => false,
   )
-  assert_eq(eocd2.entry_count, 5)
-  assert_eq(eocd2.central_size, 0)
-  assert_eq(eocd2.central_offset, 0)
+  @test.assert_eq(eocd2.entry_count, 5)
+  @test.assert_eq(eocd2.central_size, 0)
+  @test.assert_eq(eocd2.central_offset, 0)
 }
 
 ///|
@@ -650,7 +641,7 @@ fn eocd_for(
 ///|
 test "zip central-directory parsing rejects malformed records" {
   let budget = SourceBudget(1000)
-  let default_limits = ReadLimits::default()
+  let default_limits = ReadLimits()
   // Wrong central record signature.
   expect_zip_error(() => {
     ignore(
@@ -749,7 +740,7 @@ test "zip entry decode rejects oversized and mismatched payloads" {
           big_store,
           { ..base_meta(), compressed_size: 10, uncompressed_size: 10, },
           100,
-          ReadLimits::default().with_entry_limit(5),
+          ReadLimits(max_entry_uncompressed_bytes=5),
           0,
           budget,
           () => false,
@@ -768,7 +759,7 @@ test "zip entry decode rejects oversized and mismatched payloads" {
         size_mismatch,
         { ..base_meta(), compressed_size: 3, uncompressed_size: 5, },
         100,
-        ReadLimits::default(),
+        ReadLimits(),
         0,
         budget,
         () => false,
@@ -786,7 +777,7 @@ test "zip entry decode rejects oversized and mismatched payloads" {
           total_over,
           base_meta(),
           100,
-          ReadLimits::default().with_total_limit(3),
+          ReadLimits(max_total_uncompressed_bytes=3),
           2,
           budget,
           () => false,
@@ -801,25 +792,25 @@ test "zip entry decode rejects oversized and mismatched payloads" {
 test "zip Output and field writers reject bad sizes" {
   expect_zip_error(() => Output::counting(None).grow(-1))
   expect_zip_error(() => Output::counting(None).write_u16(0x10000))
-  assert_eq(Output::counting(None).finish(), b"")
+  @test.assert_eq(Output::counting(None).finish(), b"")
 }
 
 ///|
 test "zip build_zip64_extra emits each field combination" {
-  assert_eq(build_zip64_extra(uncomp=None, comp=None, offset=None), b"")
-  assert_eq(
+  @test.assert_eq(build_zip64_extra(uncomp=None, comp=None, offset=None), b"")
+  @test.assert_eq(
     build_zip64_extra(uncomp=Some(7), comp=None, offset=None).length(),
     12,
   )
-  assert_eq(
+  @test.assert_eq(
     build_zip64_extra(uncomp=None, comp=Some(8), offset=None).length(),
     12,
   )
-  assert_eq(
+  @test.assert_eq(
     build_zip64_extra(uncomp=None, comp=None, offset=Some(9)).length(),
     12,
   )
-  assert_eq(
+  @test.assert_eq(
     build_zip64_extra(uncomp=Some(1), comp=Some(2), offset=Some(3)).length(),
     28,
   )
@@ -831,7 +822,7 @@ test "zip force_zip64 emits zip64 local and central records" {
   archive.add("a.txt", b"payload", compression=Store, data_descriptor=true)
   let entry = archive.entries()[0]
   let name_bytes = entry_name_bytes(entry)
-  let payload = prepare_payload(entry, @flate.Compressor())
+  let payload = prepare_payload(entry, Compressor())
   let local_out = Output::writing(None)
   write_local_record(local_out, entry, name_bytes, payload, true, true)
   // The non-descriptor zip64 size fields.
@@ -1010,12 +1001,12 @@ test "zip entry names and output limits are checked" {
   expect_zip_error(() => ignore(write(archive)))
   let small = Archive()
   small.add("a.txt", b"x")
-  expect_zip_error(() => ignore(write_limited(small, max_output_bytes=-1)))
+  expect_zip_error(() => ignore(write(small, max_output_bytes=-1)))
   expect_zip_error(() => {
-    ignore(write_preserving_limited(small, max_output_bytes=-1))
+    ignore(write(small, max_output_bytes=-1, preserve=true))
   })
-  assert_eq(
-    write_preserving_limited(small, max_output_bytes=1000),
+  @test.assert_eq(
+    write(small, max_output_bytes=1000, preserve=true),
     write(small),
   )
 }
@@ -1026,11 +1017,11 @@ test "zip local-order keeps a replaced entry in its original position" {
   src.add("a.txt", b"x")
   src.add("b.txt", b"y")
   let archive = read(write(src))
-  assert_eq(archive.replace("a.txt", b"xx"), true)
+  @test.assert_eq(archive.replace("a.txt", b"xx"), true)
   let order = archive_local_order(archive)
-  assert_eq(order.length(), 2)
-  assert_eq(archive.entries()[order[0]].name(), "a.txt")
-  assert_eq(archive.entries()[order[1]].name(), "b.txt")
+  @test.assert_eq(order.length(), 2)
+  @test.assert_eq(archive.entries()[order[0]].name(), "a.txt")
+  @test.assert_eq(archive.entries()[order[1]].name(), "b.txt")
 }
 
 ///|
@@ -1042,10 +1033,10 @@ test "zip local-order sorts read-origin entries ahead of fresh ones" {
   archive.add("fresh.txt", b"z")
   // Read-origin entries (origin Some) precede a fresh entry (origin None).
   let forward = archive_local_order(archive)
-  assert_eq(forward.length(), 3)
-  assert_eq(archive.entries()[forward[0]].name(), "a.txt")
-  assert_eq(archive.entries()[forward[1]].name(), "b.txt")
-  assert_eq(archive.entries()[forward[2]].name(), "fresh.txt")
+  @test.assert_eq(forward.length(), 3)
+  @test.assert_eq(archive.entries()[forward[0]].name(), "a.txt")
+  @test.assert_eq(archive.entries()[forward[1]].name(), "b.txt")
+  @test.assert_eq(archive.entries()[forward[2]].name(), "fresh.txt")
   // Even when the fresh entry sits first in the array, it still sorts last.
   let mixed = {
     entries: [archive.entries[2], archive.entries[0], archive.entries[1]],
@@ -1053,9 +1044,9 @@ test "zip local-order sorts read-origin entries ahead of fresh ones" {
     trailer: None,
   }
   let reordered = archive_local_order(mixed)
-  assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
-  assert_eq(mixed.entries()[reordered[1]].name(), "b.txt")
-  assert_eq(mixed.entries()[reordered[2]].name(), "fresh.txt")
+  @test.assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
+  @test.assert_eq(mixed.entries()[reordered[1]].name(), "b.txt")
+  @test.assert_eq(mixed.entries()[reordered[2]].name(), "fresh.txt")
 }
 
 ///|
@@ -1067,9 +1058,9 @@ test "zip owned copy handles chunk boundaries and cancellation" {
       polls += 1
       false
     })
-    assert_eq(copied, source[1:length + 1].to_owned())
+    @test.assert_eq(copied, source[1:length + 1].to_owned())
     let expected_polls = 2 + (length + 65535) / 65536
-    assert_eq(polls, expected_polls)
+    @test.assert_eq(polls, expected_polls)
     for cancel_at in 1..<(expected_polls + 1) {
       let mut calls = 0
       expect_zip_kind(
@@ -1083,7 +1074,7 @@ test "zip owned copy handles chunk boundaries and cancellation" {
         },
         Cancelled,
       )
-      assert_eq(calls, cancel_at)
+      @test.assert_eq(calls, cancel_at)
     }
   }
 }
@@ -1101,7 +1092,7 @@ test "zip output writes unaligned fields and transfers only written bytes" {
       () => out.write_bytes(b"x"),
       LimitExceeded(OutputBytes, 15, 16),
     )
-    assert_eq(out.finish(), expected)
+    @test.assert_eq(out.finish(), expected)
   }
 }
 
@@ -1112,9 +1103,9 @@ test "zip matching raw names preserve empty and Unicode names" {
     archive.add(name, b"payload", compression=Store)
     let encoded = write(archive)
     let decoded = read(encoded)
-    assert_eq(decoded.entries()[0].name(), name)
-    assert_eq(decoded.entries()[0].data().to_owned(), b"payload")
-    assert_eq(write_preserving(decoded), encoded)
+    @test.assert_eq(decoded.entries()[0].name(), name)
+    @test.assert_eq(decoded.entries()[0].data().to_owned(), b"payload")
+    @test.assert_eq(write(decoded, preserve=true), encoded)
   }
 }
 
@@ -1200,7 +1191,7 @@ test "zip output rejects Int overflow and oversized raw header names" {
     UnsupportedFeature,
   )
   expect_zip_kind(
-    () => ignore(write_limited(archive, max_output_bytes=1)),
+    () => ignore(write(archive, max_output_bytes=1)),
     LimitExceeded(OutputBytes, 1, 31),
   )
 }
@@ -1219,12 +1210,12 @@ test "zip local order sorts source offsets and keeps new entries stable" {
   }
   let order = archive_local_order(archive)
   for i in 0..<11 {
-    assert_eq(order[i], 30 - i * 3)
+    @test.assert_eq(order[i], 30 - i * 3)
   }
   let mut next = 11
   for i in 0..<32 {
     if i % 3 != 0 {
-      assert_eq(order[next], i)
+      @test.assert_eq(order[next], i)
       next += 1
     }
   }
@@ -1249,9 +1240,58 @@ test "ZIP64 sizing agrees with emitted headers and descriptors" {
     write_central_record(out, entry, b"a", 0, 0, true, true)
   }
   let bytes = output.finish()
-  assert_eq(counting.size, bytes.length())
-  assert_eq(bytes.length(), 150)
-  assert_eq(read_u32_le_at_raw(bytes, 51), DATA_DESCRIPTOR_SIG)
-  assert_eq(read_u32_le_at_raw(bytes, 75), CENTRAL_HEADER_SIG)
-  assert_eq(read_u16_le_at(bytes, 105), 28)
+  @test.assert_eq(counting.size, bytes.length())
+  @test.assert_eq(bytes.length(), 150)
+  @test.assert_eq(read_u32_le_at_raw(bytes, 51), DATA_DESCRIPTOR_SIG)
+  @test.assert_eq(read_u32_le_at_raw(bytes, 75), CENTRAL_HEADER_SIG)
+  @test.assert_eq(read_u16_le_at(bytes, 105), 28)
+}
+
+///|
+/// Moved from the checksum package: cancellation belongs to the ZIP driver.
+test "CRC-32 computation honours ZIP cancellation" {
+  inspect(crc32_cancellable(b"", cancelled=() => false), content="0")
+  let data = Bytes::make(16 * 1024, b'x')
+  @test.assert_eq(
+    crc32_cancellable(data, cancelled=() => false),
+    @checksum.crc32(data),
+  )
+  let mut polls = 0
+  let ZipError(kind, _) = @test.expect_error(() => {
+    crc32_cancellable(data, cancelled=() => {
+      polls += 1
+      polls >= 4
+    })
+  })
+  @test.assert_eq(kind, Cancelled)
+  assert_true(polls >= 4)
+}
+
+///|
+/// Cancellation cases moved from the former combined checksum property.
+test "property: ZIP checksum cancellation includes the last poll" {
+  @quickcheck.check(
+    (data : Bytes) => {
+      guard crc32_cancellable(data, cancelled=() => false) ==
+        @checksum.crc32(data) else {
+        return false
+      }
+      let ZipError(kind, _) = @test.expect_error(() => {
+        crc32_cancellable(data, cancelled=() => true)
+      })
+      guard kind is Cancelled else { return false }
+      let total_polls = 2 + (data.length() - 1) / 4096
+      let mut polls = 0
+      let ZipError(kind, _) = @test.expect_error(() => {
+        crc32_cancellable(data, cancelled=() => {
+          polls += 1
+          polls >= total_polls
+        })
+      })
+      kind is Cancelled
+    },
+    count=60,
+    max_size=2000,
+    seed=0xC0C11E,
+  )
 }

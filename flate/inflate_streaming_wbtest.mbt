@@ -8,7 +8,7 @@ test "Inflater owns only a bounded atomic tail between non-overlapping chunks" {
   let compressed = deflate_all(source)
   let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
-  let decoded = Buffer()
+  let decoded = @buffer.Buffer()
   let mut pos = 0
   for ;; {
     let endi = if pos < compressed.length() { pos + 1 } else { pos }
@@ -26,12 +26,12 @@ test "Inflater owns only a bounded atomic tail between non-overlapping chunks" {
     // A full dynamic header is the largest atomic input unit and is well below
     // this defensive test bound. Call-owned views must already be released.
     assert_true(inflater.staged_input.length() <= 512)
-    assert_eq(inflater.view.length(), 0)
-    assert_eq(inflater.out.length(), 0)
+    @test.assert_eq(inflater.view.length(), 0)
+    @test.assert_eq(inflater.out.length(), 0)
     if status is Done {
       break
     }
   }
-  assert_eq(pos, compressed.length())
-  assert_eq(decoded.to_bytes(), source)
+  @test.assert_eq(pos, compressed.length())
+  @test.assert_eq(decoded.to_bytes(), source)
 }

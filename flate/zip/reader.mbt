@@ -141,24 +141,14 @@ fn inflate_entry(
   reported_limit : Int,
   cancelled : () -> Bool,
 ) -> Bytes raise ZipError {
-  let decoded = try
-    @flate.inflate_exact(
-      compressed.to_owned(),
-      max_output=Some(max_output),
-      cancelled~,
-      preallocated=true,
-    )
-  catch {
+  @flate.inflate_exact(compressed, max_output~, cancelled~, preallocated=true) catch {
     InflateError(OutputLimitExceeded, _) =>
       raise ZipError(
         LimitExceeded(limit_kind, reported_limit, max_output),
         "zip: decompressed size limit exceeded",
       )
     err => raise wrap_inflate_error(err)
-  } noraise {
-    decoded => decoded
   }
-  decoded
 }
 
 ///|
@@ -612,6 +602,10 @@ fn decode_entry(
       "zip: entries exceed the total uncompressed limit",
     )
   }
+  let crc = crc32_cancellable(data, cancelled~)
+  guard crc == meta.crc else {
+    raise ZipError(ChecksumMismatch, "zip: CRC-32 mismatch")
+  }
   let source = Some({
     local_record: copy_cancellable(
       bytes[meta.local_offset:record.end],
@@ -670,14 +664,12 @@ fn read_impl(
 /// Read a ZIP archive from `bytes`, decoding every entry. `limits` bounds the
 /// package size, entry count, per-entry and total decompressed bytes, and the
 /// source records retained for byte-preserving rewrites; `cancelled` is polled
-/// across parsing and decoding. Each entry exposes the central directory's
-/// stored CRC-32 via `Entry::crc32`; it is not verified during this read —
-/// callers that need integrity checking compare it against
-/// `@checksum.crc32(entry.data())`. Failures carry a stable `ZipErrorKind`
+/// across parsing, decoding, and CRC-32 verification. Every decoded entry must
+/// match its stored CRC-32. Failures carry a stable `ZipErrorKind`
 /// plus a diagnostic.
 pub fn read(
   bytes : BytesView,
-  limits? : ReadLimits = ReadLimits::default(),
+  limits? : ReadLimits = ReadLimits(),
   cancelled? : () -> Bool = () => false,
 ) -> Archive raise ZipError {
   read_impl(bytes, limits, cancelled)

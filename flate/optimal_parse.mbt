@@ -24,7 +24,7 @@ priv struct MatchRange {
 // its own temporary table. Its future binary-tree/cache work must not inherit
 // the greedy/lazy session matchfinder's lifecycle.
 fn insert_optimal_pos(
-  data : Bytes,
+  data : BytesView,
   head : FixedArray[Int],
   prev : FixedArray[Int],
   i : Int,
@@ -50,7 +50,7 @@ const OPTIMAL_MAX_CHAIN : Int = 8192
 /// `data[0:start)` is seeded as history so back-references may cross block
 /// boundaries.
 fn collect_matches(
-  data : Bytes,
+  data : BytesView,
   start : Int,
   end : Int,
 ) -> FixedArray[Array[MatchRange]] {
@@ -100,7 +100,7 @@ fn collect_matches(
 /// the end of `data[start:start+m)`, then replay it forward into `tokens`,
 /// tallying the literal/length and distance symbols consumed.
 fn replay_tokens(
-  data : Bytes,
+  data : BytesView,
   start : Int,
   m : Int,
   len_choice : FixedArray[Int],
@@ -136,7 +136,7 @@ fn replay_tokens(
 /// bits to encode `data[start:start+o)`; each position relaxes a literal edge
 /// and every frontier match length.
 fn squeeze_parse(
-  data : Bytes,
+  data : BytesView,
   start : Int,
   end : Int,
   matches : FixedArray[Array[MatchRange]],
@@ -215,7 +215,7 @@ fn stats_to_costs(
 /// costs first, then re-derive costs from each round's own statistics,
 /// keeping the cheapest parse seen (judged by exact block cost).
 fn tokenize_optimal(
-  data : Bytes,
+  data : BytesView,
   start : Int,
   end : Int,
   iterations : Int,

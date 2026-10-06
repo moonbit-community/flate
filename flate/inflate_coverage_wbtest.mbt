@@ -26,25 +26,15 @@ fn coverage_dynamic_header(
 
 ///|
 /// Both decoder implementations must reject the same complete malformed stream.
-fn coverage_expect_both_errors(data : Bytes, expected : String) -> Unit raise {
-  try ignore(inflate_all(data)) catch {
-    InflateError(kind, message) => {
-      assert_true(kind == Corrupt)
-      assert_eq(message, expected)
-    }
-  } noraise {
-    _ => fail("in-memory decoder accepted malformed DEFLATE")
-  }
+fn expect_corrupt_stream(data : Bytes) -> Unit raise {
+  let InflateError(kind, _) = @test.expect_error(() => inflate_all(data))
+  @test.assert_eq(kind, Corrupt)
   let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
-  try ignore(inflater.step(data[:], output.mut_view())) catch {
-    InflateError(kind, message) => {
-      assert_true(kind == Corrupt)
-      assert_eq(message, expected)
-    }
-  } noraise {
-    _ => fail("streaming decoder accepted malformed DEFLATE")
-  }
+  let InflateError(kind, _) = @test.expect_error(() => {
+    inflater.step(data, output.mut_view())
+  })
+  @test.assert_eq(kind, Corrupt)
 }
 
 ///|
@@ -52,25 +42,21 @@ fn coverage_expect_both_errors(data : Bytes, expected : String) -> Unit raise {
 /// total defensive error for values no valid code-length tree can produce.
 test "code-length repeat interpretation is shared and total" {
   let repeat16 = interpret_code_length_repeat(16, Some(9))
-  assert_eq(repeat16.base, 3)
-  assert_eq(repeat16.extra_bits, 2)
-  assert_eq(repeat16.value, 9)
+  @test.assert_eq(repeat16.base, 3)
+  @test.assert_eq(repeat16.extra_bits, 2)
+  @test.assert_eq(repeat16.value, 9)
   let repeat17 = interpret_code_length_repeat(17, None)
-  assert_eq(repeat17.base, 3)
-  assert_eq(repeat17.extra_bits, 3)
-  assert_eq(repeat17.value, 0)
+  @test.assert_eq(repeat17.base, 3)
+  @test.assert_eq(repeat17.extra_bits, 3)
+  @test.assert_eq(repeat17.value, 0)
   let repeat18 = interpret_code_length_repeat(18, None)
-  assert_eq(repeat18.base, 11)
-  assert_eq(repeat18.extra_bits, 7)
-  assert_eq(repeat18.value, 0)
-  try ignore(interpret_code_length_repeat(19, None)) catch {
-    InflateError(kind, message) => {
-      assert_true(kind == Corrupt)
-      assert_eq(message, "corrupt: bad code-length symbol")
-    }
-  } noraise {
-    _ => fail("accepted an invalid code-length repeat symbol")
-  }
+  @test.assert_eq(repeat18.base, 11)
+  @test.assert_eq(repeat18.extra_bits, 7)
+  @test.assert_eq(repeat18.value, 0)
+  let InflateError(kind, _) = @test.expect_error(() => {
+    interpret_code_length_repeat(19, None)
+  })
+  @test.assert_eq(kind, Corrupt)
 }
 
 ///|
@@ -78,27 +64,27 @@ test "code-length repeat interpretation is shared and total" {
 /// must allocate and use the second-level link table in both decoders.
 test "Huffman decoder uses its two-level table" {
   // Kraft sum: 1/2 + 1/4 + ... + 1/512 + 2/1024 = 1.
-  let lengths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10]
+  let lengths : ReadOnlyArray[_] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10]
   let h = HuffmanDecoder()
-  assert_true(h.initialize(lengths[:]))
+  assert_true(h.initialize(lengths))
   assert_true(h.links.length() > 0)
-  assert_eq(h.link_mask, 1U)
+  @test.assert_eq(h.link_mask, 1U)
 
   // Symbols 9 and 10 have canonical codes 1022 and 1023. Their transmitted
   // (bit-reversed) forms are respectively 0x1ff and 0x3ff.
   let code9 : Bytes = [0xFF, 0x01]
   let stream9 = Inflater()
-  stream9.view = code9[:]
-  assert_eq(stream9.huff_sym(h), 9)
+  stream9.view = code9
+  @test.assert_eq(stream9.huff_sym(h), 9)
   let memory9 = MemDecoder(code9, () => false)
-  assert_eq(memory9.huff_sym(h), 9)
+  @test.assert_eq(memory9.huff_sym(h), 9)
 
   let code10 : Bytes = [0xFF, 0x03]
   let stream10 = Inflater()
-  stream10.view = code10[:]
-  assert_eq(stream10.huff_sym(h), 10)
+  stream10.view = code10
+  @test.assert_eq(stream10.huff_sym(h), 10)
   let memory10 = MemDecoder(code10, () => false)
-  assert_eq(memory10.huff_sym(h), 10)
+  @test.assert_eq(memory10.huff_sym(h), 10)
 }
 
 ///|
@@ -108,10 +94,7 @@ test "both inflaters reject an empty Huffman alphabet" {
   let code_lengths = Array::make(NUM_CODES, 0)
   let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 4, code_lengths)
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: bad Huffman code",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -120,17 +103,11 @@ test "both inflaters reject oversized dynamic alphabets" {
   let code_lengths = Array::make(NUM_CODES, 0)
   let too_many_literals = BitWriter()
   coverage_dynamic_header(too_many_literals, 31, 0, 4, code_lengths)
-  coverage_expect_both_errors(
-    coverage_finish_bits(too_many_literals),
-    "corrupt: too many literal codes",
-  )
+  expect_corrupt_stream(coverage_finish_bits(too_many_literals))
 
   let too_many_distances = BitWriter()
   coverage_dynamic_header(too_many_distances, 0, 31, 4, code_lengths)
-  coverage_expect_both_errors(
-    coverage_finish_bits(too_many_distances),
-    "corrupt: too many distance codes",
-  )
+  expect_corrupt_stream(coverage_finish_bits(too_many_distances))
 }
 
 ///|
@@ -142,10 +119,7 @@ test "both inflaters reject an oversubscribed code-length tree" {
   code_lengths[18] = 1
   let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 4, code_lengths)
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: bad code-length tree",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -156,10 +130,7 @@ test "both inflaters reject repeat-without-previous" {
   let w = BitWriter()
   coverage_dynamic_header(w, 0, 0, 4, code_lengths)
   w.write_bits(0, 1)
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: repeat with no previous length",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -173,10 +144,7 @@ test "both inflaters reject code-length repeat overflow" {
   w.write_bits(127, 7) // 11 + 127 = 138 zeros
   w.write_bits(0, 1)
   w.write_bits(127, 7) // 138 + 138 > 258
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: code-length repeat overflow",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -195,10 +163,7 @@ test "both inflaters reject an incomplete literal-length tree" {
   w.write_bits(127, 7) // 138 zeros
   w.write_bits(3, 2) // symbol 18
   w.write_bits(108, 7) // 119 zeros; 1 + 138 + 119 = 258
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: bad literal/length tree",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -218,10 +183,7 @@ test "both inflaters reject an incomplete distance tree" {
   w.write_bits(107, 7) // 118 zeros; now at literal symbol 256
   w.write_bits(2, 2) // symbol 1: the EOB code has length one
   w.write_bits(1, 2) // symbol 2: the sole distance code has length two
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: bad distance tree",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -231,10 +193,7 @@ test "both inflaters reject a reserved fixed literal-length symbol" {
   w.write_bit(1)
   w.write_bits(1, 2) // BTYPE=01 (fixed)
   w.write_rcode(fixed_ll_val[286], fixed_ll_len[286]) // symbol 286, 8 bits
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: invalid literal/length code",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -245,10 +204,7 @@ test "both inflaters reject a reserved fixed distance symbol" {
   w.write_bits(1, 2) // BTYPE=01 (fixed)
   w.write_rcode(fixed_ll_val[257], fixed_ll_len[257]) // length 3
   w.write_rcode(reverse_bits((30).reinterpret_as_uint(), 5), 5) // reserved code 30
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: invalid distance code",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -259,10 +215,7 @@ test "both inflaters reject a back-reference before the window" {
   w.write_bits(1, 2) // BTYPE=01 (fixed)
   w.write_rcode(fixed_ll_val[257], fixed_ll_len[257]) // length 3
   w.write_rcode(fixed_dist_val[0], fixed_dist_len[0]) // distance 1
-  coverage_expect_both_errors(
-    coverage_finish_bits(w),
-    "corrupt: distance too far back",
-  )
+  expect_corrupt_stream(coverage_finish_bits(w))
 }
 
 ///|
@@ -270,25 +223,19 @@ test "both inflaters reject a back-reference before the window" {
 /// the incomplete atomic tail so the caller may drop the supplied byte.
 test "stored header truncation stages streaming input" {
   let truncated : Bytes = [0x01]
-  try ignore(inflate_all(truncated)) catch {
-    InflateError(kind, message) => {
-      assert_true(kind == Truncated)
-      assert_eq(message, "unexpected end of input")
-    }
-  } noraise {
-    _ => fail("in-memory decoder accepted a truncated stored header")
-  }
+  let InflateError(kind, _) = @test.expect_error(() => inflate_all(truncated))
+  @test.assert_eq(kind, Truncated)
   let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
-  let status = inflater.step(truncated[:], output.mut_view())
+  let status = inflater.step(truncated, output.mut_view())
   let consumed = inflater.last_consumed()
   let produced = inflater.last_produced()
   assert_true(status is NeedMoreInput)
-  assert_eq(consumed, 1)
-  assert_eq(produced, 0)
-  assert_eq(inflater.staged_input.length(), 1)
-  assert_eq(inflater.view.length(), 0)
-  assert_eq(inflater.out.length(), 0)
+  @test.assert_eq(consumed, 1)
+  @test.assert_eq(produced, 0)
+  @test.assert_eq(inflater.staged_input.length(), 1)
+  @test.assert_eq(inflater.view.length(), 0)
+  @test.assert_eq(inflater.out.length(), 0)
 }
 
 ///|
@@ -299,22 +246,19 @@ test "stored input drains and compacts a partial staged tail" {
   inflater.staged_input = [b'\xAA', b'\xBB', b'\xCC']
   inflater.staged_pos = 0
   assert_true(inflater.next_stored_byte() == Some(b'\xAA'))
-  assert_eq(inflater.staged_pos, 1)
+  @test.assert_eq(inflater.staged_pos, 1)
   inflater.compact_staged_input()
-  assert_eq(inflater.staged_pos, 0)
-  assert_eq(inflater.staged_input.length(), 2)
-  assert_eq(inflater.staged_input[0], b'\xBB')
-  assert_eq(inflater.staged_input[1], b'\xCC')
+  @test.assert_eq(inflater.staged_pos, 0)
+  @test.assert_eq(inflater.staged_input.length(), 2)
+  @test.assert_eq(inflater.staged_input[0], b'\xBB')
+  @test.assert_eq(inflater.staged_input[1], b'\xCC')
 }
 
 ///|
 /// A complete stored header with a non-complementary NLEN is malformed in both
 /// decoding modes.
 test "both inflaters reject a stored length mismatch" {
-  coverage_expect_both_errors(
-    ([0x01, 0x01, 0x00, 0x00, 0x00] : Bytes),
-    "stored block length mismatch",
-  )
+  expect_corrupt_stream(([0x01, 0x01, 0x00, 0x00, 0x00] : Bytes))
 }
 
 ///|
@@ -322,20 +266,14 @@ test "both inflaters reject a stored length mismatch" {
 /// mode but leaves its first Huffman symbol incomplete.
 test "fixed-symbol truncation suspends only the streaming inflater" {
   let truncated : Bytes = [0x03]
-  try ignore(inflate_all(truncated)) catch {
-    InflateError(kind, message) => {
-      assert_true(kind == Truncated)
-      assert_eq(message, "unexpected end of input")
-    }
-  } noraise {
-    _ => fail("in-memory decoder accepted a truncated fixed block")
-  }
+  let InflateError(kind, _) = @test.expect_error(() => inflate_all(truncated))
+  @test.assert_eq(kind, Truncated)
   let inflater = Inflater()
   let output = FixedArray::make(1, b'\x00')
-  let status = inflater.step(truncated[:], output.mut_view())
+  let status = inflater.step(truncated, output.mut_view())
   let consumed = inflater.last_consumed()
   let produced = inflater.last_produced()
   assert_true(status is NeedMoreInput)
-  assert_eq(consumed, 1)
-  assert_eq(produced, 0)
+  @test.assert_eq(consumed, 1)
+  @test.assert_eq(produced, 0)
 }

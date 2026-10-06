@@ -42,7 +42,7 @@ test "fixed streaming output matches offset views across history wraps" {
       @test.assert_eq(Bytes::from_array(collected), source)
       fixed.reset()
       let empty = FixedArray::make(0, b'\x00')
-      ignore(fixed.step_into(compressed[:], empty))
+      ignore(fixed.step_into(compressed, empty))
       @test.assert_eq(fixed.last_produced(), 0)
     }
   }

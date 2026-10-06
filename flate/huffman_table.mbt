@@ -1,15 +1,15 @@
+///|
+const HUFFMAN_CHUNK_BITS : Int = 9
+
+///|
+const HUFFMAN_VALUE_SHIFT : Int = 4
+
 // Huffman decode tables for the decode pipeline: per-symbol code lengths in,
 // a zlib-style chunked lookup table out. Shared by the streaming `Inflater`
 // and the in-memory `MemDecoder`.
 
 ///|
 const MAX_CODE_LEN : Int = 16
-
-///|
-pub const HUFFMAN_CHUNK_BITS : Int = 9
-
-///|
-pub const HUFFMAN_VALUE_SHIFT : Int = 4
 
 ///|
 /// zlib-style chunked Huffman decode table. `chunk & 0xF` is the code length,
@@ -141,7 +141,7 @@ fn make_fixed_huffman_decoder() -> HuffmanDecoder {
   lengths.fill(7, start=256, end=280)
   lengths.fill(8, start=280, end=288)
   let h = HuffmanDecoder()
-  let _ = h.initialize(lengths[:])
+  let _ = h.initialize(lengths)
   h
 }
 

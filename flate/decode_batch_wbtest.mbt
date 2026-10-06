@@ -21,8 +21,8 @@ test "reused primary workspace resets deep complete sparse invalid and empty tre
       [],
     ] {
     let fresh = HuffmanDecoder()
-    let expected = fresh.initialize_litlen(lengths[:])
-    @test.assert_eq(reused.initialize_litlen(lengths[:]), expected)
+    let expected = fresh.initialize_litlen(lengths)
+    @test.assert_eq(reused.initialize_litlen(lengths), expected)
     for i in 0..<512 {
       @test.assert_eq(reused.chunks[i], fresh.chunks[i])
     }
@@ -77,8 +77,8 @@ test "fused Huffman metadata preserves every prefix and plain-table reset" {
     ] {
     let plain = HuffmanDecoder()
     let packed = HuffmanDecoder()
-    @test.assert_eq(plain.initialize(lengths[:]), true)
-    @test.assert_eq(packed.initialize_data(lengths[:], alphabet), true)
+    @test.assert_eq(plain.initialize(lengths), true)
+    @test.assert_eq(packed.initialize_data(lengths, alphabet), true)
     for bits in 0..<32768 {
       let word = UInt64::extend_uint(bits.reinterpret_as_uint())
       let raw = batch_huffman_entry(plain, word)
@@ -126,7 +126,7 @@ test "fused Huffman metadata preserves every prefix and plain-table reset" {
         @test.assert_eq(expected != 0, symbol < MAX_NUM_DIST)
       }
     }
-    @test.assert_eq(packed.initialize(lengths[:]), true)
+    @test.assert_eq(packed.initialize(lengths), true)
     for i in 0..<plain.chunks.length() {
       @test.assert_eq(packed.chunks[i], plain.chunks[i])
     }
@@ -140,7 +140,7 @@ test "fused Huffman metadata preserves every prefix and plain-table reset" {
 #cfg(target="native")
 let packed_fixed_huffman_decoder : HuffmanDecoder = {
   let huffman = HuffmanDecoder()
-  ignore(huffman.initialize_data(fixed_ll_len[:], LiteralLength))
+  ignore(huffman.initialize_data(fixed_ll_len, LiteralLength))
   huffman
 }
 
@@ -159,11 +159,8 @@ test "batch handles the maximum forty-eight-bit token" {
   distance_lengths[29] = 15
   let literals = HuffmanDecoder()
   let distances = HuffmanDecoder()
-  @test.assert_eq(literals.initialize_data(lengths[:], LiteralLength), true)
-  @test.assert_eq(
-    distances.initialize_data(distance_lengths[:], Distance),
-    true,
-  )
+  @test.assert_eq(literals.initialize_data(lengths, LiteralLength), true)
+  @test.assert_eq(distances.initialize_data(distance_lengths, Distance), true)
   for alignment in 0..<8 {
     let writer = BitWriter()
     writer.write_bits(0, alignment)
@@ -202,7 +199,7 @@ test "batch handles the maximum forty-eight-bit token" {
 test "batch lookup covers linked fifteen-bit Huffman entries" {
   let lengths = FixedArray::makei(16, i => (i + 1).min(15))
   let huffman = HuffmanDecoder()
-  @test.assert_eq(huffman.initialize(lengths[:]), true)
+  @test.assert_eq(huffman.initialize(lengths), true)
   for symbol in 0..<16 {
     let code = if symbol == 15 { 32767U } else { (1U << (symbol + 1)) - 2 }
     let reversed = reverse_bits(code, lengths[symbol])
@@ -218,7 +215,7 @@ test "batch lookup covers linked fifteen-bit Huffman entries" {
 test "batch and checked tails preserve literal capacity and cancellation boundaries" {
   let distances = HuffmanDecoder()
   @test.assert_eq(
-    distances.initialize_data(FixedArray::make(32, 5)[:], Distance),
+    distances.initialize_data(FixedArray::make(32, 5), Distance),
     true,
   )
   let writer = BitWriter()
@@ -277,7 +274,7 @@ test "batch and checked tails preserve literal capacity and cancellation boundar
 test "maximum matches preserve four-token reservation cancellation boundaries" {
   let distances = HuffmanDecoder()
   @test.assert_eq(
-    distances.initialize_data(FixedArray::make(32, 5)[:], Distance),
+    distances.initialize_data(FixedArray::make(32, 5), Distance),
     true,
   )
   for alignment in 0..<8 {
@@ -335,7 +332,7 @@ test "maximum matches preserve four-token reservation cancellation boundaries" {
 test "batch matches preserve overlap and unread bits across alignments" {
   let distances = HuffmanDecoder()
   @test.assert_eq(
-    distances.initialize_data(FixedArray::make(32, 5)[:], Distance),
+    distances.initialize_data(FixedArray::make(32, 5), Distance),
     true,
   )
   for
@@ -390,7 +387,7 @@ test "batch matches preserve overlap and unread bits across alignments" {
 test "batch refill preserves exact input position across checked tails" {
   let distances = HuffmanDecoder()
   @test.assert_eq(
-    distances.initialize_data(FixedArray::make(32, 5)[:], Distance),
+    distances.initialize_data(FixedArray::make(32, 5), Distance),
     true,
   )
   for size in [32, 33, 63, 64, 65, 127] {
@@ -441,7 +438,7 @@ test "batch refill preserves exact input position across checked tails" {
 test "peeled literal remains committed before an invalid token" {
   let distances = HuffmanDecoder()
   @test.assert_eq(
-    distances.initialize_data(FixedArray::make(32, 5)[:], Distance),
+    distances.initialize_data(FixedArray::make(32, 5), Distance),
     true,
   )
   for
@@ -486,7 +483,7 @@ test "peeled literal remains committed before an invalid token" {
 test "batch invalid tokens fall back without consuming the token" {
   let distances = HuffmanDecoder()
   @test.assert_eq(
-    distances.initialize_data(FixedArray::make(32, 5)[:], Distance),
+    distances.initialize_data(FixedArray::make(32, 5), Distance),
     true,
   )
   for
@@ -531,10 +528,7 @@ test "batch invalid tokens fall back without consuming the token" {
 #cfg(target="native")
 test "prefetched invalid tokens preserve the preceding match" {
   let distances = HuffmanDecoder()
-  @test.assert_eq(
-    distances.initialize_distance(FixedArray::make(32, 5)[:]),
-    true,
-  )
+  @test.assert_eq(distances.initialize_distance(FixedArray::make(32, 5)), true)
   for
     (code, distance_symbol) in [
       (286, 0),
@@ -585,7 +579,7 @@ test "zero prefetched primary remains invalid after a committed match" {
   lengths[257] = 1
   let literals = HuffmanDecoder()
   let distances = HuffmanDecoder()
-  @test.assert_eq(literals.initialize_litlen(lengths[:]), true)
+  @test.assert_eq(literals.initialize_litlen(lengths), true)
   @test.assert_eq(distances.initialize_distance([1]), true)
   let writer = BitWriter()
   writer.write_bits(0, 2) // length three, distance one
@@ -622,7 +616,7 @@ test "zero prefetched primary after a literal keeps the literal committed" {
   lengths[65] = 1
   let literals = HuffmanDecoder()
   let distances = HuffmanDecoder()
-  @test.assert_eq(literals.initialize_litlen(lengths[:]), true)
+  @test.assert_eq(literals.initialize_litlen(lengths), true)
   @test.assert_eq(distances.initialize_distance([1]), true)
   let writer = BitWriter()
   writer.write_bits(0, 1) // literal A

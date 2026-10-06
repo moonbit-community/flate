@@ -127,7 +127,7 @@ test "data Huffman decoding preserves following bits across reservoir boundaries
     reverse_bits(code, lengths[i])
   })
   let huffman = HuffmanDecoder()
-  @test.assert_eq(huffman.initialize(lengths[:]), true)
+  @test.assert_eq(huffman.initialize(lengths), true)
   for
     (table, values, sizes) in [
       (fixed_huffman_decoder, fixed_ll_val, fixed_ll_len),

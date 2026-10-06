@@ -4,51 +4,42 @@ test "gzip wrappers bound accepted input under output backpressure" {
   let no_output = FixedArray::make(0, b'\x00')
 
   let encoder = Encoder(level=0)
-  let enc_status = encoder.step(source[:], no_output.mut_view(), action=Finish)
+  let enc_status = encoder.step(source, no_output.mut_view(), action=Finish)
   let enc_consumed = encoder.last_consumed()
   let enc_produced = encoder.last_produced()
   assert_true(enc_status is NeedMoreOutput)
   assert_true(enc_consumed > 0)
   assert_true(enc_consumed < source.length())
-  assert_eq(enc_produced, 0)
+  @test.assert_eq(enc_produced, 0)
 
-  let compressed = gzip_compress(source, level=0)
+  let compressed = compress(source, level=0)
   let decoder = Decoder()
-  assert_eq(decoder.unused_input(), b"")
-  let dec_status = decoder.step(compressed[:], no_output.mut_view(), end=true)
+  @test.assert_eq(decoder.unused_input(), b"")
+  let dec_status = decoder.step_into(compressed, no_output, end=true)
   let dec_consumed = decoder.last_consumed()
   let dec_produced = decoder.last_produced()
   assert_true(dec_status is NeedMoreOutput)
-  assert_eq(dec_consumed, DECODER_INPUT_LIMIT)
+  @test.assert_eq(dec_consumed, DECODER_INPUT_LIMIT)
   assert_true(dec_consumed < compressed.length())
-  assert_eq(dec_produced, 0)
+  @test.assert_eq(dec_produced, 0)
   assert_true(decoder.pending.length() <= DECODER_INPUT_LIMIT)
+  assert_false(decoder.borrowed_input)
   assert_false(decoder.ending)
-  let mut input_pos = dec_consumed
-  let mut saw_consumed_prefix = false
-  let mut saw_fresh_window = false
   for _ in 0..<8 {
-    if decoder.pending.length() == DECODER_INPUT_LIMIT {
-      if decoder.pending_pos > 0 {
-        saw_consumed_prefix = true
-      } else {
-        saw_fresh_window = true
-      }
-    }
-    let status = decoder.step(
-      compressed[input_pos:],
-      no_output.mut_view(),
+    let status = decoder.step_into(
+      compressed[dec_consumed:],
+      no_output,
       end=true,
     )
     let consumed = decoder.last_consumed()
     let produced = decoder.last_produced()
     assert_true(status is NeedMoreOutput)
-    assert_eq(produced, 0)
-    input_pos = input_pos + consumed
+    @test.assert_eq(consumed, 0)
+    @test.assert_eq(produced, 0)
+    assert_true(decoder.pending.length() <= DECODER_INPUT_LIMIT)
+    assert_false(decoder.borrowed_input)
+    assert_false(decoder.ending)
   }
-  assert_true(saw_consumed_prefix)
-  assert_true(saw_fresh_window)
-  assert_true(input_pos < compressed.length())
 }
 
 ///|
@@ -60,11 +51,11 @@ test "gzip decoder waits at an empty boundary after a verified member" {
   decoder.members = 1
   decoder.mode = GzHeader
   let output = FixedArray::make(1, b'\x00')
-  let status = decoder.step(b""[:], output.mut_view())
+  let status = decoder.step_into(b"", output)
   let consumed = decoder.last_consumed()
   let produced = decoder.last_produced()
   assert_true(status is NeedMoreInput)
-  assert_eq(consumed, 0)
-  assert_eq(produced, 0)
+  @test.assert_eq(consumed, 0)
+  @test.assert_eq(produced, 0)
   assert_false(decoder.is_finished())
 }

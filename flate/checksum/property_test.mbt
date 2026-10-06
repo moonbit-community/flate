@@ -1,45 +1,19 @@
 // Property-based tests for the CRC-32 and Adler-32 checksums.
 
 ///|
-/// Property: the one-shot, incremental, byte-at-a-time, and cancellable CRC-32
-/// forms all agree; an always-true cancellation returns `None`, and a
-/// cancellation observed only after all data has been processed also returns
-/// `None` instead of silently succeeding.
-test "property: crc32 forms agree and are cancellable" {
+/// The one-shot, incremental, and byte-at-a-time CRC-32 forms agree.
+test "property: crc32 forms agree" {
   @quickcheck.check(
     (data : Bytes) => {
-      let one = @checksum.crc32(data)
-      let c = @checksum.Crc32()
-      c.update(data)
-      if c.finish() != one {
-        return false
+      let expected = @checksum.crc32(data)
+      let chunks = @checksum.Crc32()
+      chunks.update(data)
+      guard chunks.finish() == expected else { return false }
+      let bytes = @checksum.Crc32()
+      for byte in data {
+        bytes.update_byte(byte)
       }
-      let d = @checksum.Crc32()
-      for b in data {
-        d.update_byte(b)
-      }
-      if d.finish() != one {
-        return false
-      }
-      if @checksum.crc32_cancellable(data, cancelled=() => false) != Some(one) {
-        return false
-      }
-      if @checksum.crc32_cancellable(data, cancelled=() => true) != None {
-        return false
-      }
-      // `cancelled` is polled at entry, after each 4 KiB chunk, and once more
-      // after the loop. A callback that turns `true` only on the very last
-      // poll must still cancel, exercising the post-loop check.
-      let total_polls = 2 + (data.length() - 1) / 4096
-      let mut polls = 0
-      let late_cancel = @checksum.crc32_cancellable(data, cancelled=() => {
-        polls = polls + 1
-        polls >= total_polls
-      })
-      if late_cancel != None {
-        return false
-      }
-      true
+      bytes.finish() == expected
     },
     count=60,
     max_size=2000,

@@ -12,18 +12,18 @@ let py_gzip : Bytes = [
 ]
 
 ///|
-test "gunzip decodes a python-produced gzip stream" {
-  assert_eq(@gzip.gunzip(py_gzip), data)
+test "decompress decodes a python-produced gzip stream" {
+  @test.assert_eq(@gzip.decompress(py_gzip), data)
 }
 
 ///|
 test "gzip round-trip" {
-  assert_eq(@gzip.gunzip(@gzip.gzip_compress(data)), data)
+  @test.assert_eq(@gzip.decompress(@gzip.compress(data)), data)
 }
 
 ///|
 test "gzip round-trip: empty" {
-  assert_eq(@gzip.gunzip(@gzip.gzip_compress(b"")), b"")
+  @test.assert_eq(@gzip.decompress(@gzip.compress(b"")), b"")
 }
 
 ///|
@@ -31,7 +31,7 @@ test "gzip round-trip: empty" {
 /// `gzip.compress(b"abc", compresslevel=0, mtime=0)` produces the same raw
 /// DEFLATE bytes and trailer; its header advertises fast compression with
 /// XFL=4, while this encoder deliberately uses the valid neutral XFL=0.
-test "gzip_compress level 0 matches a complete standard golden" {
+test "compress level 0 matches a complete standard golden" {
   let golden : Bytes = [
     // Fixed gzip header (MTIME=0, XFL=0, OS=unknown).
     0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
@@ -40,27 +40,27 @@ test "gzip_compress level 0 matches a complete standard golden" {
     // CRC32("abc")=0x352441C2 (little-endian), ISIZE=3.
      0xC2, 0x41, 0x24, 0x35, 0x03, 0x00, 0x00, 0x00,
   ]
-  assert_eq(@gzip.gzip_compress(b"abc", level=0), golden)
+  @test.assert_eq(@gzip.compress(b"abc", level=0), golden)
 }
 
 ///|
 /// Optimal (zopfli-style) gzip round-trips and is no larger than level 6.
-test "gzip_compress_optimal round-trips and is no larger than level 6" {
+test "compress_optimal round-trips and is no larger than level 6" {
   let payload = b"the quick brown fox jumps over the lazy dog. the quick brown fox jumps over the lazy dog. pack my box with five dozen liquor jugs."
-  let opt = @gzip.gzip_compress_optimal(payload)
-  assert_eq(@gzip.gunzip(opt), payload)
-  assert_true(opt.length() <= @gzip.gzip_compress(payload, level=6).length())
+  let opt = @gzip.compress_optimal(payload)
+  @test.assert_eq(@gzip.decompress(opt), payload)
+  assert_true(opt.length() <= @gzip.compress(payload, level=6).length())
 }
 
 ///|
-test "gzip_compress_optimal: empty" {
-  assert_eq(@gzip.gunzip(@gzip.gzip_compress_optimal(b"")), b"")
+test "compress_optimal: empty" {
+  @test.assert_eq(@gzip.decompress(@gzip.compress_optimal(b"")), b"")
 }
 
 ///|
 /// Concatenate byte sequences.
 fn concat_bytes(parts : Array[Bytes]) -> Bytes {
-  let b = Buffer()
+  let b = @buffer.Buffer()
   for part in parts {
     for x in part {
       b.write_byte(x)
@@ -72,7 +72,7 @@ fn concat_bytes(parts : Array[Bytes]) -> Bytes {
 ///|
 /// Copy the first `n` bytes of `data` into an owned value.
 fn prefix_bytes(data : Bytes, n : Int) -> Bytes {
-  let out = Buffer()
+  let out = @buffer.Buffer()
   for i in 0..<n {
     out.write_byte(data[i])
   }
@@ -82,21 +82,21 @@ fn prefix_bytes(data : Bytes, n : Int) -> Bytes {
 ///|
 /// Multi-member gzip (RFC 1952 §2.2): concatenated members decode to the joined
 /// payloads. The middle member is python's real stream, proving interop.
-test "gunzip decodes a multi-member stream" {
+test "decompress decodes a multi-member stream" {
   let stream = concat_bytes([
-    @gzip.gzip_compress(b"first. "),
+    @gzip.compress(b"first. "),
     py_gzip,
-    @gzip.gzip_compress(b" last."),
+    @gzip.compress(b" last."),
   ])
   let want = concat_bytes([b"first. ", data, b" last."])
-  assert_eq(@gzip.gunzip(stream), want)
+  @test.assert_eq(@gzip.decompress(stream), want)
 }
 
 ///|
 /// Trailing bytes that do not begin another member are ignored, like `gzip -d`.
-test "gunzip ignores trailing garbage after the last member" {
-  let stream = concat_bytes([@gzip.gzip_compress(data), b"\x00\x01\x02\x04\x05"])
-  assert_eq(@gzip.gunzip(stream), data)
+test "decompress ignores trailing garbage after the last member" {
+  let stream = concat_bytes([@gzip.compress(data), b"\x00\x01\x02\x04\x05"])
+  @test.assert_eq(@gzip.decompress(stream), data)
 }
 
 ///|
@@ -105,15 +105,15 @@ test "gunzip ignores trailing garbage after the last member" {
 test "streaming gzip Decoder decodes a multi-member stream" {
   let p1 = b"alpha alpha alpha alpha "
   let p2 = b"beta beta beta beta beta "
-  let stream = concat_bytes([@gzip.gzip_compress(p1), @gzip.gzip_compress(p2)])
+  let stream = concat_bytes([@gzip.compress(p1), @gzip.compress(p2)])
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(8, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let mut fed = false
   for ;; {
-    let view = if fed { b""[:] } else { stream[:] }
+    let view = if fed { b""[:] } else { stream }
     fed = true
-    let _st = dec.step(view, obuf.mut_view(), end=true)
+    let _st = dec.step_into(view, obuf, end=true)
     let _c = dec.last_consumed()
     let p = dec.last_produced()
     for i in 0..<p {
@@ -123,7 +123,7 @@ test "streaming gzip Decoder decodes a multi-member stream" {
       break
     }
   }
-  assert_eq(out.to_bytes(), concat_bytes([p1, p2]))
+  @test.assert_eq(out.to_bytes(), concat_bytes([p1, p2]))
 }
 
 ///|
@@ -133,34 +133,34 @@ test "streaming gzip Decoder decodes a multi-member stream" {
 test "streaming gzip Decoder suspends across a split member magic" {
   let first_payload = b"first member"
   let second_payload = b"second member"
-  let first = @gzip.gzip_compress(first_payload)
-  let second = @gzip.gzip_compress(second_payload)
+  let first = @gzip.compress(first_payload)
+  let second = @gzip.compress(second_payload)
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(128, b'\x00')
-  let out = Buffer()
-  let at_boundary = dec.step(first[:], obuf.mut_view())
+  let out = @buffer.Buffer()
+  let at_boundary = dec.step_into(first, obuf)
   let first_used = dec.last_consumed()
   let first_produced = dec.last_produced()
   assert_true(at_boundary is NeedMoreInput)
-  assert_eq(first_used, first.length())
+  @test.assert_eq(first_used, first.length())
   for i in 0..<first_produced {
     out.write_byte(obuf[i])
   }
-  let at_magic = dec.step(second[0:1], obuf.mut_view())
+  let at_magic = dec.step_into(second[0:1], obuf)
   let magic_used = dec.last_consumed()
   let magic_produced = dec.last_produced()
   assert_true(at_magic is NeedMoreInput)
-  assert_eq(magic_used, 1)
-  assert_eq(magic_produced, 0)
-  let _done = dec.step(second[1:], obuf.mut_view(), end=true)
+  @test.assert_eq(magic_used, 1)
+  @test.assert_eq(magic_produced, 0)
+  let _done = dec.step_into(second[1:], obuf, end=true)
   let rest_used = dec.last_consumed()
   let rest_produced = dec.last_produced()
-  assert_eq(rest_used, second.length() - 1)
+  @test.assert_eq(rest_used, second.length() - 1)
   for i in 0..<rest_produced {
     out.write_byte(obuf[i])
   }
   assert_true(dec.is_finished())
-  assert_eq(out.to_bytes(), concat_bytes([first_payload, second_payload]))
+  @test.assert_eq(out.to_bytes(), concat_bytes([first_payload, second_payload]))
 }
 
 ///|
@@ -170,19 +170,19 @@ test "streaming gzip Decoder suspends across a split member magic" {
 /// handle. Three members, the middle one python's real stream.
 test "streaming gzip Decoder decodes a multi-member stream in tiny chunks" {
   let stream = concat_bytes([
-    @gzip.gzip_compress(b"one "),
+    @gzip.compress(b"one "),
     py_gzip,
-    @gzip.gzip_compress(b" three"),
+    @gzip.compress(b" three"),
   ])
   let want = concat_bytes([b"one ", data, b" three"])
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(5, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let n = stream.length()
   let mut fed = 0
   for ;; {
     let next = if fed + 3 < n { fed + 3 } else { n }
-    let _st = dec.step(stream[fed:next], obuf.mut_view(), end=next == n)
+    let _st = dec.step_into(stream[fed:next], obuf, end=next == n)
     let c = dec.last_consumed()
     let p = dec.last_produced()
     for i in 0..<p {
@@ -193,15 +193,15 @@ test "streaming gzip Decoder decodes a multi-member stream in tiny chunks" {
       break
     }
   }
-  assert_eq(out.to_bytes(), want)
+  @test.assert_eq(out.to_bytes(), want)
 }
 
 ///|
 /// Stream ~60 KB through the suspendable `gzip.Encoder` in 500-byte input
 /// chunks, draining a 50-byte output buffer — exercising multi-block deflate,
 /// header/trailer suspension, and incremental CRC-32 — then verify with the
-/// one-shot `gunzip`.
-test "streaming gzip Encoder round-trips through gunzip" {
+/// one-shot `decompress`.
+test "streaming gzip Encoder round-trips through decompress" {
   let unit = b"streaming gzip test payload, the quick brown fox. "
   let arr : Array[Byte] = []
   for _r in 0..<1200 {
@@ -212,7 +212,7 @@ test "streaming gzip Encoder round-trips through gunzip" {
   let src = Bytes::from_array(arr)
   let enc = @gzip.Encoder()
   let obuf = FixedArray::make(50, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let n = src.length()
   let mut pos = 0
   let mut sent_end = false
@@ -235,16 +235,16 @@ test "streaming gzip Encoder round-trips through gunzip" {
       break
     }
   }
-  assert_eq(@gzip.gunzip(out.to_bytes()), src)
+  @test.assert_eq(@gzip.decompress(out.to_bytes()), src)
 }
 
 ///|
 test "streaming gzip Encoder: empty input" {
   let enc = @gzip.Encoder()
   let obuf = FixedArray::make(64, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   for ;; {
-    let _st = enc.step(b""[:], obuf.mut_view(), action=Finish)
+    let _st = enc.step(b"", obuf.mut_view(), action=Finish)
     let _c = enc.last_consumed()
     let p = enc.last_produced()
     for i in 0..<p {
@@ -254,7 +254,7 @@ test "streaming gzip Encoder: empty input" {
       break
     }
   }
-  assert_eq(@gzip.gunzip(out.to_bytes()), b"")
+  @test.assert_eq(@gzip.decompress(out.to_bytes()), b"")
 }
 
 ///|
@@ -264,12 +264,12 @@ test "streaming gzip Encoder: empty input" {
 test "streaming gzip Decoder decodes a python gzip stream in tiny chunks" {
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(7, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let n = py_gzip.length()
   let mut fed = 0
   for ;; {
     let next = if fed + 3 < n { fed + 3 } else { n }
-    let _st = dec.step(py_gzip[fed:next], obuf.mut_view(), end=next == n)
+    let _st = dec.step_into(py_gzip[fed:next], obuf, end=next == n)
     let c = dec.last_consumed()
     let p = dec.last_produced()
     for i in 0..<p {
@@ -280,11 +280,11 @@ test "streaming gzip Decoder decodes a python gzip stream in tiny chunks" {
       break
     }
   }
-  assert_eq(out.to_bytes(), data)
+  @test.assert_eq(out.to_bytes(), data)
 }
 
 ///|
-/// Stream a ~50 KB gzip blob (built by the one-shot `gzip_compress`) through the
+/// Stream a ~50 KB gzip blob (built by the one-shot `compress`) through the
 /// streaming `gzip.Decoder` in 64-byte input chunks, draining a 13-byte output
 /// buffer.
 test "streaming gzip Decoder round-trips a large stream" {
@@ -296,15 +296,15 @@ test "streaming gzip Decoder round-trips a large stream" {
     }
   }
   let src = Bytes::from_array(arr)
-  let gz = @gzip.gzip_compress(src)
+  let gz = @gzip.compress(src)
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(13, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let n = gz.length()
   let mut fed = 0
   for ;; {
     let next = if fed + 64 < n { fed + 64 } else { n }
-    let _st = dec.step(gz[fed:next], obuf.mut_view(), end=next == n)
+    let _st = dec.step_into(gz[fed:next], obuf, end=next == n)
     let c = dec.last_consumed()
     let p = dec.last_produced()
     for i in 0..<p {
@@ -315,20 +315,20 @@ test "streaming gzip Decoder round-trips a large stream" {
       break
     }
   }
-  assert_eq(out.to_bytes(), src)
+  @test.assert_eq(out.to_bytes(), src)
 }
 
 ///|
 test "streaming gzip Decoder: empty" {
-  let gz = @gzip.gzip_compress(b"")
+  let gz = @gzip.compress(b"")
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(8, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let n = gz.length()
   let mut fed = 0
   for ;; {
     let next = if fed + 1 < n { fed + 1 } else { n }
-    let _st = dec.step(gz[fed:next], obuf.mut_view(), end=next == n)
+    let _st = dec.step_into(gz[fed:next], obuf, end=next == n)
     let c = dec.last_consumed()
     let p = dec.last_produced()
     for i in 0..<p {
@@ -339,16 +339,16 @@ test "streaming gzip Decoder: empty" {
       break
     }
   }
-  assert_eq(out.to_bytes(), b"")
+  @test.assert_eq(out.to_bytes(), b"")
 }
 
 ///|
 /// A gzip stream carrying every optional header field (FEXTRA, FNAME,
 /// FCOMMENT, FHCRC), decoded by the streaming Decoder one byte at a time —
 /// exercising suspension inside each header field state.
-test "streaming gzip Decoder skips optional header fields" {
+test "streaming gzip Decoder validates optional header fields" {
   let payload = b"optional header fields payload, the quick brown fox."
-  let gz = @gzip.gzip_compress(payload)
+  let gz = @gzip.compress(payload)
   let arr : Array[Byte] = []
   // Fixed header with FLG = FHCRC | FEXTRA | FNAME | FCOMMENT = 0x1E.
   for b in [0x1F, 0x8B, 0x08, 0x1E, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF] {
@@ -367,9 +367,10 @@ test "streaming gzip Decoder skips optional header fields" {
     arr.push(b)
   }
   arr.push(b'\x00')
-  // FHCRC: two bytes (skipped, not verified).
-  arr.push(b'\x00')
-  arr.push(b'\x00')
+  // FHCRC: low sixteen bits of CRC-32 over all preceding header bytes.
+  let header_crc = @checksum.crc32(Bytes::from_array(arr))
+  arr.push((header_crc & 0xff).to_byte())
+  arr.push(((header_crc >> 8) & 0xff).to_byte())
   // DEFLATE body + trailer, reused from the canonical stream.
   for i in 10..<gz.length() {
     arr.push(gz[i])
@@ -377,12 +378,12 @@ test "streaming gzip Decoder skips optional header fields" {
   let full = Bytes::from_array(arr)
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(11, b'\x00')
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let n = full.length()
   let mut fed = 0
   for ;; {
     let next = if fed + 1 < n { fed + 1 } else { n }
-    let _st = dec.step(full[fed:next], obuf.mut_view(), end=next == n)
+    let _st = dec.step_into(full[fed:next], obuf, end=next == n)
     let c = dec.last_consumed()
     let p = dec.last_produced()
     for i in 0..<p {
@@ -393,15 +394,15 @@ test "streaming gzip Decoder skips optional header fields" {
       break
     }
   }
-  assert_eq(out.to_bytes(), payload)
-  // The one-shot path skips the same fields.
-  assert_eq(@gzip.gunzip(full), payload)
+  @test.assert_eq(out.to_bytes(), payload)
+  // The one-shot path validates the same header and trailer.
+  @test.assert_eq(@gzip.decompress(full), payload)
 }
 
 ///|
 /// A flipped ISIZE byte must be caught by the trailer verification.
 test "streaming gzip Decoder rejects a corrupted trailer" {
-  let gz = @gzip.gzip_compress(b"corrupt me please, corrupt me please")
+  let gz = @gzip.compress(b"corrupt me please, corrupt me please")
   let arr : Array[Byte] = []
   for b in gz {
     arr.push(b)
@@ -415,7 +416,7 @@ test "streaming gzip Decoder rejects a corrupted trailer" {
     let n = bad.length()
     let mut fed = 0
     for ;; {
-      let _st = dec.step(bad[fed:n], obuf.mut_view(), end=true)
+      let _st = dec.step_into(bad[fed:n], obuf, end=true)
       let c = dec.last_consumed()
       let _p = dec.last_produced()
       fed = fed + c
@@ -426,37 +427,37 @@ test "streaming gzip Decoder rejects a corrupted trailer" {
   } catch {
     GzipError(kind, _) => assert_true(kind == LengthMismatch)
   } noraise {
-    _ => fail("expected corruption to be rejected")
+    _ => @test.fail("expected corruption to be rejected")
   }
-  assert_eq(dec.last_consumed(), 0)
-  assert_eq(dec.last_produced(), 0)
+  @test.assert_eq(dec.last_consumed(), 0)
+  @test.assert_eq(dec.last_produced(), 0)
 }
 
 ///|
 /// RFC 1952 reserves the top three FLG bits and requires a decoder to reject a
 /// member when any of them is non-zero.
 test "gzip decoders reject reserved FLG bits" {
-  let gz = @gzip.gzip_compress(b"reserved flag payload")
+  let gz = @gzip.compress(b"reserved flag payload")
   let arr : Array[Byte] = []
   for b in gz {
     arr.push(b)
   }
   arr[3] = (arr[3].to_int() | 0x20).to_byte()
   let bad = Bytes::from_array(arr)
-  try ignore(@gzip.gunzip(bad)) catch {
+  try ignore(@gzip.decompress(bad)) catch {
     GzipError(kind, _) => assert_true(kind == InvalidHeader)
   } noraise {
-    _ => fail("one-shot decoding accepted a reserved FLG bit")
+    _ => @test.fail("one-shot decoding accepted a reserved FLG bit")
   }
   let dec = @gzip.Decoder()
   let out = FixedArray::make(64, b'\x00')
-  try ignore(dec.step(bad[:], out.mut_view(), end=true)) catch {
+  try ignore(dec.step_into(bad, out, end=true)) catch {
     GzipError(kind, _) => assert_true(kind == InvalidHeader)
   } noraise {
-    _ => fail("streaming decoding accepted a reserved FLG bit")
+    _ => @test.fail("streaming decoding accepted a reserved FLG bit")
   }
-  assert_eq(dec.last_consumed(), 0)
-  assert_eq(dec.last_produced(), 0)
+  @test.assert_eq(dec.last_consumed(), 0)
+  @test.assert_eq(dec.last_produced(), 0)
 }
 
 ///|
@@ -464,23 +465,23 @@ test "gzip decoders reject reserved FLG bits" {
 /// trailing garbage. Both entry points must report the second member as
 /// truncated, even though the first payload was already complete.
 test "gzip decoders reject a truncated subsequent member" {
-  let first = @gzip.gzip_compress(b"complete first member")
-  let second = @gzip.gzip_compress(b"the second member is deliberately cut")
+  let first = @gzip.compress(b"complete first member")
+  let second = @gzip.compress(b"the second member is deliberately cut")
   let stream = concat_bytes([first, prefix_bytes(second, 17)])
-  try ignore(@gzip.gunzip(stream)) catch {
+  try ignore(@gzip.decompress(stream)) catch {
     GzipError(kind, _) => assert_true(kind == Truncated)
   } noraise {
-    _ => fail("one-shot decoding ignored a partial second member")
+    _ => @test.fail("one-shot decoding ignored a partial second member")
   }
   let dec = @gzip.Decoder()
   let out = FixedArray::make(4096, b'\x00')
-  try ignore(dec.step(stream[:], out.mut_view(), end=true)) catch {
+  try ignore(dec.step_into(stream, out, end=true)) catch {
     GzipError(kind, _) => assert_true(kind == Truncated)
   } noraise {
-    _ => fail("streaming decoding ignored a partial second member")
+    _ => @test.fail("streaming decoding ignored a partial second member")
   }
-  assert_eq(dec.last_consumed(), 0)
-  assert_eq(dec.last_produced(), 0)
+  @test.assert_eq(dec.last_consumed(), 0)
+  @test.assert_eq(dec.last_produced(), 0)
 }
 
 ///|
@@ -489,23 +490,23 @@ test "gzip decoders reject a truncated subsequent member" {
 test "streaming gzip Decoder rejects truncated input at end" {
   let out = FixedArray::make(256, b'\x00')
   let empty_dec = @gzip.Decoder()
-  try ignore(empty_dec.step(b""[:], out.mut_view(), end=true)) catch {
+  try ignore(empty_dec.step_into(b"", out, end=true)) catch {
     GzipError(kind, _) => assert_true(kind == Truncated)
   } noraise {
-    _ => fail("empty EOF was accepted as a complete gzip stream")
+    _ => @test.fail("empty EOF was accepted as a complete gzip stream")
   }
-  assert_eq(empty_dec.last_consumed(), 0)
-  assert_eq(empty_dec.last_produced(), 0)
-  let gz = @gzip.gzip_compress(b"missing trailer byte")
+  @test.assert_eq(empty_dec.last_consumed(), 0)
+  @test.assert_eq(empty_dec.last_produced(), 0)
+  let gz = @gzip.compress(b"missing trailer byte")
   let truncated = prefix_bytes(gz, gz.length() - 1)
   let dec = @gzip.Decoder()
-  try ignore(dec.step(truncated[:], out.mut_view(), end=true)) catch {
+  try ignore(dec.step_into(truncated, out, end=true)) catch {
     GzipError(kind, _) => assert_true(kind == Truncated)
   } noraise {
-    _ => fail("truncated trailer was accepted")
+    _ => @test.fail("truncated trailer was accepted")
   }
-  assert_eq(dec.last_consumed(), 0)
-  assert_eq(dec.last_produced(), 0)
+  @test.assert_eq(dec.last_consumed(), 0)
+  @test.assert_eq(dec.last_produced(), 0)
 }
 
 ///|
@@ -518,20 +519,20 @@ test "gzip decoders wrap malformed DEFLATE as GzipError" {
     0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x07, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   ]
-  try ignore(@gzip.gunzip(bad)) catch {
+  try ignore(@gzip.decompress(bad)) catch {
     GzipError(kind, _) => assert_true(kind == InvalidDeflate)
   } noraise {
-    _ => fail("one-shot decoding accepted a reserved DEFLATE block")
+    _ => @test.fail("one-shot decoding accepted a reserved DEFLATE block")
   }
   let dec = @gzip.Decoder()
   let out = FixedArray::make(64, b'\x00')
-  try ignore(dec.step(bad[:], out.mut_view(), end=true)) catch {
+  try ignore(dec.step_into(bad, out, end=true)) catch {
     GzipError(kind, _) => assert_true(kind == InvalidDeflate)
   } noraise {
-    _ => fail("streaming decoding accepted a reserved DEFLATE block")
+    _ => @test.fail("streaming decoding accepted a reserved DEFLATE block")
   }
-  assert_eq(dec.last_consumed(), 0)
-  assert_eq(dec.last_produced(), 0)
+  @test.assert_eq(dec.last_consumed(), 0)
+  @test.assert_eq(dec.last_produced(), 0)
 }
 
 ///|
@@ -544,35 +545,21 @@ test "streaming gzip Decoder latches its first error" {
   ]
   let decoder = @gzip.Decoder()
   let output = FixedArray::make(8, b'\xA5')
-  let mut first_kind : @gzip.GzipErrorKind = InvalidHeader
-  let mut first_error = ""
-  try ignore(decoder.step(malformed[:], output.mut_view(), end=true)) catch {
-    GzipError(kind, message) => {
-      first_kind = kind
-      first_error = message
-    }
-  } noraise {
-    _ => fail("expected malformed gzip input to fail")
-  }
-  assert_eq(decoder.last_consumed(), 0)
-  assert_eq(decoder.last_produced(), 0)
-  let mut repeated_kind : @gzip.GzipErrorKind = InvalidHeader
-  let mut repeated_error = ""
-  try ignore(decoder.step(b"late input"[:], output.mut_view())) catch {
-    GzipError(kind, message) => {
-      repeated_kind = kind
-      repeated_error = message
-    }
-  } noraise {
-    _ => fail("a failed gzip decoder resumed")
-  }
-  assert_eq(decoder.last_consumed(), 0)
-  assert_eq(decoder.last_produced(), 0)
+  let GzipError(first_kind, first_error) = @test.expect_error(() => {
+    decoder.step_into(malformed, output, end=true)
+  })
+  @test.assert_eq(decoder.last_consumed(), 0)
+  @test.assert_eq(decoder.last_produced(), 0)
+  let GzipError(repeated_kind, repeated_error) = @test.expect_error(() => {
+    decoder.step_into(b"late input", output)
+  })
+  @test.assert_eq(decoder.last_consumed(), 0)
+  @test.assert_eq(decoder.last_produced(), 0)
   assert_true(first_kind == InvalidDeflate)
   assert_true(repeated_kind == first_kind)
-  assert_eq(repeated_error, first_error)
+  @test.assert_eq(repeated_error, first_error)
   for byte in output {
-    assert_eq(byte, b'\xA5')
+    @test.assert_eq(byte, b'\xA5')
   }
   assert_false(decoder.is_finished())
 }
@@ -582,18 +569,18 @@ test "streaming gzip Decoder latches its first error" {
 /// not claim to consume bytes that cannot belong to the completed stream.
 test "streaming gzip Decoder latches end across one-byte output" {
   let payload = b"end latch with one-byte output and a long repeated repeated repeated tail"
-  let gz = @gzip.gzip_compress(payload)
+  let gz = @gzip.compress(payload)
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(1, b'\x00')
-  let plain = Buffer()
+  let plain = @buffer.Buffer()
   let mut first = true
   let mut finished = false
   for _i in 0..<4096 {
-    let view = if first { gz[:] } else { b""[:] }
-    let st = dec.step(view, obuf.mut_view(), end=first)
+    let view = if first { gz[:] } else { b"" }
+    let st = dec.step_into(view, obuf, end=first)
     let c = dec.last_consumed()
     let p = dec.last_produced()
-    assert_eq(c, if first { gz.length() } else { 0 })
+    @test.assert_eq(c, if first { gz.length() } else { 0 })
     assert_true(p <= 1)
     if p == 1 {
       plain.write_byte(obuf[0])
@@ -605,13 +592,13 @@ test "streaming gzip Decoder latches end across one-byte output" {
     }
   }
   assert_true(finished)
-  assert_eq(plain.to_bytes(), payload)
-  let st = dec.step(b"ignored"[:], obuf.mut_view())
+  @test.assert_eq(plain.to_bytes(), payload)
+  let st = dec.step_into(b"ignored", obuf)
   let c = dec.last_consumed()
   let p = dec.last_produced()
   assert_true(st is Done)
-  assert_eq(c, 0)
-  assert_eq(p, 0)
+  @test.assert_eq(c, 0)
+  @test.assert_eq(p, 0)
 }
 
 ///|
@@ -626,16 +613,16 @@ test "streaming gzip Decoder resumes with one-byte input and output" {
     }
   }
   let payload = Bytes::from_array(bytes)
-  let gz = @gzip.gzip_compress(payload)
+  let gz = @gzip.compress(payload)
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(1, b'\x00')
-  let plain = Buffer()
+  let plain = @buffer.Buffer()
   let mut fed = 0
   let mut finished = false
   for _i in 0..<20000 {
     let next = if fed < gz.length() { fed + 1 } else { fed }
-    let view = if fed < gz.length() { gz[fed:next] } else { b""[:] }
-    let _st = dec.step(view, obuf.mut_view(), end=next == gz.length())
+    let view = if fed < gz.length() { gz[fed:next] } else { b"" }
+    let _st = dec.step_into(view, obuf, end=next == gz.length())
     let c = dec.last_consumed()
     let p = dec.last_produced()
     fed = fed + c
@@ -649,8 +636,8 @@ test "streaming gzip Decoder resumes with one-byte input and output" {
     }
   }
   assert_true(finished)
-  assert_eq(fed, gz.length())
-  assert_eq(plain.to_bytes(), payload)
+  @test.assert_eq(fed, gz.length())
+  @test.assert_eq(plain.to_bytes(), payload)
 }
 
 ///|
@@ -663,18 +650,18 @@ test "streaming gzip Decoder drains a large stored member one byte at a time" {
     bytes.push((i & 0xFF).to_byte())
   }
   let payload = Bytes::from_array(bytes)
-  let gz = @gzip.gzip_compress(payload, level=0)
+  let gz = @gzip.compress(payload, level=0)
   let dec = @gzip.Decoder()
   let obuf = FixedArray::make(1, b'\x00')
-  let plain = Buffer()
+  let plain = @buffer.Buffer()
   let mut first = true
   let mut finished = false
   for _i in 0..<20000 {
-    let view = if first { gz[:] } else { b""[:] }
-    let _st = dec.step(view, obuf.mut_view(), end=first)
+    let view = if first { gz[:] } else { b"" }
+    let _st = dec.step_into(view, obuf, end=first)
     let c = dec.last_consumed()
     let p = dec.last_produced()
-    assert_eq(c, if first { gz.length() } else { 0 })
+    @test.assert_eq(c, if first { gz.length() } else { 0 })
     if p == 1 {
       plain.write_byte(obuf[0])
     }
@@ -685,7 +672,7 @@ test "streaming gzip Decoder drains a large stored member one byte at a time" {
     }
   }
   assert_true(finished)
-  assert_eq(plain.to_bytes(), payload)
+  @test.assert_eq(plain.to_bytes(), payload)
 }
 
 ///|
@@ -697,11 +684,11 @@ test "streaming gzip Encoder latches flush across header backpressure" {
   let rest = b" and data after that boundary"
   let enc = @gzip.Encoder()
   let obuf = FixedArray::make(1, b'\x00')
-  let encoded = Buffer()
+  let encoded = @buffer.Buffer()
   let mut first_call = true
   let mut flushed = false
   for _i in 0..<4096 {
-    let view = if first_call { first[:] } else { b""[:] }
+    let view = if first_call { first[:] } else { b"" }
     let action : @flate.DeflateAction = if first_call {
       SyncFlush
     } else {
@@ -710,7 +697,7 @@ test "streaming gzip Encoder latches flush across header backpressure" {
     let st = enc.step(view, obuf.mut_view(), action~)
     let c = enc.last_consumed()
     let p = enc.last_produced()
-    assert_eq(c, if first_call { first.length() } else { 0 })
+    @test.assert_eq(c, if first_call { first.length() } else { 0 })
     if p == 1 {
       encoded.write_byte(obuf[0])
     }
@@ -726,12 +713,12 @@ test "streaming gzip Encoder latches flush across header backpressure" {
   // sync-flush point.
   let prefix = encoded.to_bytes()
   let dec = @gzip.Decoder()
-  let plain = Buffer()
+  let plain = @buffer.Buffer()
   let mut fed_prefix = false
   let mut reached_boundary = false
   for _i in 0..<4096 {
-    let view = if fed_prefix { b""[:] } else { prefix[:] }
-    let st = dec.step(view, obuf.mut_view())
+    let view = if fed_prefix { b""[:] } else { prefix }
+    let st = dec.step_into(view, obuf)
     let _c = dec.last_consumed()
     let p = dec.last_produced()
     fed_prefix = true
@@ -744,14 +731,14 @@ test "streaming gzip Encoder latches flush across header backpressure" {
     }
   }
   assert_true(reached_boundary)
-  assert_eq(plain.to_bytes(), first)
+  @test.assert_eq(plain.to_bytes(), first)
 
   // Continue the same encoder, signal end once, and drain without repeating
   // either control flag.
   let mut sent_rest = false
   let mut encoder_done = false
   for _i in 0..<4096 {
-    let view = if sent_rest { b""[:] } else { rest[:] }
+    let view = if sent_rest { b""[:] } else { rest }
     let action : @flate.DeflateAction = if sent_rest {
       Continue
     } else {
@@ -760,7 +747,7 @@ test "streaming gzip Encoder latches flush across header backpressure" {
     let st = enc.step(view, obuf.mut_view(), action~)
     let c = enc.last_consumed()
     let p = enc.last_produced()
-    assert_eq(c, if sent_rest { 0 } else { rest.length() })
+    @test.assert_eq(c, if sent_rest { 0 } else { rest.length() })
     if p == 1 {
       encoded.write_byte(obuf[0])
     }
@@ -771,13 +758,16 @@ test "streaming gzip Encoder latches flush across header backpressure" {
     }
   }
   assert_true(encoder_done)
-  assert_eq(@gzip.gunzip(encoded.to_bytes()), concat_bytes([first, rest]))
-  let st = enc.step(b"ignored"[:], obuf.mut_view())
+  @test.assert_eq(
+    @gzip.decompress(encoded.to_bytes()),
+    concat_bytes([first, rest]),
+  )
+  let st = enc.step(b"ignored", obuf.mut_view())
   let c = enc.last_consumed()
   let p = enc.last_produced()
   assert_true(st is Done)
-  assert_eq(c, 0)
-  assert_eq(p, 0)
+  @test.assert_eq(c, 0)
+  @test.assert_eq(p, 0)
 }
 
 ///|
@@ -786,8 +776,8 @@ test "streaming gzip Encoder latches flush across header backpressure" {
 test "streaming gzip Decoder preserves input after the final member" {
   let source = b"gzip member followed by another protocol message"
   let next_frame = b"NEXT-FRAME"
-  let encoded = @gzip.gzip_compress(source)
-  let combined = Buffer()
+  let encoded = @gzip.compress(source)
+  let combined = @buffer.Buffer()
   for byte in encoded {
     combined.write_byte(byte)
   }
@@ -796,14 +786,14 @@ test "streaming gzip Decoder preserves input after the final member" {
   }
   let decoder = @gzip.Decoder()
   let output = FixedArray::make(1, b'\x00')
-  let decoded = Buffer()
+  let decoded = @buffer.Buffer()
   let mut first = true
   for _ in 0..<4096 {
-    let chunk = if first { combined.to_bytes()[:] } else { b""[:] }
-    let status = decoder.step(chunk, output.mut_view())
+    let chunk = if first { combined.to_bytes()[:] } else { b"" }
+    let status = decoder.step_into(chunk, output)
     let consumed = decoder.last_consumed()
     let produced = decoder.last_produced()
-    assert_eq(consumed, if first { combined.length() } else { 0 })
+    @test.assert_eq(consumed, if first { combined.length() } else { 0 })
     if produced == 1 {
       decoded.write_byte(output[0])
     }
@@ -813,15 +803,15 @@ test "streaming gzip Decoder preserves input after the final member" {
     }
   }
   assert_true(decoder.is_finished())
-  assert_eq(decoded.to_bytes(), source)
-  assert_eq(decoder.unused_input(), next_frame)
-  let status = decoder.step(b"late"[:], output.mut_view())
+  @test.assert_eq(decoded.to_bytes(), source)
+  @test.assert_eq(decoder.unused_input(), next_frame)
+  let status = decoder.step_into(b"late", output)
   let consumed = decoder.last_consumed()
   let produced = decoder.last_produced()
   assert_true(status is Done)
-  assert_eq(consumed, 0)
-  assert_eq(produced, 0)
-  assert_eq(decoder.unused_input(), next_frame)
+  @test.assert_eq(consumed, 0)
+  @test.assert_eq(produced, 0)
+  @test.assert_eq(decoder.unused_input(), next_frame)
 }
 
 ///|
@@ -829,9 +819,9 @@ test "streaming gzip Decoder preserves input after the final member" {
 /// explicit one-member mode makes the first trailer an unambiguous boundary.
 test "streaming gzip Decoder can stop after one member" {
   let first_payload = b"first framed member"
-  let second_member = @gzip.gzip_compress(b"belongs to the next frame")
-  let first_member = @gzip.gzip_compress(first_payload)
-  let combined = Buffer()
+  let second_member = @gzip.compress(b"belongs to the next frame")
+  let first_member = @gzip.compress(first_payload)
+  let combined = @buffer.Buffer()
   for byte in first_member {
     combined.write_byte(byte)
   }
@@ -840,14 +830,14 @@ test "streaming gzip Decoder can stop after one member" {
   }
   let decoder = @gzip.Decoder(multistream=false)
   let output = FixedArray::make(1, b'\x00')
-  let decoded = Buffer()
+  let decoded = @buffer.Buffer()
   let mut first = true
   for _ in 0..<4096 {
-    let chunk = if first { combined.to_bytes()[:] } else { b""[:] }
-    let status = decoder.step(chunk, output.mut_view())
+    let chunk = if first { combined.to_bytes()[:] } else { b"" }
+    let status = decoder.step_into(chunk, output)
     let consumed = decoder.last_consumed()
     let produced = decoder.last_produced()
-    assert_eq(consumed, if first { combined.length() } else { 0 })
+    @test.assert_eq(consumed, if first { combined.length() } else { 0 })
     if produced == 1 {
       decoded.write_byte(output[0])
     }
@@ -857,6 +847,6 @@ test "streaming gzip Decoder can stop after one member" {
     }
   }
   assert_true(decoder.is_finished())
-  assert_eq(decoded.to_bytes(), first_payload)
-  assert_eq(decoder.unused_input(), second_member)
+  @test.assert_eq(decoded.to_bytes(), first_payload)
+  @test.assert_eq(decoder.unused_input(), second_member)
 }

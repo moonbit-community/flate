@@ -1,13 +1,13 @@
 ///|
 /// deflate_all -> inflate_all must reproduce the input exactly.
 test "round-trip: empty" {
-  assert_eq(@flate.inflate_all(@flate.deflate_all(b"")), b"")
+  @test.assert_eq(@flate.inflate_all(@flate.deflate_all(b"")), b"")
 }
 
 ///|
 test "round-trip: short literal" {
   let s = b"hello, world"
-  assert_eq(@flate.inflate_all(@flate.deflate_all(s)), s)
+  @test.assert_eq(@flate.inflate_all(@flate.deflate_all(s)), s)
 }
 
 ///|
@@ -15,7 +15,7 @@ test "round-trip: repetitive data actually compresses" {
   let s = b"abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabc"
   let comp = @flate.deflate_all(s)
   assert_true(comp.length() < s.length())
-  assert_eq(@flate.inflate_all(comp), s)
+  @test.assert_eq(@flate.inflate_all(comp), s)
 }
 
 ///|
@@ -25,13 +25,13 @@ test "round-trip: every byte value" {
     arr[i] = i.to_byte()
   }
   let s = Bytes::from_array(arr)
-  assert_eq(@flate.inflate_all(@flate.deflate_all(s)), s)
+  @test.assert_eq(@flate.inflate_all(@flate.deflate_all(s)), s)
 }
 
 ///|
 test "round-trip: longer text" {
   let s = b"The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog."
-  assert_eq(@flate.inflate_all(@flate.deflate_all(s)), s)
+  @test.assert_eq(@flate.inflate_all(@flate.deflate_all(s)), s)
 }
 
 ///|
@@ -40,7 +40,7 @@ test "round-trip: large input via dynamic Huffman" {
   let s = b"the quick brown fox jumps over the lazy dog. pack my box with five dozen liquor jugs. how razorback-jumping frogs can level six piqued gymnasts! the quick brown fox jumps over the lazy dog again and again and again."
   let c = @flate.deflate_all(s)
   assert_true(c.length() < s.length())
-  assert_eq(@flate.inflate_all(c), s)
+  @test.assert_eq(@flate.inflate_all(c), s)
 }
 
 ///|
@@ -50,7 +50,7 @@ test "Deflater::step streams compression then round-trips" {
   let data = b"the quick brown fox jumps over the lazy dog. the quick brown fox jumps over the lazy dog. pack my box."
   let def = @flate.Deflater()
   let obuf = FixedArray::make(16, b'\x00')
-  let comp = Buffer()
+  let comp = @buffer.Buffer()
   let n = data.length()
   let mut pos = 0
   let mut sent_end = false
@@ -74,7 +74,7 @@ test "Deflater::step streams compression then round-trips" {
     }
   }
   assert_true(comp.to_bytes().length() < data.length())
-  assert_eq(@flate.inflate_all(comp.to_bytes()), data)
+  @test.assert_eq(@flate.inflate_all(comp.to_bytes()), data)
 }
 
 ///|
@@ -94,7 +94,7 @@ test "Deflater emits multiple blocks for a large input and round-trips" {
   let data = Bytes::from_array(arr) // 45000 bytes
   let def = @flate.Deflater()
   let obuf = FixedArray::make(64, b'\x00')
-  let comp = Buffer()
+  let comp = @buffer.Buffer()
   let n = data.length()
   let mut pos = 0
   let mut sent_end = false
@@ -120,7 +120,7 @@ test "Deflater emits multiple blocks for a large input and round-trips" {
   let compressed = comp.to_bytes()
   // Highly repetitive: should compress to a small fraction of the original.
   assert_true(compressed.length() < data.length() / 4)
-  assert_eq(@flate.inflate_all(compressed), data)
+  @test.assert_eq(@flate.inflate_all(compressed), data)
 }
 
 ///|
@@ -133,13 +133,13 @@ test "Deflater finalization preserves unconsumed input under backpressure" {
   let after_end = b"belongs to the next protocol state"
   let def = @flate.Deflater(level=0)
   let no_output = FixedArray::make(0, b'\x00')
-  let compressed = Buffer()
-  let prefix_status = def.step(prefix[:], no_output.mut_view())
+  let compressed = @buffer.Buffer()
+  let prefix_status = def.step(prefix, no_output.mut_view())
   let prefix_consumed = def.last_consumed()
   let prefix_produced = def.last_produced()
   assert_true(prefix_status is NeedMoreOutput)
   assert_true(prefix_consumed < prefix.length())
-  assert_eq(prefix_produced, 0)
+  @test.assert_eq(prefix_produced, 0)
   let obuf = FixedArray::make(257, b'\x00')
   let mut prefix_pos = prefix_consumed
   for ;; {
@@ -156,27 +156,23 @@ test "Deflater finalization preserves unconsumed input under backpressure" {
   }
   // Queue a sync-flush marker without output room so final input first meets
   // older compressed output and must remain wholly unconsumed.
-  let flush_status = def.step(b""[:], no_output.mut_view(), action=SyncFlush)
+  let flush_status = def.step(b"", no_output.mut_view(), action=SyncFlush)
   let _flush_consumed = def.last_consumed()
   let _flush_produced = def.last_produced()
   assert_true(flush_status is NeedMoreOutput)
-  let first_status = def.step(
-    final_input[:],
-    no_output.mut_view(),
-    action=Finish,
-  )
+  let first_status = def.step(final_input, no_output.mut_view(), action=Finish)
   let first_consumed = def.last_consumed()
   let first_produced = def.last_produced()
   assert_true(first_status is NeedMoreOutput)
-  assert_eq(first_consumed, 0)
-  assert_eq(first_produced, 0)
+  @test.assert_eq(first_consumed, 0)
+  @test.assert_eq(first_produced, 0)
   let mut drain_calls = 0
   let mut final_pos = 0
   for ;; {
     let view = if final_pos < final_input.length() {
       final_input[final_pos:]
     } else {
-      after_end[:]
+      after_end
     }
     let status = def.step(
       view,
@@ -188,7 +184,7 @@ test "Deflater finalization preserves unconsumed input under backpressure" {
     if final_pos < final_input.length() {
       final_pos = final_pos + consumed
     } else {
-      assert_eq(consumed, 0)
+      @test.assert_eq(consumed, 0)
     }
     for i in 0..<produced {
       compressed.write_byte(obuf[i])
@@ -200,28 +196,27 @@ test "Deflater finalization preserves unconsumed input under backpressure" {
     assert_true(status is NeedMoreOutput)
   }
   assert_true(drain_calls > 1)
-  assert_eq(final_pos, final_input.length())
+  @test.assert_eq(final_pos, final_input.length())
   assert_true(def.is_finished())
-  let expected = Buffer()
+  let expected = @buffer.Buffer()
   for byte in prefix {
     expected.write_byte(byte)
   }
   for byte in final_input {
     expected.write_byte(byte)
   }
-  assert_eq(@flate.inflate_all(compressed.to_bytes()), expected.to_bytes())
-  let sentinel = FixedArray::make(4, b'\xA5')
-  let done_status = def.step(
-    after_end[:],
-    sentinel.mut_view(),
-    action=SyncFlush,
+  @test.assert_eq(
+    @flate.inflate_all(compressed.to_bytes()),
+    expected.to_bytes(),
   )
+  let sentinel = FixedArray::make(4, b'\xA5')
+  let done_status = def.step(after_end, sentinel.mut_view(), action=SyncFlush)
   let done_consumed = def.last_consumed()
   let done_produced = def.last_produced()
   assert_true(done_status is Done)
-  assert_eq(done_consumed, 0)
-  assert_eq(done_produced, 0)
+  @test.assert_eq(done_consumed, 0)
+  @test.assert_eq(done_produced, 0)
   for byte in sentinel {
-    assert_eq(byte, b'\xA5')
+    @test.assert_eq(byte, b'\xA5')
   }
 }

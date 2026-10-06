@@ -6,43 +6,21 @@ import {
 }
 
 // Values
-pub const DEFLATE_BLOCK_SIZE : Int = 16384
+pub fn deflate_all(BytesView, level? : Int, fast_store? : Bool) -> Bytes
 
-pub const HASH_BITS : Int = 15
+pub fn deflate_all_optimal(BytesView, iterations? : Int, fast_store? : Bool) -> Bytes
 
-pub const HUFFMAN_CHUNK_BITS : Int = 9
-
-pub const HUFFMAN_VALUE_SHIFT : Int = 4
-
-pub const MAX_NUM_DIST : Int = 30
-
-pub const MAX_NUM_LIT : Int = 286
-
-pub const MIN_LOOKAHEAD : Int = 258
-
-pub const NUM_CODES : Int = 19
-
-pub const OPTIMAL_MASTER_BLOCK : Int = 262144
-
-pub const WINDOW_SIZE : Int = 32768
-
-pub fn deflate_all(Bytes, level? : Int, fast_store? : Bool) -> Bytes
-
-pub fn deflate_all_optimal(Bytes, iterations? : Int, fast_store? : Bool) -> Bytes
-
-pub fn deflate_all_split(Bytes, level? : Int, fast_store? : Bool) -> Bytes
+pub fn deflate_all_split(BytesView, level? : Int, fast_store? : Bool) -> Bytes
 
 pub fn deflate_bound(Int) -> Int
 
-pub fn deflate_into(Bytes, FixedArray[Byte], level? : Int, fast_store? : Bool) -> Int?
+pub fn deflate_into(BytesView, FixedArray[Byte], level? : Int, fast_store? : Bool) -> Int?
 
-pub fn inflate_all(Bytes, cancelled? : () -> Bool) -> Bytes raise InflateError
+pub fn inflate_all(BytesView, max_output? : Int, cancelled? : () -> Bool) -> Bytes raise InflateError
 
-pub fn inflate_all_limited(Bytes, max_output~ : Int, cancelled? : () -> Bool) -> Bytes raise InflateError
+pub fn inflate_exact(BytesView, max_output? : Int, cancelled? : () -> Bool, preallocated? : Bool) -> Bytes raise InflateError
 
-pub fn inflate_exact(Bytes, max_output? : Int?, cancelled? : () -> Bool, preallocated? : Bool) -> Bytes raise InflateError
-
-pub fn inflate_into(Bytes, FixedArray[Byte], cancelled? : () -> Bool) -> Int raise InflateError
+pub fn inflate_into(BytesView, FixedArray[Byte], cancelled? : () -> Bool) -> Int raise InflateError
 
 // Errors
 pub suberror InflateError {
@@ -54,14 +32,14 @@ pub struct Compressor {
   // private fields
 }
 pub fn Compressor::Compressor(level? : Int, fast_store? : Bool) -> Self
-pub fn Compressor::compress(Self, Bytes) -> Bytes
-pub fn Compressor::compress_into(Self, Bytes, FixedArray[Byte]) -> Int?
+pub fn Compressor::compress(Self, BytesView) -> Bytes
+pub fn Compressor::compress_into(Self, BytesView, FixedArray[Byte]) -> Int?
 
 pub struct Decompressor {
   // private fields
 }
 pub fn Decompressor::Decompressor() -> Self
-pub fn Decompressor::decompress_into(Self, Bytes, FixedArray[Byte], cancelled? : () -> Bool) -> Int raise InflateError
+pub fn Decompressor::decompress_into(Self, BytesView, FixedArray[Byte], cancelled? : () -> Bool) -> Int raise InflateError
 
 pub(all) enum DeflateAction {
   Continue
@@ -69,8 +47,6 @@ pub(all) enum DeflateAction {
   Finish
 } derive(Eq, @debug.Debug)
 pub fn DeflateAction::equal(Self, Self) -> Bool
-pub fn DeflateAction::not_equal(Self, Self) -> Bool
-pub fn DeflateAction::to_repr(Self) -> @debug.Repr
 
 pub struct Deflater {
   // private fields
@@ -90,8 +66,6 @@ pub(all) enum InflateErrorKind {
   Cancelled
 } derive(Eq, @debug.Debug)
 pub fn InflateErrorKind::equal(Self, Self) -> Bool
-pub fn InflateErrorKind::not_equal(Self, Self) -> Bool
-pub fn InflateErrorKind::to_repr(Self) -> @debug.Repr
 
 pub struct Inflater {
   // private fields
@@ -110,8 +84,6 @@ pub(all) enum Status {
   NeedMoreOutput
 } derive(Eq, @debug.Debug)
 pub fn Status::equal(Self, Self) -> Bool
-pub fn Status::not_equal(Self, Self) -> Bool
-pub fn Status::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

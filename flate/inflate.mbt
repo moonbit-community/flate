@@ -25,13 +25,7 @@ pub(all) enum InflateErrorKind {
   OutputLimitExceeded
   /// A caller-supplied cancellation callback requested an early stop.
   Cancelled
-} derive(Eq, Debug)
-
-///|
-pub extend InflateErrorKind with Eq::{not_equal, equal}
-
-///|
-pub extend InflateErrorKind with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
 
 ///|
 /// Error raised while decoding a raw DEFLATE stream.
@@ -149,7 +143,7 @@ pub fn Inflater::Inflater(dictionary? : BytesView) -> Inflater {
     failure_message: "",
     step_consumed: 0,
     step_produced: 0,
-    view: b""[:],
+    view: b"",
     in_pos: 0,
     out_pos: 0,
     out: empty_out.mut_view(),
@@ -221,7 +215,7 @@ pub fn Inflater::reset(self : Inflater, dictionary? : BytesView) -> Unit {
   self.failure_message = ""
   self.step_consumed = 0
   self.step_produced = 0
-  self.view = b""[:]
+  self.view = b""
   self.in_pos = 0
   self.out_pos = 0
   self.out = self.empty_out.mut_view()
@@ -441,7 +435,7 @@ fn Inflater::compact_staged_input(self : Inflater) -> Unit {
 /// Release call-owned views after every success or error so a suspended engine
 /// never pins the caller's network input or mutable output buffer.
 fn Inflater::release_step_views(self : Inflater) -> Unit {
-  self.view = b""[:]
+  self.view = b""
   self.in_pos = 0
   self.out_pos = 0
   self.out = self.empty_out.mut_view()

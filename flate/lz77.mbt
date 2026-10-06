@@ -1,3 +1,6 @@
+///|
+const HASH_BITS : Int = 15
+
 // LZ77 parsing stage of the encode pipeline: bytes in, tokens (literals and
 // length/distance matches) plus symbol frequencies out. In modern terms,
 // `tokenize` bundles the match finder (3-byte heads and 4-byte hash chains), the parsing
@@ -7,9 +10,6 @@
 // This is the designated seam for alternative LZ77 parsers (see the roadmap):
 // encoder effort is invisible in the DEFLATE format, so anything that produces
 // the same (tokens, frequencies) shape can replace `tokenize` wholesale.
-
-///|
-pub const HASH_BITS : Int = 15
 
 ///|
 const WINDOW_MASK : Int = WINDOW_SIZE - 1
@@ -55,7 +55,7 @@ let level_configs : FixedArray[LevelConfig] = [
 ]
 
 ///|
-fn hash3(data : Bytes, i : Int) -> Int {
+fn hash3(data : BytesView, i : Int) -> Int {
   let a = data[i].to_int()
   let b = data[i + 1].to_int()
   let c = data[i + 2].to_int()
@@ -80,7 +80,7 @@ fn short_hash_product(product : UInt, shift? : Int = 9) -> Int {
 }
 
 ///|
-fn short_hash3(data : Bytes, position : Int, shift? : Int = 9) -> Int {
+fn short_hash3(data : BytesView, position : Int, shift? : Int = 9) -> Int {
   let triple = (data[position].to_int() |
   (data[position + 1].to_int() << 8) |
   (data[position + 2].to_int() << 16)).reinterpret_as_uint()
@@ -105,7 +105,7 @@ const LONG_HASH_BITS : Int = 18
 /// its prefix alone. The threshold keeps structured/textual inputs on the
 /// cache-friendly narrow table while selecting the wide table for binary and
 /// high-diversity source data.
-fn long_hash_bits_for_input(data : Bytes) -> Int {
+fn long_hash_bits_for_input(data : BytesView) -> Int {
   let n = data.length()
   guard n >= 32768 else { return NARROW_LONG_HASH_BITS }
   let sample = n.min(1024)
@@ -158,11 +158,11 @@ fn long_hash_product(product : UInt, shift? : Int = 16) -> Int {
 
 ///|
 #inline
-fn read_match_word(data : Bytes, position : Int) -> UInt {
+fn read_match_word(data : BytesView, position : Int) -> UInt {
   // SAFETY: insertion proves four bytes remain. Search clamps probe below
   // limit <= n - i and only visits earlier candidates, so prefix and suffix
   // words both stay inside the input, including its final four-byte tail.
-  data.unsafe_read_uint32_le(position)
+  data.data().unsafe_read_uint32_le(data.start_offset() + position)
 }
 
 ///|
@@ -302,7 +302,7 @@ fn MatchFinder::reset_stream(self : MatchFinder, previous_size : Int) -> Unit {
 // reachable. Reset before Int overflow; empty inputs cannot publish a head.
 fn MatchFinder::reset_for_input(
   self : MatchFinder,
-  input : Bytes,
+  input : BytesView,
   long_hash_bits? : Int = -1,
 ) -> Unit {
   self.min_match_length = 0
@@ -341,18 +341,19 @@ fn bytes_as_fixedarray(data : Bytes) -> FixedArray[Byte] = "%identity"
 
 ///|
 #cfg(any(target="native", target="wasm"))
-fn match_len_up_to(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
+fn match_len_up_to(data : BytesView, src : Int, pos : Int, limit : Int) -> Int {
   // Every wide-loop iteration proves both offsets have 16 available bytes.
   // Hoist the zero-copy representation bridge and call v128_load directly;
   // an otherwise tiny wrapper survives native optimization as two calls per
   // compared chunk.
-  let bytes = bytes_as_fixedarray(data)
+  let bytes = bytes_as_fixedarray(data.data())
+  let start = data.start_offset()
   let mut k = 0
   while k + 16 <= limit {
     let equal_lanes = @v128.i8x16_bitmask(
       @v128.i8x16_eq(
-        @v128.v128_load(bytes, src + k),
-        @v128.v128_load(bytes, pos + k),
+        @v128.v128_load(bytes, start + src + k),
+        @v128.v128_load(bytes, start + pos + k),
       ),
     )
     if equal_lanes != 0xFFFF {
@@ -401,7 +402,7 @@ fn match_len_in_window(
 /// real SIMD lowering; the native and linear-wasm implementation above remains
 /// the semantic reference.
 #cfg(not(any(target="native", target="wasm")))
-fn match_len_up_to(data : Bytes, src : Int, pos : Int, limit : Int) -> Int {
+fn match_len_up_to(data : BytesView, src : Int, pos : Int, limit : Int) -> Int {
   let mut k = 0
   while k < limit && data[src + k] == data[pos + k] {
     k = k + 1
@@ -430,7 +431,7 @@ fn match_len_in_window(
 /// match finders cache their current-position probes across the search loop.
 #inline
 fn match_candidate_can_beat(
-  data : Bytes,
+  data : BytesView,
   candidate : Int,
   position : Int,
   best_len : Int,
@@ -453,7 +454,7 @@ fn match_candidate_can_beat(
 /// Find a recent length-3 match, then search the independent 4-byte chain.
 /// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
 fn find_match_hashed(
-  data : Bytes,
+  data : BytesView,
   finder : MatchFinder,
   i : Int,
   n : Int,
@@ -524,7 +525,7 @@ fn find_match_hashed(
 
 ///|
 fn find_match(
-  data : Bytes,
+  data : BytesView,
   finder : MatchFinder,
   i : Int,
   n : Int,
@@ -687,7 +688,7 @@ fn insert_pos_hashed(finder : MatchFinder, i : Int, product : UInt) -> Unit {
 }
 
 ///|
-fn insert_pos(data : Bytes, finder : MatchFinder, i : Int, n : Int) -> Unit {
+fn insert_pos(data : BytesView, finder : MatchFinder, i : Int, n : Int) -> Unit {
   if n - i >= 4 {
     insert_pos_hashed(finder, i, read_match_word(data, i) * 0x1E35A7BDU)
   } else if n - i >= 3 {
@@ -702,7 +703,7 @@ fn insert_pos(data : Bytes, finder : MatchFinder, i : Int, n : Int) -> Unit {
 // One packed load and multiplication feed both hash tables. The loop proves
 // four available bytes. Masked indices address the private fixed-size tables.
 fn insert_positions(
-  data : Bytes,
+  data : BytesView,
   finder : MatchFinder,
   start : Int,
   end : Int,
@@ -827,7 +828,7 @@ fn pack_match_token(length : Int, distance : Int) -> Int {
 /// positions may match inside it. Returns the position one past the match.
 #inline
 fn commit_match(
-  data : Bytes,
+  data : BytesView,
   finder : MatchFinder,
   n : Int,
   start : Int,
@@ -897,7 +898,7 @@ fn emit_literal(
 /// already chained when this call begins. Matches may extend past `end` into
 /// any lookahead present in `data`.
 fn tokenize(
-  data : Bytes,
+  data : BytesView,
   finder : MatchFinder,
   start : Int,
   end : Int,
@@ -1289,7 +1290,7 @@ fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
 // three positions may cross the match boundary and use general insertion.
 // Callers have already proved a match length of at least 32 bytes.
 fn insert_matched_positions(
-  data : Bytes,
+  data : BytesView,
   finder : MatchFinder,
   start : Int,
   end : Int,

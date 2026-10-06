@@ -15,13 +15,7 @@ pub(all) enum GzipErrorKind {
   ChecksumMismatch
   /// The trailer ISIZE does not match the decompressed payload length.
   LengthMismatch
-} derive(Eq, Debug)
-
-///|
-pub extend GzipErrorKind with Eq::{not_equal, equal}
-
-///|
-pub extend GzipErrorKind with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
 
 ///|
 /// Structured gzip decoding failure: a stable category plus a human-readable
@@ -31,20 +25,14 @@ pub suberror GzipError {
 }
 
 ///|
-/// Translate every inner inflater failure at the gzip package boundary. Keep
-/// the known DEFLATE diagnostic while retaining a total fallback if the inner
-/// implementation gains another error kind in the future.
-#coverage.skip
-fn wrap_inflate_error(err : Error) -> GzipError {
-  match err {
-    @flate.InflateError(_, message) =>
-      GzipError(InvalidDeflate, "gzip: invalid DEFLATE stream: \{message}")
-    _ => GzipError(InvalidDeflate, "gzip: invalid DEFLATE stream")
-  }
+/// Preserve the diagnostic of a malformed inner DEFLATE stream.
+fn wrap_inflate_error(err : @flate.InflateError) -> GzipError {
+  let InflateError(_, message) = err
+  GzipError(InvalidDeflate, message)
 }
 
 ///|
-fn u32_le(data : Bytes, off : Int) -> UInt {
+fn u32_le(data : BytesView, off : Int) -> UInt {
   data[off].to_uint() |
   (data[off + 1].to_uint() << 8) |
   (data[off + 2].to_uint() << 16) |
@@ -53,8 +41,8 @@ fn u32_le(data : Bytes, off : Int) -> UInt {
 
 ///|
 /// Wrap a raw DEFLATE stream `deflated` of `input` in the gzip header/trailer.
-fn gzip_frame(input : Bytes, deflated : Bytes) -> Bytes {
-  let out = Buffer()
+fn gzip_frame(input : BytesView, deflated : Bytes) -> Bytes {
+  let out = @buffer.Buffer()
   // Header: magic, CM=8 (deflate), FLG=0, MTIME=0, XFL=0, OS=255 (unknown).
   out.write_bytes(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff")
   out.write_bytes(deflated)
@@ -68,8 +56,8 @@ fn gzip_frame(input : Bytes, deflated : Bytes) -> Bytes {
 /// speed for ratio; 0 = stored only, 6 = default.
 /// Optional `fast_store` is off by default; sampled inputs may use stored
 /// DEFLATE blocks, sacrificing compression ratio for speed.
-pub fn gzip_compress(
-  input : Bytes,
+pub fn compress(
+  input : BytesView,
   level? : Int = 6,
   fast_store? : Bool = false,
 ) -> Bytes {
@@ -84,8 +72,8 @@ pub fn gzip_compress(
 /// (zopfli's default 15).
 /// Optional `fast_store` is off by default; sampled inputs may use stored
 /// DEFLATE blocks, sacrificing compression ratio for speed.
-pub fn gzip_compress_optimal(
-  input : Bytes,
+pub fn compress_optimal(
+  input : BytesView,
   iterations? : Int = 15,
   fast_store? : Bool = false,
 ) -> Bytes {
@@ -99,7 +87,7 @@ pub fn gzip_compress_optimal(
 /// The streaming inflater's reported consumption lands exactly on the
 /// byte-aligned end of the member's final block.
 fn inflate_member(
-  input : Bytes,
+  input : BytesView,
   q : Int,
   consumed : FixedArray[Int],
 ) -> Bytes raise GzipError {
@@ -132,7 +120,7 @@ fn inflate_member(
 /// Whether the bytes at `p` begin a gzip member: the magic pair, with a
 /// truncated second byte treated as a (still-to-be-validated) member start so
 /// the caller reports `Truncated` rather than ending the stream.
-fn gunzip_member_magic(input : Bytes, p : Int, n : Int) -> Bool {
+fn gunzip_member_magic(input : BytesView, p : Int, n : Int) -> Bool {
   input[p].to_int() == 0x1F && (p + 1 >= n || input[p + 1].to_int() == 0x8B)
 }
 
@@ -140,7 +128,7 @@ fn gunzip_member_magic(input : Bytes, p : Int, n : Int) -> Bool {
 /// Skip a NUL-terminated header field, returning the offset one past the NUL.
 /// An unterminated field (bounded by the input end) still consumes its bytes;
 /// the caller's truncated-input check rejects it.
-fn gunzip_skip_nul_terminated(input : Bytes, q : Int) -> Int {
+fn gunzip_skip_nul_terminated(input : BytesView, q : Int) -> Int {
   let mut q = q
   while q < input.length() && input[q].to_int() != 0 {
     q = q + 1
@@ -151,7 +139,12 @@ fn gunzip_skip_nul_terminated(input : Bytes, q : Int) -> Int {
 ///|
 /// Offset one past the optional header fields (FEXTRA, FNAME, FCOMMENT, FHCRC)
 /// gated by the FLG bits.
-fn gunzip_optional_fields_end(input : Bytes, q : Int, flg : Int) -> Int {
+fn gunzip_optional_fields_end(
+  input : BytesView,
+  q : Int,
+  flg : Int,
+) -> Int raise GzipError {
+  let header_start = q - 10
   let mut q = q
   if (flg & 4) != 0 { // FEXTRA
     let xlen = input[q].to_int() | (input[q + 1].to_int() << 8)
@@ -164,6 +157,13 @@ fn gunzip_optional_fields_end(input : Bytes, q : Int, flg : Int) -> Int {
     q = gunzip_skip_nul_terminated(input, q)
   }
   if (flg & 2) != 0 { // FHCRC
+    guard q <= input.length() - 2 else {
+      raise GzipError(Truncated, "gzip: truncated header CRC")
+    }
+    let expected = input[q].to_uint() | (input[q + 1].to_uint() << 8)
+    guard (@checksum.crc32(input[header_start:q]) & 0xffff) == expected else {
+      raise GzipError(ChecksumMismatch, "gzip: header CRC-16 mismatch")
+    }
     q = q + 2
   }
   q
@@ -174,7 +174,7 @@ fn gunzip_optional_fields_end(input : Bytes, q : Int, flg : Int) -> Int {
 /// and trailer verification. Returns the payload and the offset of the next
 /// member (one past the trailer).
 fn gunzip_decode_member(
-  input : Bytes,
+  input : BytesView,
   p : Int,
   n : Int,
   member_consumed : FixedArray[Int],
@@ -210,10 +210,10 @@ fn gunzip_decode_member(
 /// for untrusted input use the streaming `Decoder` with caller-sized output
 /// buffers. Failures carry a stable `GzipErrorKind` suitable for programmatic
 /// handling plus a human-readable diagnostic.
-pub fn gunzip(input : Bytes) -> Bytes raise GzipError {
+pub fn decompress(input : BytesView) -> Bytes raise GzipError {
   let n = input.length()
   guard n >= 18 else { raise GzipError(Truncated, "gzip: input too short") }
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let member_consumed = FixedArray::make(1, 0)
   let mut p = 0
   for ;; {

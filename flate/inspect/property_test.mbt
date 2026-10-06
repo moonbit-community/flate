@@ -14,49 +14,41 @@ priv enum PropInflateOutcome {
 
 ///|
 fn prop_inflate_all(input : Bytes) -> PropInflateOutcome {
-  try PropOk(@flate.inflate_all(input)) catch {
+  PropOk(@flate.inflate_all(input)) catch {
     InflateError(kind, _) => PropErr(kind)
-  } noraise {
-    ok => ok
   }
 }
 
 ///|
 fn prop_inflate_exact(input : Bytes) -> PropInflateOutcome {
-  try PropOk(@flate.inflate_exact(input)) catch {
+  PropOk(@flate.inflate_exact(input)) catch {
     InflateError(kind, _) => PropErr(kind)
-  } noraise {
-    ok => ok
   }
 }
 
 ///|
 fn prop_inflate_exact_preallocated(input : Bytes) -> PropInflateOutcome {
-  try PropOk(@flate.inflate_exact(input, preallocated=true)) catch {
+  PropOk(@flate.inflate_exact(input, preallocated=true)) catch {
     InflateError(kind, _) => PropErr(kind)
-  } noraise {
-    ok => ok
   }
 }
 
-///| Deterministic per-step chunk size in `[1, modulus]`, cycling through a
-
 ///|
+/// Deterministic per-step chunk size in `[1, modulus]`, cycling through a
 /// varied schedule as `step` grows.
 fn prop_chunk_size(step : Int, modulus : Int) -> Int {
   1 + (step * 37 + step * step * 11) % modulus
 }
 
-///| Drive a streaming `Inflater` over `input` one arbitrary chunk schedule at a
-
 ///|
+/// Drive a streaming `Inflater` over `input` one arbitrary chunk schedule at a
 /// time, mirroring how an async reader feeds it.
 fn prop_inflate_streaming_loop(
   input : Bytes,
 ) -> PropInflateOutcome raise @flate.InflateError {
   let inflater = @flate.Inflater()
   let output = FixedArray::make(64, b'\x00')
-  let decoded = Buffer()
+  let decoded = @buffer.Buffer()
   let mut input_pos = 0
   let mut available = 0
   let mut steps = 0
@@ -99,10 +91,8 @@ fn prop_inflate_streaming_loop(
 
 ///|
 fn prop_inflate_streaming(input : Bytes) -> PropInflateOutcome {
-  try prop_inflate_streaming_loop(input) catch {
+  prop_inflate_streaming_loop(input) catch {
     InflateError(kind, _) => PropErr(kind)
-  } noraise {
-    ok => ok
   }
 }
 
@@ -112,7 +102,7 @@ fn prop_inflate_streaming(input : Bytes) -> PropInflateOutcome {
 /// suffix with `action=Finish` until it reports `Done`.
 fn prop_deflate_finish(deflater : @flate.Deflater, data : Bytes) -> Bytes {
   let output = FixedArray::make(4096, b'\x00')
-  let compressed = Buffer()
+  let compressed = @buffer.Buffer()
   let mut pos = 0
   for ;; {
     let st = deflater.step(data[pos:], output.mut_view(), action=Finish)
@@ -137,7 +127,7 @@ fn prop_inflate_drive(
   input : Bytes,
 ) -> Bytes raise @flate.InflateError {
   let output = FixedArray::make(4096, b'\x00')
-  let decoded = Buffer()
+  let decoded = @buffer.Buffer()
   let mut pos = 0
   for ;; {
     let st = inflater.step(input[pos:], output.mut_view(), end=true)
@@ -163,7 +153,7 @@ fn prop_inflate_drive(
 // run-heavy, and pattern-repeating data instead.
 
 ///|
-priv struct Compressible(Bytes) derive(Debug)
+priv struct Compressible(Bytes) derive(@debug.Debug)
 
 ///|
 fn prop_text_byte(rs : @quickcheck.RandomState) -> Byte {
@@ -173,7 +163,7 @@ fn prop_text_byte(rs : @quickcheck.RandomState) -> Byte {
 
 ///|
 impl @quickcheck.Arbitrary for Compressible with fn arbitrary(size, rs) {
-  let b = Buffer()
+  let b = @buffer.Buffer()
   let target = match rs.next_uint() % 3 {
     0 => size
     1 => size / 2
@@ -354,7 +344,7 @@ test "property: streaming Deflater round-trips arbitrary input" {
     (data : Bytes) => {
       let deflater = @flate.Deflater()
       let output = FixedArray::make(64, b'\x00')
-      let compressed = Buffer()
+      let compressed = @buffer.Buffer()
       let mut pos = 0
       let mut steps = 0
       for ;; {
@@ -419,20 +409,16 @@ test "property: inflate_exact agrees with inflate_all" {
 }
 
 ///|
-/// Property: `inflate_all_limited` returns exactly `inflate_all`'s output when
+/// Property: `bounded inflate_all` returns exactly `inflate_all`'s output when
 /// it fits under `max_output`, raises `OutputLimitExceeded` when the decoded
 /// output is larger, and rejects a negative limit outright.
-test "property: inflate_all_limited respects max_output" {
+test "property: bounded inflate_all respects max_output" {
   @quickcheck.check(
     (data : Bytes) => {
       let all = prop_inflate_all(data)
       let limit = data.length()
-      let limited = try
-        PropOk(@flate.inflate_all_limited(data, max_output=limit))
-      catch {
+      let limited = PropOk(@flate.inflate_all(data, max_output=limit)) catch {
         InflateError(kind, _) => PropErr(kind)
-      } noraise {
-        ok => ok
       }
       match (all, limited) {
         (PropOk(x), PropOk(y)) => x == y && x.length() <= limit
@@ -449,7 +435,7 @@ test "property: inflate_all_limited respects max_output" {
   @quickcheck.check(
     (data : Bytes) => {
       try {
-        ignore(@flate.inflate_all_limited(data, max_output=-1))
+        ignore(@flate.inflate_all(data, max_output=-1))
         false
       } catch {
         InflateError(OutputLimitExceeded, _) => true
@@ -498,12 +484,8 @@ test "property: cancellation semantics" {
       if !cancelled {
         return false
       }
-      let quiet = try
-        Some(@flate.inflate_all(data, cancelled=() => false))
-      catch {
+      let quiet = Some(@flate.inflate_all(data, cancelled=() => false)) catch {
         InflateError(_, _) => None
-      } noraise {
-        ok => ok
       }
       quiet ==
       (match prop_inflate_all(data) {
@@ -527,10 +509,10 @@ test "property: preset dictionary round-trips and unknown-dictionary decode neve
       let (dict, msg) = pair
       let dictionary = dict.0
       let message = msg.0
-      let deflater = @flate.Deflater(dictionary=dictionary[:])
+      let deflater = @flate.Deflater(dictionary~)
       let compressed = prop_deflate_finish(deflater, message)
       let with_dict = try {
-        let inflater = @flate.Inflater(dictionary=dictionary[:])
+        let inflater = @flate.Inflater(dictionary~)
         prop_inflate_drive(inflater, compressed) == message
       } catch {
         InflateError(_, _) => false

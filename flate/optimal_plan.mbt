@@ -1,3 +1,6 @@
+///|
+const OPTIMAL_MASTER_BLOCK : Int = 262144
+
 // Optimal block planning (zopfli-style block splitting): the drop-in
 // counterpart to the threshold planner in block_planner.mbt. A cheap greedy
 // parse of each master chunk provides reference tokens; split points are
@@ -7,12 +10,6 @@
 // repeated once on the optimal tokens (zopfli's blocksplittinglast), and the
 // cheaper of the two groupings is emitted through the ordinary `emit_block` —
 // planner and parser replaced, writer untouched, output standard DEFLATE.
-
-///|
-/// Splitting and parsing happen within master chunks of this many input
-/// bytes, bounding the planner's working memory (zopfli's MASTER_BLOCK_SIZE
-/// plays the same role).
-pub const OPTIMAL_MASTER_BLOCK : Int = 262144
 
 ///|
 /// Most blocks the splitter may cut one master chunk into (zopfli's default).
@@ -250,7 +247,7 @@ priv struct OptimalChunk {
 
 ///|
 fn optimal_parse_chunk(
-  input : Bytes,
+  input : BytesView,
   finder : MatchFinder,
   pos : Int,
   target : Int,
@@ -278,7 +275,7 @@ fn optimal_parse_chunk(
     let a = gtok_pos[bounds1[s]]
     let b = gtok_pos[bounds1[s + 1]]
     let toks = tokenize_optimal(input, a, b, iterations)
-    tokens.append(toks[:])
+    tokens.append(toks)
     joins.push(tokens.length())
   }
   { tokens, joins, chunk_end, }
@@ -290,7 +287,7 @@ fn optimal_parse_chunk(
 /// through the ordinary `emit_block`.
 fn emit_optimal_chunk(
   w : BitWriter,
-  input : Bytes,
+  input : BytesView,
   chunk : OptimalChunk,
   pos : Int,
   n : Int,
@@ -332,7 +329,7 @@ fn emit_optimal_chunk(
 /// `fast_store` is disabled by default. Enabling it can bypass this strategy
 /// for heuristically incompressible input, trading output size for speed.
 pub fn deflate_all_optimal(
-  input : Bytes,
+  input : BytesView,
   iterations? : Int = 15,
   fast_store? : Bool = false,
 ) -> Bytes {

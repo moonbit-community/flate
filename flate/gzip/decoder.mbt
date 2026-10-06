@@ -1,3 +1,6 @@
+///|
+const DECODER_INPUT_LIMIT : Int = 65536
+
 // Streaming gzip (RFC 1952) decompressor: a push-based, suspendable state
 // machine wrapping the `@flate.Inflater`. The variable-length header is parsed
 // zlib-style with one state per field: the unbounded fields (FEXTRA payload,
@@ -5,13 +8,7 @@
 // so header-phase memory is O(1) even against an adversarial unterminated
 // FNAME. It then drives the inflater over the DEFLATE body (folding
 // decompressed output into a running CRC-32 and length) and verifies the
-// 8-byte trailer. The one-shot `gunzip` remains for in-memory use.
-
-///|
-/// Maximum compressed input retained by one active decoder step. A consumed
-/// prefix may briefly coexist until compaction, but caller-owned input beyond
-/// this window remains unconsumed under output backpressure.
-pub const DECODER_INPUT_LIMIT : Int = 65536
+// 8-byte trailer. The one-shot `decompress` remains for in-memory use.
 
 ///|
 priv enum DecMode {
@@ -20,7 +17,7 @@ priv enum DecMode {
   GzExtra(Int) // discarding the FEXTRA payload; bytes still to skip
   GzName // discarding the NUL-terminated FNAME
   GzComment // discarding the NUL-terminated FCOMMENT
-  GzHcrc // the 2-byte FHCRC (skipped, not verified)
+  GzHcrc // verify the low sixteen bits of the header CRC-32
   GzBody // inflating the DEFLATE stream
   GzTrailer // reading + verifying the CRC-32 / ISIZE trailer
   GzFinished
@@ -33,13 +30,11 @@ priv enum DecMode {
 pub struct Decoder {
   priv inf : @flate.Inflater
   priv mut crc : @checksum.Crc32 // of the current member's decompressed output
+  priv mut header_crc : @checksum.Crc32
   priv mut osize : UInt // current member's decompressed length, mod 2^32
-  priv mut pending : Array[Byte] // unconsumed compressed input
+  priv mut pending : BytesView // unconsumed compressed input
   priv mut pending_pos : Int // first unread byte in `pending`
-  // `Inflater` requires a BytesView. Cache the immutable snapshot so output
-  // backpressure does not copy the whole compressed tail on every call.
-  priv mut pending_bytes : Bytes
-  priv mut pending_snapshot_end : Int // exclusive Array index in the snapshot
+  priv mut borrowed_input : Bool // only borrowed during the active step
   priv mut unused : Bytes // cached read-ahead suffix after successful completion
   priv mut flg : Int // header FLG byte, gates the optional-field states
   priv mut members : Int // fully verified members
@@ -61,11 +56,11 @@ pub fn Decoder::Decoder(multistream? : Bool = true) -> Decoder {
   {
     inf: Inflater(),
     crc: Crc32(),
+    header_crc: Crc32(),
     osize: 0,
-    pending: [],
+    pending: b"",
     pending_pos: 0,
-    pending_bytes: b"",
-    pending_snapshot_end: 0,
+    borrowed_input: false,
     unused: b"",
     flg: 0,
     members: 0,
@@ -118,15 +113,12 @@ fn Decoder::available(self : Decoder) -> Int {
 }
 
 ///|
-/// Enter the successful terminal state while retaining only transport
-/// read-ahead. The inflater snapshot and consumed prefix are no longer useful
-/// once the member trailer has been verified.
+/// Enter the successful terminal state, retaining only transport read-ahead.
 fn Decoder::finish_stream(self : Decoder) -> Unit {
-  self.unused = Bytes::from_array(self.pending[self.pending_pos:])
-  self.pending = []
+  self.unused = copy_input(self.pending[self.pending_pos:])
+  self.pending = b""
   self.pending_pos = 0
-  self.pending_bytes = b""
-  self.pending_snapshot_end = 0
+  self.borrowed_input = false
   self.mode = GzFinished
 }
 
@@ -137,75 +129,55 @@ fn Decoder::pending_at(self : Decoder, off : Int) -> Byte {
 }
 
 ///|
-/// Buffer newly accepted input. An existing immutable body snapshot remains
-/// usable: the appended suffix is incorporated only if the inflater actually
-/// reaches `NeedMoreInput`, never merely because output is backpressured.
-/// Streaming tests cover buffering; this trivial helper's empty-input no-op
-/// does not need a separate whitebox test.
-#coverage.skip
+// Borrow only when no older input must be joined. Residual input is owned
+// before the public step returns, so a small suffix never retains a caller's
+// arbitrarily large backing allocation between calls.
 fn Decoder::buffer_input(self : Decoder, input : BytesView) -> Unit {
   guard input.length() != 0 else { return }
-  self.pending.push_iter(input.iter())
+  if self.available() == 0 {
+    self.pending = input
+    self.pending_pos = 0
+    self.borrowed_input = true
+  } else {
+    self.pending = Bytes::from_iter(self.pending.iter().concat(input.iter()))
+    self.borrowed_input = false
+  }
 }
 
 ///|
-/// Reclaim a consumed prefix before admitting more caller-owned input. This is
-/// safe between steps because the raw inflater releases its call-local view.
+fn Decoder::detach_input(self : Decoder) -> Unit {
+  guard self.borrowed_input else { return }
+  self.pending = copy_input(self.pending[self.pending_pos:])
+  self.pending_pos = 0
+  self.borrowed_input = false
+}
+
+///|
 fn Decoder::compact_for_input(self : Decoder) -> Unit {
   guard self.pending_pos != 0 else { return }
-  self.pending = self.pending[self.pending_pos:].to_owned()
+  self.pending = self.pending[self.pending_pos:]
   self.pending_pos = 0
-  self.pending_bytes = b""
-  self.pending_snapshot_end = 0
 }
 
 ///|
-/// Advance the unread cursor. Reclaim a fully consumed buffer immediately and
-/// compact a partial buffer only after a sizeable prefix becomes at least half
-/// of the allocation, making total compaction work amortized linear.
 fn Decoder::advance(self : Decoder, k : Int) -> Unit {
   guard k > 0 else { return }
   self.pending_pos = self.pending_pos + k
   guard self.pending_pos < self.pending.length() else {
-    self.pending.clear()
+    self.pending = b""
     self.pending_pos = 0
-    self.pending_bytes = b""
-    self.pending_snapshot_end = 0
+    self.borrowed_input = false
     return
   }
   let worth_compacting = self.pending_pos >= 4096 &&
     self.pending_pos >= self.available()
   guard worth_compacting else { return }
-  self.pending = self.pending[self.pending_pos:].to_owned()
-  self.pending_pos = 0
-  self.pending_bytes = b""
-  self.pending_snapshot_end = 0
+  self.compact_for_input()
 }
 
 ///|
-/// Compact all unread input and rebuild the immutable inflater snapshot. This
-/// is done only when no snapshot exists or the inflater needs bytes appended
-/// beyond its current snapshot. At that point the old prefix has either been
-/// consumed or is a bounded atomic-unit tail, so each byte is copied only an
-/// amortized constant number of times.
-fn Decoder::refresh_pending_snapshot(self : Decoder) -> Unit {
-  if self.pending_pos > 0 {
-    self.pending = self.pending[self.pending_pos:].to_owned()
-    self.pending_pos = 0
-  }
-  self.pending_bytes = Bytes::from_array(self.pending)
-  self.pending_snapshot_end = self.pending.length()
-}
-
-///|
-/// Return the portion of the cached snapshot not yet offered to the inflater.
-/// Newly appended input intentionally stays outside this view until the
-/// inflater exhausts the snapshot.
 fn Decoder::pending_view(self : Decoder) -> BytesView {
-  if self.pending_snapshot_end <= self.pending_pos && self.available() > 0 {
-    self.refresh_pending_snapshot()
-  }
-  self.pending_bytes[self.pending_pos:self.pending_snapshot_end]
+  self.pending[self.pending_pos:]
 }
 
 ///|
@@ -269,7 +241,7 @@ fn Decoder::read_gzheader(self : Decoder) -> Bool raise GzipError {
   guard (self.flg & 0xE0) == 0 else {
     raise GzipError(InvalidHeader, "gzip: reserved flags are set")
   }
-  self.advance(10)
+  self.advance_header(10)
   self.mode = self.next_header_mode(0)
   false
 }
@@ -288,9 +260,8 @@ fn Decoder::skip_nul_field(self : Decoder, done : Int) -> Bool raise GzipError {
 }
 
 ///|
-/// React to the inner inflater's status after one `GzBody` step, folding newly
-/// appended input into a fresh snapshot when needed. Returns `None` when the
-/// decoder can keep going, or the status the step must suspend with.
+/// React to the inner inflater's status after one `GzBody` step.
+/// Return `None` to continue or the status to suspend with.
 fn Decoder::after_body_step(
   self : Decoder,
   st : @flate.Status,
@@ -301,18 +272,8 @@ fn Decoder::after_body_step(
       None
     }
     NeedMoreInput => {
-      guard self.pending_snapshot_end < self.pending.length() else {
-        guard !self.ending else {
-          raise GzipError(Truncated, "gzip: truncated")
-        }
-        return Some(NeedMoreInput)
-      }
-      // Input accepted while output was backpressured was deliberately left
-      // outside the active snapshot. The inflater has now reached that
-      // boundary, so fold the unread atomic tail and appended bytes into one
-      // new view and retry without exposing a false suspension.
-      self.refresh_pending_snapshot()
-      None
+      guard !self.ending else { raise GzipError(Truncated, "gzip: truncated") }
+      Some(NeedMoreInput)
     }
     NeedMoreOutput => Some(NeedMoreOutput)
   }
@@ -338,8 +299,9 @@ fn Decoder::finish_member_trailer(self : Decoder) -> Bool raise GzipError {
   // starts fresh (RFC 1952 §2.2 — members are independent, no cross-member
   // back-references).
   self.inf.reset()
-  self.crc = @checksum.Crc32()
+  self.crc = Crc32()
   self.osize = 0
+  self.header_crc = Crc32()
   self.flg = 0
   self.members = self.members + 1
   guard self.multistream else {
@@ -371,11 +333,11 @@ fn Decoder::finish_member_trailer(self : Decoder) -> Bool raise GzipError {
 /// length bound, so they are never retained). Returns true when the field is
 /// complete.
 fn Decoder::skip_nul_terminated(self : Decoder) -> Bool {
-  guard self.pending[self.pending_pos:].search(b'\x00') is Some(nul) else {
-    self.advance(self.available())
+  guard self.pending[self.pending_pos:].find(b"\x00") is Some(nul) else {
+    self.advance_header(self.available())
     return false
   }
-  self.advance(nul + 1)
+  self.advance_header(nul + 1)
   true
 }
 
@@ -389,11 +351,14 @@ fn Decoder::u32_le(self : Decoder, off : Int) -> UInt {
 }
 
 ///|
-/// Run one decompression step. Buffers a bounded prefix of `input`, then decodes
+/// Run one decompression step. Accepts a bounded prefix of `input`, then decodes
 /// plaintext into `output`. Read the accepted and produced counts with
 /// `last_consumed()` and `last_produced()`; drop only
 /// `input[:last_consumed()]` and re-present a suffix that was held back by
-/// output backpressure. Once `end=true` has been accepted with its complete
+/// output backpressure. Pending body input is drained before accepting more,
+/// so a call can produce output without consuming new input.
+/// Input is borrowed only for this call; any retained suffix is copied.
+/// Once `end=true` has been accepted with its complete
 /// view (or after `Done`), later input is not accepted and `last_consumed()` is
 /// zero. Keep calling until `Done` (then `is_finished()` is true). `end=true`
 /// is sticky across `NeedMoreOutput`: gzip members are self-delimiting but the
@@ -409,18 +374,45 @@ pub fn Decoder::step(
   output : MutArrayView[Byte],
   end? : Bool = false,
 ) -> @flate.Status raise GzipError {
+  self.step_output(input, output, None, end~)
+}
+
+///|
+/// Decode into a fixed output array, updating the payload CRC in batches.
+/// Consumption, backpressure and EOF semantics match `step`. The output array
+/// is borrowed only for this call.
+pub fn Decoder::step_into(
+  self : Decoder,
+  input : BytesView,
+  output : FixedArray[Byte],
+  end? : Bool = false,
+) -> @flate.Status raise GzipError {
+  self.step_output(input, output.mut_view(), Some(output), end~)
+}
+
+///|
+fn Decoder::step_output(
+  self : Decoder,
+  input : BytesView,
+  output : MutArrayView[Byte],
+  fixed_output : FixedArray[Byte]?,
+  end~ : Bool,
+) -> @flate.Status raise GzipError {
   self.step_consumed = 0
   self.step_produced = 0
   if self.failure_kind is Some(kind) {
     raise GzipError(kind, self.failure_message)
   }
-  self.step_active(input, output, end~) catch {
+  let result = self.step_active(input, output, fixed_output, end~) catch {
     GzipError(kind, message) => {
+      self.detach_input()
       self.failure_kind = Some(kind)
       self.failure_message = message
       raise GzipError(kind, message)
     }
   }
+  self.detach_input()
+  result
 }
 
 ///|
@@ -440,28 +432,37 @@ fn Decoder::step_active(
   self : Decoder,
   input : BytesView,
   output : MutArrayView[Byte],
+  fixed_output : FixedArray[Byte]?,
   end~ : Bool,
 ) -> @flate.Status raise GzipError {
   if self.mode is GzFinished {
     return self.finish_step(Done, 0, 0)
   }
-  if !self.ending && self.pending.length() >= DECODER_INPUT_LIMIT {
-    self.compact_for_input()
-  }
-  let capacity = DECODER_INPUT_LIMIT - self.pending.length()
-  let consumed = if self.ending || capacity <= 0 {
-    0
-  } else {
-    input.length().min(capacity)
-  }
-  if consumed > 0 {
-    self.buffer_input(input[:consumed])
-  }
-  if end && consumed == input.length() {
-    self.ending = true
-  }
+  let mut consumed = 0
+  let mut admitted = false
   let mut op = 0
   for ;; {
+    // Drain already accepted body input before admitting a fresh chunk. Once
+    // it is exhausted, accept and process the offered chunk in this same call.
+    if !admitted &&
+      (!(self.mode is GzBody) || self.available() == 0 || input.length() == 0) {
+      if !self.ending && self.pending.length() >= DECODER_INPUT_LIMIT {
+        self.compact_for_input()
+      }
+      let capacity = DECODER_INPUT_LIMIT - self.pending.length()
+      consumed = if self.ending || capacity <= 0 {
+        0
+      } else {
+        input.length().min(capacity)
+      }
+      if consumed > 0 {
+        self.buffer_input(input[:consumed])
+      }
+      if end && consumed == input.length() {
+        self.ending = true
+      }
+      admitted = true
+    }
     match self.mode {
       GzHeader => {
         guard !self.read_gzheader() else {
@@ -477,12 +478,12 @@ fn Decoder::step_active(
         }
         let xlen = self.pending_at(0).to_int() |
           (self.pending_at(1).to_int() << 8)
-        self.advance(2)
+        self.advance_header(2)
         self.mode = GzExtra(xlen)
       }
       GzExtra(remaining) => {
         let k = remaining.min(self.available())
-        self.advance(k)
+        self.advance_header(k)
         guard k == remaining else {
           self.mode = GzExtra(remaining - k)
           guard !self.ending else {
@@ -509,7 +510,11 @@ fn Decoder::step_active(
           }
           return self.finish_step(NeedMoreInput, consumed, op)
         }
-        // RFC 1952 permits a decoder to skip FHCRC when it does not verify it.
+        let expected = self.pending_at(0).to_uint() |
+          (self.pending_at(1).to_uint() << 8)
+        guard (self.header_crc.finish() & 0xffff) == expected else {
+          raise GzipError(ChecksumMismatch, "gzip: header CRC-16 mismatch")
+        }
         self.advance(2)
         self.mode = GzBody
       }
@@ -521,13 +526,23 @@ fn Decoder::step_active(
         let used = self.inf.last_consumed()
         let produced = self.inf.last_produced()
         if produced > 0 {
-          for i in 0..<produced {
-            self.crc.update_byte(output.at(op_before + i))
+          if fixed_output is Some(fixed) {
+            let bytes = unsafe_bytes_of_array(fixed)
+            self.crc.update(bytes[op_before:op_before + produced])
+          } else {
+            for i in 0..<produced {
+              self.crc.update_byte(output.at(op_before + i))
+            }
           }
           self.osize = self.osize + produced.reinterpret_as_uint()
         }
         op = op + produced
         self.advance(used)
+        // NeedMoreInput accepts the inflater's whole view, including atomic
+        // tails. Admit the deferred external chunk instead of suspending.
+        if st is NeedMoreInput && !admitted {
+          continue
+        }
         guard self.after_body_step(st) is Some(status) else { continue }
         return self.finish_step(status, consumed, op)
       }
@@ -539,4 +554,30 @@ fn Decoder::step_active(
       GzFinished => return self.finish_step(Done, consumed, op)
     }
   }
+}
+
+///|
+/// Consume header bytes while keeping FHCRC independent of the body checksum.
+fn Decoder::advance_header(self : Decoder, count : Int) -> Unit {
+  if (self.flg & 2) != 0 {
+    for i in 0..<count {
+      self.header_crc.update_byte(self.pending_at(i))
+    }
+  }
+  self.advance(count)
+}
+
+///|
+// Callers either transfer a fresh array or borrow the alias synchronously for
+// checksum calculation, before the output array can be written again.
+fn unsafe_bytes_of_array(output : FixedArray[Byte]) -> Bytes = "%identity"
+
+///|
+// BytesView::to_owned can share a full backing buffer. Retained input must be
+// independent even when the caller lends an entire reusable I/O buffer.
+fn copy_input(input : BytesView) -> Bytes {
+  guard input.length() != 0 else { return b"" }
+  let copy = FixedArray::make(input.length(), b'\x00')
+  copy.blit_from_bytes(0, input.data(), input.start_offset(), input.length())
+  unsafe_bytes_of_array(copy)
 }

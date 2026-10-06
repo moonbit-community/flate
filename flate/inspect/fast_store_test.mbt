@@ -14,16 +14,12 @@ fn optional_store_stream(
   let result = @buffer.Buffer()
   for position = 0 {
     let end = (position + 113).min(input.length())
-    let action = if end == input.length() {
-      @flate.Finish
-    } else {
-      @flate.Continue
-    }
+    let action = if end == input.length() { @flate.Finish } else { Continue }
     let status = step(input[position:end], output.mut_view(), action)
     let next = position + consumed()
     let written = produced()
     result.write_bytes(Bytes::from_array(output[:written]))
-    if status is @flate.Done {
+    if status is Done {
       guard next == input.length() else {
         abort("stream did not consume input")
       }
@@ -40,36 +36,36 @@ fn optional_store_stream(
 test "fast store propagates through gzip zlib and their streaming encoders" {
   let input = optional_store_input(32768)
   @test.assert_eq(
-    @gzip.gzip_compress(input),
-    @gzip.gzip_compress(input, fast_store=false),
+    @gzip.compress(input),
+    @gzip.compress(input, fast_store=false),
   )
   @test.assert_eq(
-    @zlib.zlib_compress(input),
-    @zlib.zlib_compress(input, fast_store=false),
+    @zlib.compress(input),
+    @zlib.compress(input, fast_store=false),
   )
   @test.assert_eq(
-    @gzip.gzip_compress(input, fast_store=true),
-    @gzip.gzip_compress(input, level=0),
+    @gzip.compress(input, fast_store=true),
+    @gzip.compress(input, level=0),
   )
   @test.assert_eq(
-    @zlib.zlib_compress(input, fast_store=true),
-    @zlib.zlib_compress(input, level=0),
+    @zlib.compress(input, fast_store=true),
+    @zlib.compress(input, level=0),
   )
   @test.assert_eq(
-    @gzip.gunzip(@gzip.gzip_compress_optimal(input, fast_store=true)),
+    @gzip.decompress(@gzip.compress_optimal(input, fast_store=true)),
     input,
   )
   @test.assert_eq(
-    @zlib.zlib_decompress(@zlib.zlib_compress_optimal(input, fast_store=true)),
+    @zlib.decompress(@zlib.compress_optimal(input, fast_store=true)),
     input,
   )
   @test.assert_eq(
-    @gzip.gzip_compress_optimal(input, fast_store=true),
-    @gzip.gzip_compress(input, level=0),
+    @gzip.compress_optimal(input, fast_store=true),
+    @gzip.compress(input, level=0),
   )
   @test.assert_eq(
-    @zlib.zlib_compress_optimal(input, fast_store=true),
-    @zlib.zlib_compress(input, level=0),
+    @zlib.compress_optimal(input, fast_store=true),
+    @zlib.compress(input, level=0),
   )
   let raw = @flate.Deflater(fast_store=true)
   let bytes = optional_store_stream(
@@ -88,7 +84,7 @@ test "fast store propagates through gzip zlib and their streaming encoders" {
     () => gzip.last_produced(),
   )
   @test.assert_eq(bytes.length() > input.length(), true)
-  @test.assert_eq(@gzip.gunzip(bytes), input)
+  @test.assert_eq(@gzip.decompress(bytes), input)
   let zlib = @zlib.Encoder(fast_store=true)
   let bytes = optional_store_stream(
     input,
@@ -97,7 +93,7 @@ test "fast store propagates through gzip zlib and their streaming encoders" {
     () => zlib.last_produced(),
   )
   @test.assert_eq(bytes.length() > input.length(), true)
-  @test.assert_eq(@zlib.zlib_decompress(bytes), input)
+  @test.assert_eq(@zlib.decompress(bytes), input)
   let dictionary = b"shared dictionary"
   let zlib = @zlib.Encoder(dictionary~, fast_store=true)
   let bytes = optional_store_stream(
@@ -109,7 +105,7 @@ test "fast store propagates through gzip zlib and their streaming encoders" {
   @test.assert_eq(bytes.length() > 4096, true)
   let decoder = @zlib.Decoder(dictionary~)
   let output = FixedArray::make(4096, b'\x00')
-  @test.assert_eq(decoder.step(bytes, output.mut_view(), end=true), @flate.Done)
+  @test.assert_eq(decoder.step(bytes, output.mut_view(), end=true), Done)
   @test.assert_eq(Bytes::from_array(output), input[:4096].to_owned())
 }
 
@@ -123,44 +119,42 @@ test "ZIP fast store preserves method metadata limits and pristine records" {
   let encoded = @zip.write(archive, fast_store=true)
   let decoded = @zip.read(encoded)
   @test.assert_eq(decoded.get("data").unwrap().to_owned(), input)
-  @test.assert_eq(decoded.entries()[0].compression(), @zip.Deflate)
-  @test.assert_eq(decoded.entries()[1].compression(), @zip.Store)
+  @test.assert_eq(decoded.entries()[0].compression(), Deflate)
+  @test.assert_eq(decoded.entries()[1].compression(), Store)
   @test.assert_eq(
-    @zip.write_limited(
-      archive,
-      max_output_bytes=encoded.length(),
-      fast_store=true,
-    ),
+    @zip.write(archive, max_output_bytes=encoded.length(), fast_store=true),
     encoded,
   )
   @test.assert_raise(() => {
     ignore(
-      @zip.write_limited(
+      @zip.write(
         archive,
         max_output_bytes=encoded.length() - 1,
         fast_store=true,
       ),
     )
   })
-  @test.assert_eq(@zip.write_preserving(decoded, fast_store=true), encoded)
+  @test.assert_eq(@zip.write(decoded, fast_store=true, preserve=true), encoded)
   @test.assert_eq(decoded.replace("data", input), true)
-  let rewritten = @zip.write_preserving(decoded, fast_store=true)
+  let rewritten = @zip.write(decoded, fast_store=true, preserve=true)
   @test.assert_eq(rewritten.length() > input.length(), true)
   @test.assert_eq(@zip.read(rewritten).get("data").unwrap().to_owned(), input)
   @test.assert_eq(
-    @zip.write_preserving_limited(
+    @zip.write(
       decoded,
       max_output_bytes=rewritten.length(),
       fast_store=true,
+      preserve=true,
     ),
     rewritten,
   )
   @test.assert_raise(() => {
     ignore(
-      @zip.write_preserving_limited(
+      @zip.write(
         decoded,
         max_output_bytes=rewritten.length() - 1,
         fast_store=true,
+        preserve=true,
       ),
     )
   })

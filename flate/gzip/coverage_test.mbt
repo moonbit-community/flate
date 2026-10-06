@@ -1,7 +1,7 @@
 ///|
 /// Concatenate owned byte strings for malformed-container fixtures.
 fn cov_join(parts : Array[Bytes]) -> Bytes {
-  let out = Buffer()
+  let out = @buffer.Buffer()
   for part in parts {
     for byte in part {
       out.write_byte(byte)
@@ -12,7 +12,7 @@ fn cov_join(parts : Array[Bytes]) -> Bytes {
 
 ///|
 fn cov_prefix(input : Bytes, length : Int) -> Bytes {
-  let out = Buffer()
+  let out = @buffer.Buffer()
   for i in 0..<length {
     out.write_byte(input[i])
   }
@@ -21,7 +21,7 @@ fn cov_prefix(input : Bytes, length : Int) -> Bytes {
 
 ///|
 fn cov_suffix(input : Bytes, start : Int) -> Bytes {
-  let out = Buffer()
+  let out = @buffer.Buffer()
   for i in start..<input.length() {
     out.write_byte(input[i])
   }
@@ -31,7 +31,7 @@ fn cov_suffix(input : Bytes, start : Int) -> Bytes {
 ///|
 /// Build a fixed gzip header followed by arbitrary bytes.
 fn cov_header(compression_method : Int, flags : Int, rest : Bytes) -> Bytes {
-  let out = Buffer()
+  let out = @buffer.Buffer()
   for
     value in [
       0x1F, 0x8B, compression_method, flags, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
@@ -65,11 +65,8 @@ fn cov_expect_gunzip_error(
   input : Bytes,
   expected_kind : @gzip.GzipErrorKind,
 ) -> Unit raise {
-  try ignore(@gzip.gunzip(input)) catch {
-    GzipError(kind, _) => assert_true(kind == expected_kind)
-  } noraise {
-    _ => fail("expected gunzip to reject malformed input")
-  }
+  let GzipError(kind, _) = @test.expect_error(() => @gzip.decompress(input))
+  @test.assert_eq(kind, expected_kind)
 }
 
 ///|
@@ -79,13 +76,12 @@ fn cov_expect_decoder_error(
 ) -> Unit raise {
   let decoder = @gzip.Decoder()
   let output = FixedArray::make(65536, b'\x00')
-  try ignore(decoder.step(input[:], output.mut_view(), end=true)) catch {
-    GzipError(kind, _) => assert_true(kind == expected_kind)
-  } noraise {
-    _ => fail("expected streaming gzip decoder to reject malformed input")
-  }
-  assert_eq(decoder.last_consumed(), 0)
-  assert_eq(decoder.last_produced(), 0)
+  let GzipError(kind, _) = @test.expect_error(() => {
+    decoder.step_into(input, output, end=true)
+  })
+  @test.assert_eq(kind, expected_kind)
+  @test.assert_eq(decoder.last_consumed(), 0)
+  @test.assert_eq(decoder.last_produced(), 0)
 }
 
 ///|
@@ -121,7 +117,10 @@ test "gzip coverage: one-shot optional fields truncate" {
   )
   cov_expect_gunzip_error(cov_header(8, 8, b"NONUL123"), Truncated)
   cov_expect_gunzip_error(cov_header(8, 16, b"COMMENT!"), Truncated)
-  cov_expect_gunzip_error(cov_header(8, 2, Bytes::make(8, b'\xAA')), Truncated)
+  cov_expect_gunzip_error(
+    cov_header(8, 2, Bytes::make(8, b'\xAA')),
+    ChecksumMismatch,
+  )
 }
 
 ///|
@@ -136,34 +135,34 @@ test "gzip coverage: streaming optional fields truncate" {
 ///|
 test "gzip coverage: streaming FEXTRA has buffered remainder" {
   let payload = b"extra field branch"
-  let base = @gzip.gzip_compress(payload)
+  let base = @gzip.compress(payload)
   let framed = cov_reheader(base, 4, b"\x01\x00\xAA")
   let decoder = @gzip.Decoder()
   let output = FixedArray::make(256, b'\x00')
-  let status = decoder.step(framed[:], output.mut_view(), end=true)
+  let status = decoder.step(framed, output.mut_view(), end=true)
   let consumed = decoder.last_consumed()
   let produced = decoder.last_produced()
   assert_true(status is Done)
-  assert_eq(consumed, framed.length())
-  assert_eq(Bytes::from_array(output[0:produced].to_owned()), payload)
+  @test.assert_eq(consumed, framed.length())
+  @test.assert_eq(Bytes::from_array(output[0:produced].to_owned()), payload)
 }
 
 ///|
 test "gzip coverage: truncated raw body and trailer" {
-  let empty_member = @gzip.gzip_compress(b"")
+  let empty_member = @gzip.compress(b"")
   // The empty raw stream completes, but only six trailer bytes remain.
   cov_expect_gunzip_error(
     cov_prefix(empty_member, empty_member.length() - 2),
     Truncated,
   )
   // A level-zero stored body needs far more than the eight visible bytes.
-  let stored = @gzip.gzip_compress(Bytes::make(100, b'A'), level=0)
+  let stored = @gzip.compress(Bytes::make(100, b'A'), level=0)
   cov_expect_gunzip_error(cov_prefix(stored, 18), Truncated)
 }
 
 ///|
 test "gzip coverage: checksum failures" {
-  let valid = @gzip.gzip_compress(b"checksum coverage")
+  let valid = @gzip.compress(b"checksum coverage")
   let bad_crc = cov_xor_at(valid, valid.length() - 8)
   let bad_size = cov_xor_at(valid, valid.length() - 4)
   cov_expect_gunzip_error(bad_crc, ChecksumMismatch)
@@ -175,43 +174,52 @@ test "gzip coverage: checksum failures" {
 ///|
 test "gzip coverage: subsequent member boundaries" {
   let payload = b"first member"
-  let first_member = @gzip.gzip_compress(payload)
+  let first_member = @gzip.compress(payload)
   cov_expect_gunzip_error(cov_join([first_member, b"\x1F"]), Truncated)
   cov_expect_decoder_error(cov_join([first_member, b"\x1F"]), Truncated)
 
   let plain_tail = b"NEXT"
-  assert_eq(@gzip.gunzip(cov_join([first_member, plain_tail])), payload)
+  @test.assert_eq(
+    @gzip.decompress(cov_join([first_member, plain_tail])),
+    payload,
+  )
   let partial_magic = b"\x1F\x00NEXT"
-  assert_eq(@gzip.gunzip(cov_join([first_member, partial_magic])), payload)
+  @test.assert_eq(
+    @gzip.decompress(cov_join([first_member, partial_magic])),
+    payload,
+  )
 
   let decoder = @gzip.Decoder()
   let output = FixedArray::make(256, b'\x00')
   let combined = cov_join([first_member, partial_magic])
-  let status = decoder.step(combined[:], output.mut_view(), end=true)
+  let status = decoder.step(combined, output.mut_view(), end=true)
   let consumed = decoder.last_consumed()
   let produced = decoder.last_produced()
   assert_true(status is Done)
-  assert_eq(consumed, combined.length())
-  assert_eq(Bytes::from_array(output[0:produced].to_owned()), payload)
-  assert_eq(decoder.unused_input(), partial_magic)
+  @test.assert_eq(consumed, combined.length())
+  @test.assert_eq(Bytes::from_array(output[0:produced].to_owned()), payload)
+  @test.assert_eq(decoder.unused_input(), partial_magic)
 }
 
 ///|
 test "gzip coverage: end after a clean member boundary" {
   let payload = b"clean member boundary"
-  let first_member = @gzip.gzip_compress(payload)
+  let first_member = @gzip.compress(payload)
   let decoder = @gzip.Decoder()
   let output = FixedArray::make(256, b'\x00')
-  let first_status = decoder.step(first_member[:], output.mut_view())
+  let first_status = decoder.step(first_member, output.mut_view())
   let first_consumed = decoder.last_consumed()
   let first_produced = decoder.last_produced()
   assert_true(first_status is NeedMoreInput)
-  assert_eq(first_consumed, first_member.length())
-  assert_eq(Bytes::from_array(output[0:first_produced].to_owned()), payload)
-  let status = decoder.step(b""[:], output.mut_view(), end=true)
+  @test.assert_eq(first_consumed, first_member.length())
+  @test.assert_eq(
+    Bytes::from_array(output[0:first_produced].to_owned()),
+    payload,
+  )
+  let status = decoder.step(b"", output.mut_view(), end=true)
   let consumed = decoder.last_consumed()
   let produced = decoder.last_produced()
   assert_true(status is Done)
-  assert_eq(consumed, 0)
-  assert_eq(produced, 0)
+  @test.assert_eq(consumed, 0)
+  @test.assert_eq(produced, 0)
 }

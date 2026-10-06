@@ -2,7 +2,7 @@
 priv enum InflateDifferentialOutcome {
   InflateDifferentialOk(Bytes)
   InflateDifferentialErr(InflateErrorKind)
-} derive(Eq, Debug)
+} derive(Eq, @debug.Debug)
 
 ///|
 priv struct InflateDifferentialRng {
@@ -85,7 +85,7 @@ fn inflate_differential_stream_bytes(
   let inflater = Inflater()
   let rng = InflateDifferentialRng(schedule_seed)
   let output = FixedArray::make(23, b'\x00')
-  let decoded = Buffer()
+  let decoded = @buffer.Buffer()
   let mut input_pos = 0
   let mut available = 0
   let mut steps = 0
@@ -120,8 +120,8 @@ fn inflate_differential_stream_bytes(
     }
     steps = steps + 1
     if steps > 1000000 {
-      fail(
-        "streaming differential driver stalled: schedule_seed=\{Repr(schedule_seed)}, input_length=\{input.length()}",
+      @test.fail(
+        "streaming differential driver stalled: schedule_seed=\{@debug.Repr(schedule_seed)}, input_length=\{input.length()}",
       )
     }
     match status {
@@ -160,8 +160,8 @@ fn inflate_differential_compare(
     input, schedule_seed, one_byte_only,
   )
   if one_shot != streaming {
-    fail(
-      "inflate differential mismatch: corpus=\{corpus}, schedule_seed=\{Repr(schedule_seed)}, input_length=\{input.length()}, one_shot=\{Repr(one_shot)}, streaming=\{Repr(streaming)}",
+    @test.fail(
+      "inflate differential mismatch: corpus=\{corpus}, schedule_seed=\{@debug.Repr(schedule_seed)}, input_length=\{input.length()}, one_shot=\{@debug.Repr(one_shot)}, streaming=\{@debug.Repr(streaming)}",
     )
   }
 }
@@ -176,7 +176,7 @@ fn inflate_differential_flip(input : Bytes, index : Int, mask : Int) -> Bytes {
 ///|
 test "inflate_all and streaming Inflater agree under deterministic fuzz" {
   let sources = inflate_differential_sources()
-  let levels = [0, 1, 6, 9]
+  let levels : ReadOnlyArray[_] = [0, 1, 6, 9]
   let mut schedule_seed = 0xD1FF2026U
   for source_index in 0..<sources.length() {
     let source = sources[source_index]
@@ -187,8 +187,8 @@ test "inflate_all and streaming Inflater agree under deterministic fuzz" {
       let expected = InflateDifferentialOk(source)
       let one_shot = inflate_differential_one_shot(compressed)
       if one_shot != expected {
-        fail(
-          "valid differential corpus failed: corpus=\{corpus}, expected=\{Repr(expected)}, one_shot=\{Repr(one_shot)}",
+        @test.fail(
+          "valid differential corpus failed: corpus=\{corpus}, expected=\{@debug.Repr(expected)}, one_shot=\{@debug.Repr(one_shot)}",
         )
       }
 
@@ -211,7 +211,7 @@ test "inflate_all and streaming Inflater agree under deterministic fuzz" {
         )
       }
 
-      let truncation_points = [
+      let truncation_points : ReadOnlyArray[_] = [
         0,
         compressed.length() / 2,
         compressed.length() - 1,
@@ -228,7 +228,7 @@ test "inflate_all and streaming Inflater agree under deterministic fuzz" {
         )
       }
 
-      let flip_positions = [
+      let flip_positions : ReadOnlyArray[_] = [
         0,
         compressed.length() / 3,
         compressed.length() * 2 / 3,
@@ -266,7 +266,7 @@ test "inflate_all and streaming Inflater agree on deterministic raw noise" {
     inflate_differential_compare(
       input,
       schedule_seed,
-      "raw-noise-\{case_index}/seed-\{Repr(corpus_seed)}",
+      "raw-noise-\{case_index}/seed-\{@debug.Repr(corpus_seed)}",
       false,
     )
   }
@@ -296,7 +296,7 @@ test "preallocated inflate_exact matches the grow path" {
       let source = sources[source_index]
       let compressed = deflate_all(source, level~)
       let corpus = "source-\{source_index}/level-\{level}"
-      assert_eq(
+      @test.assert_eq(
         inflate_exact(compressed, preallocated=true),
         inflate_exact(compressed),
       )
@@ -304,11 +304,11 @@ test "preallocated inflate_exact matches the grow path" {
       let default_outcome = inflate_differential_exact_kind(framed, false)
       let preallocated_outcome = inflate_differential_exact_kind(framed, true)
       if default_outcome != preallocated_outcome {
-        fail(
-          "preallocated vs grow mismatch on trailing corpus: \{corpus}, default=\{Repr(default_outcome)}, preallocated=\{Repr(preallocated_outcome)}",
+        @test.fail(
+          "preallocated vs grow mismatch on trailing corpus: \{corpus}, default=\{@debug.Repr(default_outcome)}, preallocated=\{@debug.Repr(preallocated_outcome)}",
         )
       }
-      let truncation_points = [
+      let truncation_points : ReadOnlyArray[_] = [
         0,
         compressed.length() / 2,
         compressed.length() - 1,
@@ -321,12 +321,12 @@ test "preallocated inflate_exact matches the grow path" {
           truncated, true,
         )
         if default_outcome != preallocated_outcome {
-          fail(
-            "preallocated vs grow mismatch on truncate-\{mutation_index}-at-\{end}: corpus=\{corpus}, default=\{Repr(default_outcome)}, preallocated=\{Repr(preallocated_outcome)}",
+          @test.fail(
+            "preallocated vs grow mismatch on truncate-\{mutation_index}-at-\{end}: corpus=\{corpus}, default=\{@debug.Repr(default_outcome)}, preallocated=\{@debug.Repr(preallocated_outcome)}",
           )
         }
       }
-      let flip_positions = [
+      let flip_positions : ReadOnlyArray[_] = [
         0,
         compressed.length() / 3,
         compressed.length() * 2 / 3,
@@ -342,8 +342,8 @@ test "preallocated inflate_exact matches the grow path" {
           mutated, true,
         )
         if default_outcome != preallocated_outcome {
-          fail(
-            "preallocated vs grow mismatch on flip-\{mutation_index}-byte-\{position}-bit-\{bit}: corpus=\{corpus}, default=\{Repr(default_outcome)}, preallocated=\{Repr(preallocated_outcome)}",
+          @test.fail(
+            "preallocated vs grow mismatch on flip-\{mutation_index}-byte-\{position}-bit-\{bit}: corpus=\{corpus}, default=\{@debug.Repr(default_outcome)}, preallocated=\{@debug.Repr(preallocated_outcome)}",
           )
         }
       }

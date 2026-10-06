@@ -1,18 +1,14 @@
 ///|
-/// The 32 KB sliding window: the largest back-reference distance DEFLATE can
-/// express, since distance codes top out at 32768 (RFC 1951 §3.2.5, "the
-/// compressor terminates a block ... distances are limited to 32K bytes"; the
-/// distance code table in §3.2.5 maps the largest code to base 24577 + 8192).
-pub const WINDOW_SIZE : Int = 32768
+const WINDOW_SIZE : Int = 32768
 
 ///|
-pub const MAX_NUM_LIT : Int = 286
+const MAX_NUM_LIT : Int = 286
 
 ///|
-pub const MAX_NUM_DIST : Int = 30
+const MAX_NUM_DIST : Int = 30
 
 ///|
-pub const NUM_CODES : Int = 19
+const NUM_CODES : Int = 19
 
 ///|
 /// Order in which code-length code lengths are stored (RFC 1951 §3.2.7).

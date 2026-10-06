@@ -1,17 +1,22 @@
-// Root package "@flate": the runtime-agnostic DEFLATE engine (RFC 1951).
-// Pure, io-free, suspendable. gzip/zlib live in sibling packages that wrap it.
-
 import {
+  "moonbitlang/core/builtin",
+  "moonbitlang/core/debug",
+  "moonbitlang/core/buffer",
   "moonbitlang/core/v128",
 }
+
+// Root package "@flate": the runtime-agnostic DEFLATE engine (RFC 1951).
+// Pure, io-free, suspendable. gzip/zlib live in sibling packages that wrap it.
 
 import {
   "moonbitlang/core/test",
 } for "wbtest"
 
-// v128 is currently marked experimental in moonbitlang/core. This package
-// intentionally accepts that alert for its internal SIMD hot paths.
+// v128 is experimental; its import is used only by native/linear-wasm paths.
 
 warnings = "-alert_experimental-unused_package"
 
-// @v128.v128_store
+import {
+  "moonbitlang/core/test",
+  "moonbit-community/flate/zip",
+} for "test"

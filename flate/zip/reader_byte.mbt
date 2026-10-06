@@ -1,43 +1,43 @@
 ///|
+const LOCAL_HEADER_SIG : UInt = 0x04034b50
+
+///|
+const CENTRAL_HEADER_SIG : UInt = 0x02014b50
+
+///|
+const END_OF_CENTRAL_SIG : UInt = 0x06054b50
+
+///|
+const DATA_DESCRIPTOR_SIG : UInt = 0x08074b50
+
+///|
+const ZIP64_EOCD_SIG : UInt = 0x06064b50
+
+///|
+const ZIP64_LOCATOR_SIG : UInt = 0x07064b50
+
+///|
+const FLAG_DATA_DESCRIPTOR : Int = 0x0008
+
+///|
+const FLAG_UTF8 : Int = 0x0800
+
+///|
+const FLAG_ENCRYPTED : Int = 0x0001
+
+///|
+const FLAG_DEFLATE_STRENGTH : Int = 0x0006
+
+///|
+const ZIP64_EXTRA_ID : Int = 0x0001
+
+///|
+const MAX_U32 : UInt = 0xFFFFFFFF
+
+///|
 /// Byte-level primitives and shared ZIP format constants: the little-endian
 /// cursor, fixed-width field readers, the end-of-central scan, and
 /// cancellation-aware owned copies.
-
-///|
-pub const LOCAL_HEADER_SIG : UInt = 0x04034b50
-
-///|
-pub const CENTRAL_HEADER_SIG : UInt = 0x02014b50
-
-///|
-pub const END_OF_CENTRAL_SIG : UInt = 0x06054b50
-
-///|
-pub const DATA_DESCRIPTOR_SIG : UInt = 0x08074b50
-
-///|
-pub const ZIP64_EOCD_SIG : UInt = 0x06064b50
-
-///|
-pub const ZIP64_LOCATOR_SIG : UInt = 0x07064b50
-
-///|
-pub const FLAG_DATA_DESCRIPTOR : Int = 0x0008
-
-///|
-pub const FLAG_UTF8 : Int = 0x0800
-
-///|
-pub const FLAG_ENCRYPTED : Int = 0x0001
-
-///|
-pub const FLAG_DEFLATE_STRENGTH : Int = 0x0006
-
-///|
-pub const ZIP64_EXTRA_ID : Int = 0x0001
-
-///|
-pub const MAX_U32 : UInt = 0xFFFFFFFF
 
 ///|
 priv struct Cursor {

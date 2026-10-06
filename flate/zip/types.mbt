@@ -3,17 +3,11 @@
 pub(all) enum Compression {
   Store
   Deflate
-} derive(Eq, Debug)
-
-///|
-pub extend Compression with Eq::{not_equal, equal}
-
-///|
-pub extend Compression with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
 
 ///|
 /// Resource bounds applied to a bounded read. Every field is a ceiling in
-/// bytes (or, for `max_entries`, a count); `ReadLimits::default()` imposes no
+/// bytes (or, for `max_entries`, a count); `ReadLimits()` imposes no
 /// limits. `max_preserved_source_bytes` bounds the raw local/central records
 /// retained in memory so a byte-preserving rewrite cannot be weaponized as an
 /// unbounded retention bomb.
@@ -27,89 +21,22 @@ pub struct ReadLimits {
 }
 
 ///|
-/// The default, unlimited resource bounds.
-pub fn ReadLimits::default() -> ReadLimits {
-  {
-    max_package_bytes: 0x7fff_ffff,
-    max_entries: 0x7fff_ffff,
-    max_entry_uncompressed_bytes: 0x7fff_ffff,
-    max_total_uncompressed_bytes: 0x7fff_ffff,
-    max_preserved_source_bytes: 0x7fff_ffff,
-  }
-}
-
-///|
-/// A copy of `self` with a new package-size ceiling.
-pub fn ReadLimits::with_package_limit(
-  self : ReadLimits,
-  limit : Int,
+/// Construct resource bounds. Omitted ceilings default to the largest `Int`.
+/// Each supplied ceiling must be non-negative; `read` rejects an exceeded
+/// ceiling before accepting the corresponding resource.
+pub fn ReadLimits::ReadLimits(
+  max_package_bytes? : Int = 0x7fff_ffff,
+  max_entries? : Int = 0x7fff_ffff,
+  max_entry_uncompressed_bytes? : Int = 0x7fff_ffff,
+  max_total_uncompressed_bytes? : Int = 0x7fff_ffff,
+  max_preserved_source_bytes? : Int = 0x7fff_ffff,
 ) -> ReadLimits {
   {
-    max_package_bytes: limit,
-    max_entries: self.max_entries,
-    max_entry_uncompressed_bytes: self.max_entry_uncompressed_bytes,
-    max_total_uncompressed_bytes: self.max_total_uncompressed_bytes,
-    max_preserved_source_bytes: self.max_preserved_source_bytes,
-  }
-}
-
-///|
-/// A copy of `self` with a new entry-count ceiling.
-pub fn ReadLimits::with_entries_limit(
-  self : ReadLimits,
-  limit : Int,
-) -> ReadLimits {
-  {
-    max_package_bytes: self.max_package_bytes,
-    max_entries: limit,
-    max_entry_uncompressed_bytes: self.max_entry_uncompressed_bytes,
-    max_total_uncompressed_bytes: self.max_total_uncompressed_bytes,
-    max_preserved_source_bytes: self.max_preserved_source_bytes,
-  }
-}
-
-///|
-/// A copy of `self` with a new per-entry uncompressed ceiling.
-pub fn ReadLimits::with_entry_limit(
-  self : ReadLimits,
-  limit : Int,
-) -> ReadLimits {
-  {
-    max_package_bytes: self.max_package_bytes,
-    max_entries: self.max_entries,
-    max_entry_uncompressed_bytes: limit,
-    max_total_uncompressed_bytes: self.max_total_uncompressed_bytes,
-    max_preserved_source_bytes: self.max_preserved_source_bytes,
-  }
-}
-
-///|
-/// A copy of `self` with a new total uncompressed ceiling.
-pub fn ReadLimits::with_total_limit(
-  self : ReadLimits,
-  limit : Int,
-) -> ReadLimits {
-  {
-    max_package_bytes: self.max_package_bytes,
-    max_entries: self.max_entries,
-    max_entry_uncompressed_bytes: self.max_entry_uncompressed_bytes,
-    max_total_uncompressed_bytes: limit,
-    max_preserved_source_bytes: self.max_preserved_source_bytes,
-  }
-}
-
-///|
-/// A copy of `self` with a new preserved-source-record ceiling.
-pub fn ReadLimits::with_preserved_source_limit(
-  self : ReadLimits,
-  limit : Int,
-) -> ReadLimits {
-  {
-    max_package_bytes: self.max_package_bytes,
-    max_entries: self.max_entries,
-    max_entry_uncompressed_bytes: self.max_entry_uncompressed_bytes,
-    max_total_uncompressed_bytes: self.max_total_uncompressed_bytes,
-    max_preserved_source_bytes: limit,
+    max_package_bytes,
+    max_entries,
+    max_entry_uncompressed_bytes,
+    max_total_uncompressed_bytes,
+    max_preserved_source_bytes,
   }
 }
 
@@ -139,16 +66,19 @@ pub struct Entry {
 }
 
 ///|
+/// The entry name decoded as UTF-8.
 pub fn Entry::name(self : Entry) -> String {
   self.name
 }
 
 ///|
+/// A read-only view of the decompressed payload.
 pub fn Entry::data(self : Entry) -> BytesView {
   self.data
 }
 
 ///|
+/// The compression method used for this entry.
 pub fn Entry::compression(self : Entry) -> Compression {
   self.compression
 }
@@ -161,6 +91,7 @@ pub fn Entry::crc32(self : Entry) -> UInt {
 }
 
 ///|
+/// A read-only view of the decompressed payload.
 pub fn Entry::data_descriptor(self : Entry) -> Bool {
   self.data_descriptor
 }
@@ -323,32 +254,24 @@ pub fn Archive::clone(self : Archive) -> Archive {
 /// is not included.
 pub fn Archive::retained_size_estimate(self : Archive) -> Int64 {
   let mut total = self.comment.length().to_int64()
-  match self.trailer {
-    Some(trailer) => {
-      total = total + trailer.classic_end_record.length().to_int64()
-      match trailer.zip64_end_record {
-        Some(record) => total = total + record.length().to_int64()
-        None => ()
-      }
-      match trailer.zip64_locator {
-        Some(locator) => total = total + locator.length().to_int64()
-        None => ()
-      }
+  if self.trailer is Some(trailer) {
+    total += trailer.classic_end_record.length().to_int64()
+    if trailer.zip64_end_record is Some(record) {
+      total += record.length().to_int64()
     }
-    None => ()
+    if trailer.zip64_locator is Some(locator) {
+      total += locator.length().to_int64()
+    }
   }
   for entry in self.entries {
     total = total + entry.data.length().to_int64()
     total = total + entry.name.length().to_int64() * 2L
     // Entry/array slots, references, option wrappers, and allocator metadata.
     total = total + 512L
-    match entry.source {
-      Some(source) => {
-        total = total + source.local_record.length().to_int64()
-        total = total + source.central_record.length().to_int64()
-        total = total + 128L
-      }
-      None => ()
+    if entry.source is Some(source) {
+      total += source.local_record.length().to_int64()
+      total += source.central_record.length().to_int64()
+      total += 128L
     }
   }
   total

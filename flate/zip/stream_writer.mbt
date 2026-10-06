@@ -158,7 +158,9 @@ fn stream_local_header(
   zip64 : Bool,
   descriptor : Bool,
 ) -> Bytes {
-  let out = Buffer(size_hint=30 + name.length() + (if zip64 { 20 } else { 0 }))
+  let out = @buffer.Buffer(
+    size_hint=30 + name.length() + (if zip64 { 20 } else { 0 }),
+  )
   out.write_uint_le(LOCAL_HEADER_SIG)
   out.write_uint16_le(if zip64 { (45).to_uint16() } else { (20).to_uint16() })
   out.write_uint16_le(
@@ -196,7 +198,7 @@ fn stream_central_record(
   let extra_payload = (if zip64 { 16 } else { 0 }) +
     (if large_offset { 8 } else { 0 })
   let extra_size = if extra_payload == 0 { 0 } else { 4 + extra_payload }
-  let out = Buffer(size_hint=46 + name.length() + extra_size)
+  let out = @buffer.Buffer(size_hint=46 + name.length() + extra_size)
   let version = if zip64 || large_offset {
     (45).to_uint16()
   } else {
@@ -301,7 +303,7 @@ pub fn Writer::begin_entry(
       deflater.reset()
     } else {
       self.deflater = Some(
-        @flate.Deflater(level=self.level, fast_store=self.fast_store),
+        Deflater(level=self.level, fast_store=self.fast_store),
       )
       self.scratch = FixedArray::make(65536, b'\x00')
     }
@@ -312,7 +314,7 @@ pub fn Writer::begin_entry(
     offset: self.offset,
     expected_size: size,
     zip64,
-    crc: @checksum.Crc32(),
+    crc: Crc32(),
     size: 0UL,
     compressed_size: 0UL,
   }
@@ -340,7 +342,7 @@ fn Writer::pump(
       if produced > 0 {
         self.emit(Bytes::from_array(self.scratch[:produced]))
       }
-      guard status is @flate.NeedMoreOutput else { break }
+      guard status is NeedMoreOutput else { break }
     }
   }
 }
@@ -363,7 +365,7 @@ pub fn Writer::write(self : Writer, bytes : BytesView) -> Unit raise {
   entry.crc.update(bytes)
   match entry.compression {
     Store => self.emit(bytes)
-    Deflate => self.pump(bytes, @flate.Continue)
+    Deflate => self.pump(bytes, Continue)
   }
   entry.size += length
   entry.compressed_size += self.offset - start
@@ -384,11 +386,11 @@ pub fn Writer::end_entry(self : Writer) -> Unit raise {
   }
   let start = self.offset
   if entry.compression is Deflate {
-    self.pump(b"", @flate.Finish)
+    self.pump(b"", Finish)
   }
   entry.compressed_size += self.offset - start
   let crc = entry.crc.finish()
-  let descriptor = Buffer(size_hint=if entry.zip64 { 24 } else { 16 })
+  let descriptor = @buffer.Buffer(size_hint=if entry.zip64 { 24 } else { 16 })
   descriptor.write_uint_le(DATA_DESCRIPTOR_SIG)
   descriptor.write_uint_le(crc)
   if entry.zip64 {
@@ -432,7 +434,7 @@ pub fn Writer::finish(self : Writer, comment? : BytesView = b"") -> Unit raise {
     count >= 0xffff ||
     central_size >= 0xffff_ffffUL ||
     central_offset >= 0xffff_ffffUL
-  let out = Buffer(size_hint=98 + comment.length())
+  let out = @buffer.Buffer(size_hint=98 + comment.length())
   if zip64 {
     out.write_uint_le(ZIP64_EOCD_SIG)
     out.write_uint64_le(44UL)

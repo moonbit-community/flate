@@ -1,18 +1,17 @@
 ///|
 fn expect_writer_error(f : () -> Unit raise) -> Unit raise {
-  try f() catch {
-    ZipError(kind, _) => assert_eq(kind, UnsupportedFeature)
-    _ => fail("unexpected writer error")
-  } noraise {
-    _ => fail("expected writer error")
+  let error = @test.expect_error(f)
+  guard error is ZipError(kind, _) else {
+    @test.fail("unexpected writer error")
   }
+  @test.assert_eq(kind, UnsupportedFeature)
 }
 
 ///|
 test "incremental ZIP mixes whole files and known or unknown sized entries" {
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let writer = Writer(bytes => out.write_bytes(bytes))
-  assert_eq(writer.position(), 0UL)
+  @test.assert_eq(writer.position(), 0UL)
   assert_false(writer.is_finished())
   assert_false(writer.is_failed())
   writer.add("stored", b"abc", compression=Store)
@@ -43,19 +42,19 @@ test "incremental ZIP mixes whole files and known or unknown sized entries" {
   let bytes = out.to_bytes()
   assert_true(writer.is_finished())
   assert_false(writer.is_failed())
-  assert_eq(writer.position(), bytes.length().to_uint64())
+  @test.assert_eq(writer.position(), bytes.length().to_uint64())
   let archive = read(bytes)
-  assert_eq(archive.entries().length(), 8)
-  assert_eq(archive.comment().to_owned(), b"comment")
+  @test.assert_eq(archive.entries().length(), 8)
+  @test.assert_eq(archive.comment().to_owned(), b"comment")
   for entry in archive.entries() {
-    assert_eq(entry.crc32(), @checksum.crc32(entry.data()))
+    @test.assert_eq(entry.crc32(), @checksum.crc32(entry.data()))
   }
-  assert_eq(archive.get("stored").unwrap().to_owned(), b"abc")
-  assert_eq(archive.get("deflated").unwrap().to_owned(), b"abcabcabc")
+  @test.assert_eq(archive.get("stored").unwrap().to_owned(), b"abc")
+  @test.assert_eq(archive.get("deflated").unwrap().to_owned(), b"abcabcabc")
   for index in 3..<7 {
-    assert_eq(archive.entries()[index].data().to_owned(), b"abcabc")
+    @test.assert_eq(archive.entries()[index].data().to_owned(), b"abcabc")
   }
-  assert_eq(archive.get("empty").unwrap().length(), 0)
+  @test.assert_eq(archive.get("empty").unwrap().length(), 0)
   expect_writer_error(() => writer.finish())
   expect_writer_error(() => writer.add("late", b""))
   expect_writer_error(() => writer.write(b""))
@@ -70,7 +69,7 @@ test "incremental ZIP pumps multiple output buffers and reuses the deflater" {
     seed = seed ^ (seed << 5)
     seed.to_byte()
   })
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let writer = Writer(bytes => out.write_bytes(bytes))
   for name in ["first", "second"] {
     writer.begin_entry(name, size=payload.length().to_uint64())
@@ -80,14 +79,14 @@ test "incremental ZIP pumps multiple output buffers and reuses the deflater" {
   writer.finish()
   let archive = read(out.to_bytes())
   for entry in archive.entries() {
-    assert_eq(entry.data().to_owned(), payload)
-    assert_eq(entry.crc32(), @checksum.crc32(payload))
+    @test.assert_eq(entry.data().to_owned(), payload)
+    @test.assert_eq(entry.crc32(), @checksum.crc32(payload))
   }
 }
 
 ///|
 test "incremental ZIP validates states and allows recovery from size errors" {
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let writer = Writer(bytes => out.write_bytes(bytes))
   expect_writer_error(() => writer.write(b"x"))
   expect_writer_error(() => writer.end_entry())
@@ -105,7 +104,7 @@ test "incremental ZIP validates states and allows recovery from size errors" {
   writer.end_entry()
   expect_writer_error(() => writer.finish(comment=Bytes::make(65536, b'x')))
   writer.finish()
-  assert_eq(read(out.to_bytes()).get("a").unwrap().to_owned(), b"abc")
+  @test.assert_eq(read(out.to_bytes()).get("a").unwrap().to_owned(), b"abc")
 }
 
 ///|
@@ -127,17 +126,17 @@ test "incremental ZIP propagates sink errors and poisons the writer" {
       writer.add("a", b"payload", compression=Store)
       writer.finish()
     } catch {
-      StreamSinkFailure(code) => assert_eq(code, 42)
-      _ => fail("unexpected sink error")
+      StreamSinkFailure(code) => @test.assert_eq(code, 42)
+      _ => @test.fail("unexpected sink error")
     } noraise {
-      _ => fail("expected sink failure")
+      _ => @test.fail("expected sink failure")
     }
     assert_true(writer.is_failed())
     assert_false(writer.is_finished())
     expect_writer_error(() => writer.add("b", b""))
     expect_writer_error(() => writer.finish())
     expect_writer_error(() => writer.write(b""))
-    assert_eq(calls, fail_at)
+    @test.assert_eq(calls, fail_at)
   }
 }
 
@@ -148,7 +147,7 @@ test "incremental ZIP rejects reentrant sink calls" {
   cell.push(writer)
   expect_writer_error(() => writer.add("outer", b"x"))
   assert_true(writer.is_failed())
-  assert_eq(writer.position(), 0UL)
+  @test.assert_eq(writer.position(), 0UL)
 }
 
 ///|
@@ -157,7 +156,7 @@ test "incremental ZIP guards UInt64 offsets and sizes without huge buffers" {
   writer.offset = 0xffff_ffff_ffff_ffffUL
   expect_writer_error(() => writer.add("a", b""))
   assert_true(writer.is_failed())
-  assert_eq(writer.position(), 0xffff_ffff_ffff_ffffUL)
+  @test.assert_eq(writer.position(), 0xffff_ffff_ffff_ffffUL)
   let entry_writer = Writer(_ => ())
   entry_writer.begin_entry("a", compression=Store)
   entry_writer.pending().size = 0xffff_ffff_ffff_ffffUL
@@ -168,20 +167,20 @@ test "incremental ZIP guards UInt64 offsets and sizes without huge buffers" {
 ///|
 test "incremental ZIP emits ZIP64 offset and count sentinels" {
   // Simulate a sink already positioned at the classic offset boundary.
-  let out = Buffer()
+  let out = @buffer.Buffer()
   let writer = Writer(bytes => out.write_bytes(bytes))
   writer.offset = 0xffff_ffffUL
   writer.add("a", b"x", compression=Store)
   writer.finish()
   let bytes = out.to_bytes()
   let directory = 32
-  assert_eq(read_u32_le_at_raw(bytes, directory), CENTRAL_HEADER_SIG)
-  assert_eq(read_u32_le_at_raw(bytes, directory + 42), MAX_U32)
-  assert_eq(read_u16_le_at(bytes, directory + 6), 45)
-  assert_eq(read_u64_le_at(bytes, directory + 51), 0xffff_ffffUL)
+  @test.assert_eq(read_u32_le_at_raw(bytes, directory), CENTRAL_HEADER_SIG)
+  @test.assert_eq(read_u32_le_at_raw(bytes, directory + 42), MAX_U32)
+  @test.assert_eq(read_u16_le_at(bytes, directory + 6), 45)
+  @test.assert_eq(read_u64_le_at(bytes, directory + 51), 0xffff_ffffUL)
   let eocd = bytes.length() - 22
-  assert_eq(read_u16_le_at(bytes, eocd + 10), 0xffff)
-  assert_eq(read_u32_le_at_raw(bytes, eocd + 16), MAX_U32)
+  @test.assert_eq(read_u16_le_at(bytes, eocd + 10), 0xffff)
+  @test.assert_eq(read_u32_le_at_raw(bytes, eocd + 16), MAX_U32)
   // A ZIP64 size plus offset must encode all three extra fields.
   let record = stream_central_record(
     b"a",
@@ -193,13 +192,13 @@ test "incremental ZIP emits ZIP64 offset and count sentinels" {
     true,
     true,
   )
-  assert_eq(read_u16_le_at(record, 30), 28)
-  assert_eq(read_u64_le_at(record, 51), 3UL)
-  assert_eq(read_u64_le_at(record, 59), 2UL)
-  assert_eq(read_u64_le_at(record, 67), 0xffff_ffffUL)
-  let counted = Buffer()
+  @test.assert_eq(read_u16_le_at(record, 30), 28)
+  @test.assert_eq(read_u64_le_at(record, 51), 3UL)
+  @test.assert_eq(read_u64_le_at(record, 59), 2UL)
+  @test.assert_eq(read_u64_le_at(record, 67), 0xffff_ffffUL)
+  let counted = @buffer.Buffer()
   let many = Writer(bytes => counted.write_bytes(bytes))
   many.directory = Array::make(65535, b"")
   many.finish()
-  assert_eq(read_u32_le_at_raw(counted.to_bytes(), 0), ZIP64_EOCD_SIG)
+  @test.assert_eq(read_u32_le_at_raw(counted.to_bytes(), 0), ZIP64_EOCD_SIG)
 }

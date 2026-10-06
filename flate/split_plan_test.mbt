@@ -29,7 +29,7 @@ fn bench_mixed(size : Int) -> Bytes {
 
 ///|
 fn split_prose(size : Int) -> Bytes {
-  let ps = [
+  let ps : ReadOnlyArray[_] = [
     b"The history of data compression is a history of finding structure in information that does not want to be found. Early codes worked letter by letter; the leap to phrase-based matching came only when programmers realized that a file is rarely a stream of independent symbols but a tapestry of repeated fragments.",
     b"Consider a text file. Common words appear over and over, at distances that vary with the sentence structure around them. A word like the or and may sit three characters from its twin in one sentence and three thousand in the next.",
     b"Matching is not the same as deciding. Finding a long match is cheap work for a hash table, but choosing whether to use it is a separate problem with its own economics.",
@@ -118,7 +118,7 @@ test "deflate_all_split round-trips across levels and shapes" {
         split_code(200000),
       ] {
       let c = @flate.deflate_all_split(src, level~)
-      assert_eq(@flate.inflate_all(c), src)
+      @test.assert_eq(@flate.inflate_all(c), src)
     }
   }
 }
@@ -145,7 +145,7 @@ test "deflate_all_split never worse than fixed cadence" {
         split.length() <= fixed.length(),
         msg="split larger than fixed on \{name} L\{level}: \{split.length()} > \{fixed.length()}",
       )
-      assert_eq(@flate.inflate_all(split), data)
+      @test.assert_eq(@flate.inflate_all(split), data)
     }
   }
 }
@@ -153,23 +153,23 @@ test "deflate_all_split never worse than fixed cadence" {
 ///|
 test "deflate_all_split: level 0 emits stored blocks, empty emits one block" {
   let src = b"stored only, no compression of any kind, plain bytes here"
-  assert_eq(
+  @test.assert_eq(
     @flate.deflate_all_split(src, level=0),
     @flate.deflate_all(src, level=0),
   )
   let empty = @flate.deflate_all_split(b"", level=6)
-  assert_eq(@flate.inflate_all(empty), b"")
+  @test.assert_eq(@flate.inflate_all(empty), b"")
   assert_true(empty.length() > 0)
 }
 
 ///|
 test "deflate_all_split clamps out-of-range levels" {
   let src = b"level clamping is deterministic across the splitter too"
-  assert_eq(
+  @test.assert_eq(
     @flate.deflate_all_split(src, level=-1),
     @flate.deflate_all_split(src, level=0),
   )
-  assert_eq(
+  @test.assert_eq(
     @flate.deflate_all_split(src, level=99),
     @flate.deflate_all_split(src, level=9),
   )

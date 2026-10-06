@@ -19,13 +19,7 @@ pub(all) enum ZlibErrorKind {
   ChecksumMismatch
   /// Bytes occur after the raw DEFLATE end and before the expected trailer.
   TrailingData
-} derive(Eq, Debug)
-
-///|
-pub extend ZlibErrorKind with Eq::{not_equal, equal}
-
-///|
-pub extend ZlibErrorKind with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
 
 ///|
 /// Structured zlib decoding failure: a stable category plus a human-readable
@@ -35,7 +29,7 @@ pub suberror ZlibError {
 }
 
 ///|
-fn u32_be(data : Bytes, off : Int) -> UInt {
+fn u32_be(data : BytesView, off : Int) -> UInt {
   (data[off].to_uint() << 24) |
   (data[off + 1].to_uint() << 16) |
   (data[off + 2].to_uint() << 8) |
@@ -85,8 +79,8 @@ fn inflate_exact(input : BytesView) -> Bytes raise ZlibError {
 
 ///|
 /// Wrap a raw DEFLATE stream `deflated` of `input` in the zlib header/trailer.
-fn zlib_frame(input : Bytes, deflated : Bytes) -> Bytes {
-  let out = Buffer()
+fn zlib_frame(input : BytesView, deflated : Bytes) -> Bytes {
+  let out = @buffer.Buffer()
   // CMF=0x78 (CM=8 deflate, CINFO=7 -> 32K window); FLG=0x01 makes the
   // 16-bit header a multiple of 31 with FLEVEL=0 and no preset dictionary.
   out.write_byte(b'\x78')
@@ -102,8 +96,8 @@ fn zlib_frame(input : Bytes, deflated : Bytes) -> Bytes {
 /// for ratio; 0 = stored only, 6 = default.
 /// Optional `fast_store` is off by default; sampled inputs may use stored
 /// DEFLATE blocks, sacrificing compression ratio for speed.
-pub fn zlib_compress(
-  input : Bytes,
+pub fn compress(
+  input : BytesView,
   level? : Int = 6,
   fast_store? : Bool = false,
 ) -> Bytes {
@@ -117,8 +111,8 @@ pub fn zlib_compress(
 /// stream). `iterations` is the squeeze count per block (zopfli's default 15).
 /// Optional `fast_store` is off by default; sampled inputs may use stored
 /// DEFLATE blocks, sacrificing compression ratio for speed.
-pub fn zlib_compress_optimal(
-  input : Bytes,
+pub fn compress_optimal(
+  input : BytesView,
   iterations? : Int = 15,
   fast_store? : Bool = false,
 ) -> Bytes {
@@ -131,7 +125,7 @@ pub fn zlib_compress_optimal(
 /// use the streaming `Decoder` with caller-sized output buffers. Failures carry
 /// a stable `ZlibErrorKind` suitable for programmatic handling plus a
 /// human-readable diagnostic.
-pub fn zlib_decompress(input : Bytes) -> Bytes raise ZlibError {
+pub fn decompress(input : BytesView) -> Bytes raise ZlibError {
   let n = input.length()
   guard n >= 6 else { raise ZlibError(Truncated, "zlib: input too short") }
   let cmf = input[0].to_int()

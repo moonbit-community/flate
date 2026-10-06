@@ -1,6 +1,5 @@
 ///|
-/// Maximum compressed input retained while output is backpressured.
-pub const DECODER_INPUT_LIMIT : Int = 65536
+const DECODER_INPUT_LIMIT : Int = 65536
 
 ///|
 priv enum DecMode {
@@ -24,7 +23,7 @@ pub struct Decoder {
   priv mut unused : Bytes // cached read-ahead suffix after successful completion
   priv mut ending : Bool // `end=true` is sticky across output suspension
   priv mut mode : DecMode
-  priv dict : Bytes? // preset dictionary, if the caller has one
+  priv dict : BytesView? // preset dictionary, if the caller has one
   priv mut failure_kind : ZlibErrorKind? // stable first terminal error
   priv mut failure_message : String
   priv mut step_consumed : Int
@@ -35,7 +34,7 @@ pub struct Decoder {
 /// Create a fresh zlib decompressor. Supply `dictionary` when the stream was
 /// compressed with a preset dictionary : the header's DICTID
 /// is verified against it before use.
-pub fn Decoder::Decoder(dictionary? : Bytes) -> Decoder {
+pub fn Decoder::Decoder(dictionary? : BytesView) -> Decoder {
   {
     inf: Inflater(),
     adler: Adler32(),

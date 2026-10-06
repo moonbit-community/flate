@@ -19,3 +19,5 @@ keywords = [
 ]
 
 description = "Pure-MoonBit, runtime-agnostic DEFLATE (RFC 1951) engine with gzip/zlib/zip wrappers — suspendable and io-free."
+
+warnings = "+test_unqualified_package+unqualified_local_using+missing_doc+unnecessary_view_op+unnecessary_annotation+prefer_fixed_array+prefer_readonly_array-implicit_use_builtin-implicit_impl_as_method"

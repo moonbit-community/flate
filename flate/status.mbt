@@ -11,13 +11,7 @@ pub(all) enum Status {
   NeedMoreInput
   /// The output buffer filled up; drain it and call again.
   NeedMoreOutput
-} derive(Eq, Debug)
-
-///|
-pub extend Status with Eq::{not_equal, equal}
-
-///|
-pub extend Status with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
 
 ///|
 /// Requested action for one streaming compression step.
@@ -33,10 +27,4 @@ pub(all) enum DeflateAction {
   SyncFlush
   /// Finish the DEFLATE stream after all input in this view has been accepted.
   Finish
-} derive(Eq, Debug)
-
-///|
-pub extend DeflateAction with Eq::{not_equal, equal}
-
-///|
-pub extend DeflateAction with Debug::{to_repr}
+} derive(Eq, @debug.Debug)
