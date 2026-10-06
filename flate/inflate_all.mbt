@@ -1136,8 +1136,7 @@ fn inflate_drive(
 ///|
 /// The replay pass must produce exactly the size measured by the counting pass.
 /// A mismatch indicates an internal decoder invariant failure rather than bad
-/// caller input, so this defensive branch is excluded from behavior coverage.
-#coverage.skip
+/// caller input.
 fn validate_preallocation_size(
   size : Int,
   filled : Int,

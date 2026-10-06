@@ -30,7 +30,7 @@ fn golden_input(size : Int, seed : UInt, alphabet : Int) -> Bytes {
 /// The PDF-writer driving pattern: one `Finish` step per call with a fixed
 /// 32 KiB output window, re-presenting the unconsumed suffix.
 fn golden_zlib_stream(input : Bytes, level : Int, out_chunk : Int) -> Bytes {
-  golden_zlib_drive(@zlib.Encoder(level~), input, out_chunk)
+  golden_zlib_drive(Encoder(level~), input, out_chunk)
 }
 
 ///|
@@ -67,7 +67,7 @@ test "zlib output goldens" {
     let (name, data) = entry
     for level in [0, 1, 6, 9] {
       buf.write_string(
-        "L\{level} \{name} compress: \{golden_fnv(@zlib.zlib_compress(data, level~))}\n",
+        "L\{level} \{name} compress: \{golden_fnv(@zlib.compress(data, level~))}\n",
       )
       buf.write_string(
         "L\{level} \{name} stream: \{golden_fnv(golden_zlib_stream(data, level, 32768))}\n",
@@ -136,9 +136,9 @@ test "zlib reset streams are identical to fresh encoders" {
   let second = golden_input(70000, 5, 12)
   let dictionary = golden_input(40000, 6, 12)
   for level in 0..<=9 {
-    for dict in [None, Some(dictionary), Some(dictionary[:100].to_owned())] {
+    for dict in [None, Some(dictionary[:]), Some(dictionary[:100])] {
       let fresh = golden_zlib_drive(
-        @zlib.Encoder(level~, dictionary?=dict),
+        Encoder(level~, dictionary?=dict),
         second,
         4096,
       )

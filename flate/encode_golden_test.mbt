@@ -175,8 +175,8 @@ fn golden_stream(
   dictionary? : Bytes,
 ) -> Bytes {
   let deflater = match dictionary {
-    Some(dict) => @flate.Deflater(level~, dictionary=dict[:])
-    None => @flate.Deflater(level~)
+    Some(dict) => @flate.Deflater(level~, dictionary=dict)
+    None => Deflater(level~)
   }
   let out = FixedArray::make(out_chunk, b'\x00')
   let result = Buffer()

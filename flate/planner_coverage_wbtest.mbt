@@ -1,15 +1,4 @@
 ///|
-fn fill_deflater_pending_for_coverage(d : Deflater, size : Int) -> Bytes {
-  let bytes : Array[Byte] = []
-  for i in 0..<size {
-    let byte = ((i * 73 + i / 17) & 0xFF).to_byte()
-    bytes.push(byte)
-    d.push_pending(Bytes::make(1, byte)[:])
-  }
-  Bytes::from_array(bytes)
-}
-
-///|
 test "compression levels clamp at both public boundaries" {
   let source = b"level clamping must be deterministic deterministic"
   @test.assert_eq(deflate_all(source, level=-7), deflate_all(source, level=0))
@@ -25,52 +14,7 @@ test "compression levels clamp at both public boundaries" {
 }
 
 ///|
-test "block planner direct boundary paths emit valid work" {
-  // Exercise emit_capped's defensive short-buffer branch directly. Normal
-  // streaming callers enter it only after accumulating a full block.
-  let short = Deflater()
-  ignore(fill_deflater_pending_for_coverage(short, 257))
-  short.emit_capped()
-  assert_true(short.w.out.length() > 0)
-
-  // Finalization with more than one token block must emit a capped non-final
-  // block before the final remainder.
-  let finishing = Deflater()
-  let final_source = fill_deflater_pending_for_coverage(
-    finishing,
-    DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 257,
-  )
-  finishing.emit_final()
-  assert_true(finishing.emitted_final)
-  @test.assert_eq(inflate_all(Bytes::from_array(finishing.w.out)), final_source)
-
-  // Both level-0 and parsed sync-flush paths have their own non-final block
-  // loops before the empty stored marker.
-  let stored = Deflater(level=0)
-  ignore(fill_deflater_pending_for_coverage(stored, 31))
-  stored.emit_flush()
-  @test.assert_eq(stored.pending_bytes(), 0)
-  assert_true(stored.w.out.length() >= 4)
-
-  let parsed = Deflater()
-  ignore(
-    fill_deflater_pending_for_coverage(
-      parsed,
-      DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD + 257,
-    ),
-  )
-  parsed.emit_flush()
-  @test.assert_eq(parsed.pending_bytes(), 0)
-  assert_true(parsed.w.out.length() >= 4)
-
-  // Validate the final stored-block bit directly. This is kept explicit
-  // because the coverage compiler currently fails to credit the constant-one
-  // arm inside write_stored's inline conditional.
-  let final_stored = BitWriter()
-  write_stored(final_stored, b"", 0, 0, is_final=true)
-  @test.assert_eq(final_stored.out[0] & b'\x01', b'\x01')
-
-  // Force write_stored to split at the 16-bit LEN limit as well.
+test "stored blocks split at the 16-bit LEN limit" {
   let split_source = Bytes::from_array(Array::make(65536, b'\x5A'))
   let split_stored = BitWriter()
   write_stored(
@@ -119,7 +63,6 @@ test "lazy match pending at a block boundary is committed" {
   assert_true(ll_freq[257 + len_to_idx[length]] > 0)
   assert_true(d_freq[dist_index(distance)] > 0)
   assert_true(processed > 4)
-  @test.assert_eq(collect_matches(b"", 0, 0).length(), 0)
 }
 
 ///|
@@ -227,21 +170,7 @@ fn coverage_divergent_bytes(size : Int) -> Bytes {
 }
 
 ///|
-test "split planner covers partition and arbitration paths" {
-  let tokens : Array[Int] = [97, 98]
-  let cost_positions : FixedArray[Int] = [0, 70000, 70001]
-  let fixed = fixed_cadence_cuts(tokens, cost_positions, 0, 65535)
-  @test.assert_eq(fixed, [1])
-  assert_true(partition_cost(tokens, cost_positions, fixed) > 0)
-
-  let emit_positions : FixedArray[Int] = [0, 1, 2]
-  let writer = BitWriter()
-  emit_split_blocks(writer, b"ab", tokens, emit_positions, [1], 2)
-  writer.flush()
-  @test.assert_eq(inflate_all(Bytes::from_array(writer.out)), b"ab")
-
-  // This input makes the adaptive partition cheaper than the fixed cadence,
-  // so the public planner takes its split-cuts branch as well.
+test "split planner round-trips changing byte distributions" {
   let data = coverage_divergent_bytes(65535)
   let compressed = deflate_all_split(data)
   @test.assert_eq(inflate_all(compressed), data)

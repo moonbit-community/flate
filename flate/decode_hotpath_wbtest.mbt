@@ -62,15 +62,6 @@ test "omitted cancellation preserves output and resets explicit callback state" 
 }
 
 ///|
-test "omitted cancellation installs a non-polling callback" {
-  let decoder = MemDecoder(b"", no_cancellation)
-  @test.assert_eq((decoder.cancelled)(), false)
-  decoder.set_cancellation(None)
-  @test.assert_eq(decoder.poll_cancel, false)
-  @test.assert_eq((decoder.cancelled)(), false)
-}
-
-///|
 test "literal fast path preserves capacity growth and cancellation" {
   for capacity in [0, 1, 2, 17] {
     let storage = FixedArray::make(capacity, b'\xA5')

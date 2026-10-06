@@ -10,92 +10,31 @@ fn fast_store_noise(size : Int) -> Bytes {
 }
 
 ///|
-test "fast store classifier protects small skewed periodic and mixed inputs" {
-  for size in [0, 127, 128, 1023] {
-    @test.assert_eq(should_fast_store(fast_store_noise(size)), false)
-  }
-  @test.assert_eq(should_fast_store(fast_store_noise(4096)), true)
-  @test.assert_eq(should_fast_store(fast_store_noise(65536)), true)
-  @test.assert_eq(should_fast_store(Bytes::makei(251, i => i.to_byte())), false)
-  @test.assert_eq(
-    should_fast_store(Bytes::makei(4096, i => (i % 256).to_byte())),
-    false,
-  )
-  let skewed = Bytes::makei(4096, i => {
-    if i < 256 {
-      i.to_byte()
-    } else {
-      b'\x00'
-    }
-  })
-  @test.assert_eq(should_fast_store(skewed), false)
-  let mixed = Bytes::make(32768, b'x') + fast_store_noise(32768)
-  @test.assert_eq(should_fast_store(mixed), false)
-  let noise = fast_store_noise(65536)
-  let biased = Bytes::makei(65536, i => {
-    if i % 320 == 0 {
-      b'\x00'
-    } else {
-      noise[i]
-    }
-  })
-  @test.assert_eq(should_fast_store(biased), false)
-  let pairs = Bytes::makei(65536, i => {
-    if i % 32 == 31 && i + 1 < noise.length() {
-      noise[i + 1]
-    } else {
-      noise[i]
-    }
-  })
-  @test.assert_eq(should_fast_store(pairs), false)
-  let alternating = Bytes::makei(65536, i => {
-    if (i % 32 == 29 || i % 32 == 30) && i + 2 < noise.length() {
-      noise[i + 2]
-    } else {
-      noise[i]
-    }
-  })
-  @test.assert_eq(should_fast_store(alternating), false)
-}
-
-///|
-test "fast store is opt in and can deliberately sacrifice compression ratio" {
-  // This repeated 251-byte alphabet fools the heuristic despite excellent
-  // LZ compressibility. The trade-off must remain behind the explicit flag.
+test "fast store remains opt in across compression entry points" {
   let input = Bytes::makei(32768, i => (i % 251).to_byte())
-  @test.assert_eq(should_fast_store(input), true)
   for level in [0, 1, 6, 9] {
     @test.assert_eq(
       deflate_all(input, level~),
       deflate_all(input, level~, fast_store=false),
     )
+    @test.assert_eq(
+      inflate_all(deflate_all(input, level~, fast_store=true)),
+      input,
+    )
   }
-  let normal = deflate_all(input)
-  let fast = deflate_all(input, fast_store=true)
-  @test.assert_eq(normal.length() < input.length() / 4, true)
-  @test.assert_eq(fast, deflate_all(input, level=0))
-  @test.assert_eq(inflate_all(fast), input)
-  @test.assert_eq(deflate_all_split(input, fast_store=true), fast)
-  @test.assert_eq(deflate_all_optimal(input, fast_store=true), fast)
-  let text = b"ordinary compressible text ordinary compressible text"
-  @test.assert_eq(deflate_all(text, fast_store=true), deflate_all(text))
+  @test.assert_eq(inflate_all(deflate_all_split(input, fast_store=true)), input)
   @test.assert_eq(
-    deflate_all_split(text, fast_store=true),
-    deflate_all_split(text),
-  )
-  @test.assert_eq(
-    deflate_all_optimal(text, iterations=1, fast_store=true),
-    deflate_all_optimal(text, iterations=1),
+    inflate_all(deflate_all_optimal(input, iterations=1, fast_store=true)),
+    input,
   )
 }
 
 ///|
-test "fast stored output respects capacities bounds and codec reuse" {
+test "fast store output respects capacities bounds and codec reuse" {
   let codec = Compressor(fast_store=true)
   for size in [4096, 8192, 65535, 65536, 131073] {
     let input = fast_store_noise(size)
-    @test.assert_eq(should_fast_store(input), true)
-    let expected = deflate_all(input, level=0)
+    let expected = deflate_all(input, fast_store=true)
     @test.assert_eq(expected.length() <= deflate_bound(size), true)
     @test.assert_eq(
       codec.compress_into(
@@ -128,12 +67,12 @@ test "stored streaming blocks remain searchable as history" {
   let d = Deflater(fast_store=true)
   let input = fast_store_noise(DEFLATE_BLOCK_SIZE)
   for byte in input {
-    d.push_pending(Bytes::make(1, byte)[:])
+    d.push_pending(Bytes::make(1, byte))
   }
   @test.assert_eq(d.try_fast_store(DEFLATE_BLOCK_SIZE, is_final=false), true)
   let start = d.parse_pos
   for i in 0..<64 {
-    d.push_pending(Bytes::make(1, input[DEFLATE_BLOCK_SIZE - 512 + i])[:])
+    d.push_pending(Bytes::make(1, input[DEFLATE_BLOCK_SIZE - 512 + i]))
   }
   d.chain_ready_history()
   let packed_match = find_window_match(

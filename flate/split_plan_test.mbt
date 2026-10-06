@@ -1,9 +1,6 @@
 // Tests for the public `deflate_all_split` entry point: round-trips, the
 // never-worse-than-fixed arbitration guarantee, and edge cases (stored level,
 // empty input, large multi-chunk inputs).
-//
-// The fixture generators below were inlined from the benchmark module so this
-// test stays in the library module and keeps contributing to its coverage.
 
 ///|
 fn bench_repetitive(size : Int) -> Bytes {
@@ -13,7 +10,6 @@ fn bench_repetitive(size : Int) -> Bytes {
 
 ///|
 /// Effectively incompressible: bytes from a deterministic LCG.
-#coverage.skip
 fn bench_random(size : Int) -> Bytes {
   let mut s = 0x12345678U
   Bytes::makei(size, _ => {

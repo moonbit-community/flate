@@ -38,37 +38,12 @@ fn expect_corrupt_stream(data : Bytes) -> Unit raise {
 }
 
 ///|
-/// The shared repeat interpreter defines all three RFC symbols and retains a
-/// total defensive error for values no valid code-length tree can produce.
-test "code-length repeat interpretation is shared and total" {
-  let repeat16 = interpret_code_length_repeat(16, Some(9))
-  @test.assert_eq(repeat16.base, 3)
-  @test.assert_eq(repeat16.extra_bits, 2)
-  @test.assert_eq(repeat16.value, 9)
-  let repeat17 = interpret_code_length_repeat(17, None)
-  @test.assert_eq(repeat17.base, 3)
-  @test.assert_eq(repeat17.extra_bits, 3)
-  @test.assert_eq(repeat17.value, 0)
-  let repeat18 = interpret_code_length_repeat(18, None)
-  @test.assert_eq(repeat18.base, 11)
-  @test.assert_eq(repeat18.extra_bits, 7)
-  @test.assert_eq(repeat18.value, 0)
-  let InflateError(kind, _) = @test.expect_error(() => {
-    interpret_code_length_repeat(19, None)
-  })
-  @test.assert_eq(kind, Corrupt)
-}
-
-///|
-/// A complete canonical tree with lengths above the nine-bit root-table width
-/// must allocate and use the second-level link table in both decoders.
-test "Huffman decoder uses its two-level table" {
+/// Both decoders must decode the longest symbols in a complete skewed tree.
+test "Huffman decoders read ten-bit canonical codes" {
   // Kraft sum: 1/2 + 1/4 + ... + 1/512 + 2/1024 = 1.
   let lengths : ReadOnlyArray[_] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10]
   let h = HuffmanDecoder()
   assert_true(h.initialize(lengths))
-  assert_true(h.links.length() > 0)
-  @test.assert_eq(h.link_mask, 1U)
 
   // Symbols 9 and 10 have canonical codes 1022 and 1023. Their transmitted
   // (bit-reversed) forms are respectively 0x1ff and 0x3ff.

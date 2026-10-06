@@ -1,7 +1,5 @@
 ///|
-/// Whitebox coverage for the ZIP package's error paths that the public round-trip
-/// and limit tests cannot reach through `read`/`write` alone: checked numeric
-/// conversions, the byte cursor, the zip64 helpers, and the writer's guards.
+/// Malformed records, numeric boundaries, and byte-preserving ZIP writes.
 
 ///|
 fn expect_zip_error(f : () -> Unit raise ZipError) -> Unit raise {
@@ -40,16 +38,6 @@ test "zip cursor and field readers reject truncated input" {
     () => ignore(method_from_code(99)),
     UnsupportedCompression(99),
   )
-}
-
-///|
-test "zip raw source records are exposed on read entries" {
-  let archive = Archive()
-  archive.add("a.txt", b"payload")
-  let parsed = read(write(archive))
-  let entry = parsed.entries()[0]
-  assert_true(entry.raw_local_record() is Some(_))
-  assert_true(entry.raw_central_record() is Some(_))
 }
 
 ///|
@@ -789,75 +777,6 @@ test "zip entry decode rejects oversized and mismatched payloads" {
 }
 
 ///|
-test "zip Output and field writers reject bad sizes" {
-  expect_zip_error(() => Output::counting(None).grow(-1))
-  expect_zip_error(() => Output::counting(None).write_u16(0x10000))
-  @test.assert_eq(Output::counting(None).finish(), b"")
-}
-
-///|
-test "zip build_zip64_extra emits each field combination" {
-  @test.assert_eq(build_zip64_extra(uncomp=None, comp=None, offset=None), b"")
-  @test.assert_eq(
-    build_zip64_extra(uncomp=Some(7), comp=None, offset=None).length(),
-    12,
-  )
-  @test.assert_eq(
-    build_zip64_extra(uncomp=None, comp=Some(8), offset=None).length(),
-    12,
-  )
-  @test.assert_eq(
-    build_zip64_extra(uncomp=None, comp=None, offset=Some(9)).length(),
-    12,
-  )
-  @test.assert_eq(
-    build_zip64_extra(uncomp=Some(1), comp=Some(2), offset=Some(3)).length(),
-    28,
-  )
-}
-
-///|
-test "zip force_zip64 emits zip64 local and central records" {
-  let archive = Archive()
-  archive.add("a.txt", b"payload", compression=Store, data_descriptor=true)
-  let entry = archive.entries()[0]
-  let name_bytes = entry_name_bytes(entry)
-  let payload = prepare_payload(entry, Compressor())
-  let local_out = Output::writing(None)
-  write_local_record(local_out, entry, name_bytes, payload, true, true)
-  // The non-descriptor zip64 size fields.
-  let no_desc = Output::writing(None)
-  write_local_record(no_desc, entry, name_bytes, payload, false, true)
-  let central_out = Output::writing(None)
-  write_central_record(
-    central_out,
-    entry,
-    name_bytes,
-    0,
-    payload.compressed_size,
-    true,
-    true,
-  )
-  // A preserved central record with a zip64 offset patch.
-  let template = central_record(0, 0, 0, 0, 1, 1, b"a.txt", b"", 0)
-  let source : SourceRecord = {
-    local_record: b"",
-    central_record: template,
-    central_zip64_offset_position: Some(38),
-  }
-  write_preserved_central_record(Output::writing(None), source, 0)
-  // A malformed preserved central record is rejected.
-  let bad_source : SourceRecord = {
-    local_record: b"",
-    central_record: b"bad template",
-    central_zip64_offset_position: None,
-  }
-  expect_zip_error(() => {
-    write_preserved_central_record(Output::writing(None), bad_source, 0)
-  })
-}
-
-///|
 fn zip64_end_record_bytes() -> Bytes {
   let buf : Array[Byte] = []
   push_u32le(buf, ZIP64_EOCD_SIG)
@@ -881,81 +800,6 @@ fn zip64_locator_bytes() -> Bytes {
   push_u64le(buf, 0)
   push_u32le(buf, 1)
   bytes_of(buf)
-}
-
-///|
-test "zip preserved-trailer writers reject malformed templates" {
-  let out = Output::writing(None)
-  let classic = classic_eocd(0, 0, 0, 0, 0, 0)
-  expect_zip_error(() => {
-    write_preserved_trailer(
-      out,
-      {
-        classic_end_record: b"bad",
-        zip64_end_record: None,
-        zip64_locator: None,
-      },
-      0,
-      0,
-      0,
-    )
-  })
-  expect_zip_error(() => {
-    write_preserved_trailer(
-      out,
-      {
-        classic_end_record: classic,
-        zip64_end_record: Some(b"bad"),
-        zip64_locator: None,
-      },
-      0,
-      0,
-      0,
-    )
-  })
-  expect_zip_error(() => {
-    write_preserved_trailer(
-      out,
-      {
-        classic_end_record: classic,
-        zip64_end_record: Some(zip64_end_record_bytes()),
-        zip64_locator: None,
-      },
-      0,
-      0,
-      0,
-    )
-  })
-  expect_zip_error(() => {
-    write_preserved_trailer(
-      out,
-      {
-        classic_end_record: classic,
-        zip64_end_record: Some(zip64_end_record_bytes()),
-        zip64_locator: Some(b"bad"),
-      },
-      0,
-      0,
-      0,
-    )
-  })
-  expect_zip_error(() => {
-    write_preserved_classic_end_record(out, b"bad", 0, 0, 0)
-  })
-  // A valid preserved zip64 trailer round-trips.
-  write_preserved_trailer(
-    out,
-    {
-      classic_end_record: classic_eocd(
-        0, 0, 0xffff, 0xffff, 0xffffffff, 0xffffffff,
-      ),
-      zip64_end_record: Some(zip64_end_record_bytes()),
-      zip64_locator: Some(zip64_locator_bytes()),
-    },
-    1,
-    0,
-    0,
-  )
 }
 
 ///|

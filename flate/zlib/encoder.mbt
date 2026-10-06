@@ -46,7 +46,7 @@ pub fn Encoder::Encoder(
   fast_store? : Bool = false,
 ) -> Encoder {
   let def = if dictionary is Some(dict) {
-    @flate.Deflater(level~, dictionary=dict[:], fast_store~)
+    @flate.Deflater(level~, dictionary=dict, fast_store~)
   } else {
     Deflater(level~, fast_store~)
   }
@@ -64,7 +64,7 @@ pub fn Encoder::Encoder(
 
 ///|
 /// The zlib header: CMF and FLG, followed by the DICTID of a preset dictionary.
-fn zlib_header(dictionary : Bytes?) -> FixedArray[Byte] {
+fn zlib_header(dictionary : BytesView?) -> FixedArray[Byte] {
   guard dictionary is Some(dict) else { return zlib_header_bytes }
   let id = @checksum.adler32(dict)
   let h = FixedArray::make(6, b'\x00')
@@ -85,9 +85,9 @@ fn zlib_header(dictionary : Bytes?) -> FixedArray[Byte] {
 /// stream's output is identical to that of a newly constructed `Encoder`
 /// with the same options. A preset `dictionary` applies to the new stream
 /// only, exactly as for the constructor.
-pub fn Encoder::reset(self : Encoder, dictionary? : Bytes) -> Unit {
+pub fn Encoder::reset(self : Encoder, dictionary? : BytesView) -> Unit {
   match dictionary {
-    Some(dict) => self.def.reset(dictionary=dict[:])
+    Some(dict) => self.def.reset(dictionary=dict)
     None => self.def.reset()
   }
   self.adler = Adler32()

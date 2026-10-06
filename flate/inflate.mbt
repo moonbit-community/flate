@@ -47,7 +47,6 @@ priv enum DecoderErrorClass {
 }
 
 ///|
-#coverage.skip
 fn classify_decoder_error(err : Error) -> DecoderErrorClass {
   match err {
     NeedInput => DecoderInputExhausted
@@ -309,7 +308,6 @@ fn Inflater::emit(self : Inflater, b : Byte) -> Unit {
 /// shared dynamic header decoder into the uniform `InflateError` it requires.
 /// `NeedInput` becomes `Truncated` so the caller can recognize the suspension
 /// at its own boundary.
-#coverage.skip
 fn streaming_header_error(err : Error) -> InflateError {
   match err {
     NeedInput => InflateError(Truncated, "unexpected end of input")

@@ -36,7 +36,7 @@ pub fn Encoder::Encoder(level? : Int, dictionary? : BytesView, fast_store? : Boo
 pub fn Encoder::is_finished(Self) -> Bool
 pub fn Encoder::last_consumed(Self) -> Int
 pub fn Encoder::last_produced(Self) -> Int
-pub fn Encoder::reset(Self, dictionary? : Bytes) -> Unit
+pub fn Encoder::reset(Self, dictionary? : BytesView) -> Unit
 pub fn Encoder::step(Self, BytesView, MutArrayView[Byte], action? : @flate.DeflateAction) -> @flate.Status
 
 pub(all) enum ZlibErrorKind {

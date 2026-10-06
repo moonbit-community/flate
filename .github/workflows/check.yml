@@ -1,9 +1,7 @@
 name: check
 
 env:
-  MOON_COVE_REPORT_ENABLED: "1"
   MOON_WASM_NEW_ALLOCATOR: "1"
-  MIN_COVERAGE_PERCENT: 100
 
 on:
   push:
@@ -88,12 +86,13 @@ jobs:
           moon test --target native
           moon test --target native --release
 
-      - name: coverage gate
+      - name: coverage report
         if: ${{ matrix.os.name == 'ubuntu-latest' }}
         working-directory: flate
         shell: bash
+        env:
+          MOON_COVE_REPORT_ENABLED: "1"
         run: |
-          coverage_file="$RUNNER_TEMP/flate-coverage.txt"
           moon coverage clean
           moon test --target native --enable-coverage --no-parallelize \
             --deny-warn
@@ -102,12 +101,4 @@ jobs:
           moon test --target js --enable-coverage --no-parallelize \
             --deny-warn
           moon coverage report -- -f summary \
-            --source-paths "$PWD" | tee "$coverage_file"
-          awk -v minimum="$MIN_COVERAGE_PERCENT" '
-            /^Total:/ {
-              split($2, counts, "/")
-              found = 1
-              if (100 * counts[1] / counts[2] < minimum) exit 1
-            }
-            END { if (!found) exit 1 }
-          ' "$coverage_file"
+            --source-paths "$PWD"

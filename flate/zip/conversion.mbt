@@ -25,7 +25,6 @@ fn UInt64::to_int_checked(self : UInt64) -> Int raise ZipError {
 
 ///|
 /// Converts an `Int` to `UInt`, raising when the value is negative.
-#coverage.skip
 fn Int::to_uint_checked(self : Int) -> UInt raise ZipError {
   guard self >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: negative u32 value")
@@ -35,7 +34,6 @@ fn Int::to_uint_checked(self : Int) -> UInt raise ZipError {
 
 ///|
 /// Converts an `Int` to `UInt64`, raising when the value is negative.
-#coverage.skip
 fn Int::to_uint64_checked(self : Int) -> UInt64 raise ZipError {
   guard self >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: negative u64 value")

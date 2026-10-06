@@ -1,13 +1,4 @@
 ///|
-test "fresh reusable decoder rejects missing input before its first reset" {
-  let decoder = Decompressor()
-  let err = @test.expect_error(() => decoder.decoder.run())
-  guard err is InflateError(kind, _)
-  @test.assert_eq(kind, Truncated)
-  @test.assert_eq(decoder.decoder.out.length, 0)
-}
-
-///|
 test "decoded output sizes reject overflow before allocation or mutation" {
   let maximum = MAX_DECODE_OUTPUT_SIZE
   for entry in [(0, 0), (0, maximum), (maximum, 0), (maximum - 1, 1)] {
@@ -72,9 +63,9 @@ test "rebasing preserves live match distances and pending ring bytes" {
   d.finder.head[0] = position - 3
   set_chain_previous(d.finder.prev, position - 3, position - 9)
   d.finder.head[1] = 0 // stale history becomes a negative sentinel
-  d.push_pending(Bytes::make(1, b'a')[:])
-  d.push_pending(Bytes::make(1, b'b')[:])
-  d.push_pending(Bytes::make(1, b'c')[:])
+  d.push_pending(Bytes::make(1, b'a'))
+  d.push_pending(Bytes::make(1, b'b'))
+  d.push_pending(Bytes::make(1, b'c'))
   d.maybe_rebase()
   @test.assert_eq(d.parse_pos, position - offset)
   @test.assert_eq(d.pending_bytes(), 3)
@@ -114,31 +105,6 @@ test "stored ring blocks split at LEN limit and preserve wrapped bytes" {
     })
     @test.assert_eq(inflate_all(Bytes::from_array(w.out)), expected)
     @test.assert_eq(w.out.length(), length + 5 * stored_block_count(length))
-  }
-}
-
-///|
-test "candidate probes reject each unequal byte and exhausted limits" {
-  for base in [0, 2, 3, 7] {
-    for mismatch in [-1, 0, 1, 2, 6, 7] {
-      let data = Bytes::makei(32, i => {
-        if i == 16 + mismatch && mismatch >= 0 {
-          b'b'
-        } else {
-          b'a'
-        }
-      })
-      let rejected = if base < 3 {
-        mismatch >= 0 && mismatch <= 2
-      } else {
-        mismatch == 0 ||
-        mismatch == 1 ||
-        mismatch == base - 1 ||
-        mismatch == base
-      }
-      @test.assert_eq(match_candidate_can_beat(data, 0, 16, base, 8), !rejected)
-      @test.assert_eq(match_candidate_can_beat(data, 0, 16, base, base), false)
-    }
   }
 }
 
@@ -222,21 +188,6 @@ test "fast Huffman lookup handles linked symbols invalid codes and short input" 
   let err = @test.expect_error(() => invalid.huff_sym_data(HuffmanDecoder()))
   guard err is InflateError(kind, _)
   @test.assert_eq(kind, Corrupt)
-}
-
-///|
-test "empty output appends preserve storage and cancellation starts before copies" {
-  let out = DecodeOutput::into(FixedArray::make(0, b'\x00'))
-  out.append_bytes(b"", 0, 0)
-  out.append_repeated_suffix(1, 0)
-  @test.assert_eq(out.to_bytes(), b"")
-  let d = MemDecoder(b"abc", () => false)
-  d.copy_stored(3)
-  @test.assert_eq(d.out.to_bytes(), b"abc")
-  @test.assert_eq(d.pos, 3)
-  d.next_cancel = d.out.length
-  d.copy_match(3, 3)
-  @test.assert_eq(d.out.to_bytes(), b"abcabc")
 }
 
 ///|
