@@ -8,9 +8,8 @@ pub(all) enum Compression {
 ///|
 /// Resource bounds applied to a bounded read. Every field is a ceiling in
 /// bytes (or, for `max_entries`, a count); `ReadLimits()` imposes no
-/// limits. `max_preserved_source_bytes` bounds the raw local/central records
-/// retained in memory so a byte-preserving rewrite cannot be weaponized as an
-/// unbounded retention bomb.
+/// limits. `max_preserved_source_bytes` bounds the complete source
+/// retained for byte-preserving rewrites, including prefixes and gaps.
 #valtype
 pub struct ReadLimits {
   max_package_bytes : Int
@@ -44,8 +43,8 @@ pub fn ReadLimits::ReadLimits(
 /// Raw local and central directory records captured from a read, kept so an
 /// unchanged entry can be re-emitted byte-for-byte without re-encoding.
 priv struct SourceRecord {
-  local_record : Bytes
-  central_record : Bytes
+  local_record : BytesView
+  central_record : BytesView
   central_zip64_offset_position : Int?
 }
 
@@ -90,7 +89,7 @@ pub fn Entry::crc32(self : Entry) -> UInt {
 }
 
 ///|
-/// A read-only view of the decompressed payload.
+/// Whether the entry uses a trailing data descriptor for its CRC and sizes.
 pub fn Entry::data_descriptor(self : Entry) -> Bool {
   self.data_descriptor
 }
@@ -100,9 +99,9 @@ pub fn Entry::data_descriptor(self : Entry) -> Bool {
 /// can re-emit the trailer (with patched counts/sizes/offsets) instead of
 /// regenerating it.
 priv struct TrailerTemplate {
-  classic_end_record : Bytes
-  zip64_end_record : Bytes?
-  zip64_locator : Bytes?
+  classic_end_record : BytesView
+  zip64_end_record : BytesView?
+  zip64_locator : BytesView?
 }
 
 ///|
@@ -112,12 +111,13 @@ pub struct Archive {
   priv entries : Array[Entry]
   priv mut comment : Bytes
   priv mut trailer : TrailerTemplate?
+  priv mut original : Bytes?
 }
 
 ///|
 /// Create an empty archive.
 pub fn Archive::Archive() -> Archive {
-  { entries: [], comment: b"", trailer: None, }
+  { entries: [], comment: b"", trailer: None, original: None, }
 }
 
 ///|
@@ -134,6 +134,7 @@ pub fn Archive::add(
   data_descriptor? : Bool = false,
 ) -> Unit {
   let data = data.to_owned()
+  self.original = None
   self.entries.push({
     name,
     data,
@@ -160,6 +161,7 @@ pub fn Archive::replace(
   guard self.entries.search_by(entry => entry.name()[:] == name) is Some(index) else {
     return false
   }
+  self.original = None
   let entry = self.entries[index]
   let data = data.to_owned()
   self.entries[index] = {
@@ -181,6 +183,7 @@ pub fn Archive::remove(self : Archive, name : StringView) -> Bool {
   guard self.entries.search_by(entry => entry.name()[:] == name) is Some(index) else {
     return false
   }
+  self.original = None
   ignore(self.entries.remove(index))
   true
 }
@@ -212,6 +215,7 @@ pub fn Archive::comment(self : Archive) -> BytesView {
 /// end-record template, so a later byte-preserving write regenerates the
 /// trailer with the new comment.
 pub fn Archive::set_comment(self : Archive, comment : BytesView) -> Unit {
+  self.original = None
   self.comment = comment.to_owned()
   self.trailer = None
 }
@@ -226,5 +230,6 @@ pub fn Archive::clone(self : Archive) -> Archive {
     entries: self.entries.copy(),
     comment: self.comment,
     trailer: self.trailer,
+    original: self.original,
   }
 }

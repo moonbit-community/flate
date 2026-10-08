@@ -37,47 +37,6 @@ fn u32_be(data : BytesView, off : Int) -> UInt {
 }
 
 ///|
-/// Inflate a complete raw DEFLATE payload and require the inflater to consume
-/// every byte. `inflate_all` intentionally accepts a DEFLATE prefix, which is
-/// useful to some callers but would let bytes hide between a zlib body and its
-/// Adler-32 trailer.
-fn inflate_exact(input : BytesView) -> Bytes raise ZlibError {
-  let inf = @flate.Inflater()
-  let scratch = FixedArray::make(32768, b'\x00')
-  let out : Array[Byte] = []
-  let mut pos = 0
-  for ;; {
-    let status = inf.step_into(input[pos:], scratch) catch {
-      InflateError(_, message) =>
-        raise ZlibError(
-          InvalidDeflate,
-          "zlib: invalid DEFLATE stream: \{message}",
-        )
-    }
-    let consumed = inf.last_consumed()
-    let produced = inf.last_produced()
-    pos = pos + consumed
-    out.append(scratch[:produced])
-    match status {
-      Done => {
-        if pos != input.length() {
-          raise ZlibError(
-            TrailingData,
-            "zlib: data between DEFLATE stream and trailer",
-          )
-        }
-        return Bytes::from_array(out)
-      }
-      NeedMoreOutput => continue
-      NeedMoreInput =>
-        // The complete payload is already visible. Retrying the same suffix
-        // cannot make progress because Inflater rewinds an incomplete unit.
-        raise ZlibError(Truncated, "zlib: truncated DEFLATE stream")
-    }
-  }
-}
-
-///|
 /// Wrap a raw DEFLATE stream `deflated` of `input` in the zlib header/trailer.
 fn zlib_frame(input : BytesView, deflated : Bytes) -> Bytes {
   let out = @buffer.Buffer()
@@ -145,7 +104,16 @@ pub fn decompress(input : BytesView) -> Bytes raise ZlibError {
       "zlib: preset dictionary required (use the streaming Decoder)",
     )
   }
-  let out = inflate_exact(input[2:n - 4])
+  let out = @flate.inflate_exact(input[2:n - 4]) catch {
+    InflateError(Truncated, _) =>
+      raise ZlibError(Truncated, "zlib: truncated DEFLATE stream")
+    InflateError(TrailingData, _) =>
+      raise ZlibError(
+        TrailingData,
+        "zlib: data between DEFLATE stream and trailer",
+      )
+    InflateError(_, message) => raise ZlibError(InvalidDeflate, message)
+  }
   guard @checksum.adler32(out) == u32_be(input, n - 4) else {
     raise ZlibError(ChecksumMismatch, "zlib: Adler-32 mismatch")
   }

@@ -513,7 +513,7 @@ fn write_preserved_trailer(
 /// carrying ZIP64 sentinels are left untouched.
 fn write_preserved_classic_end_record(
   out : Output,
-  classic : Bytes,
+  classic : BytesView,
   total_entries : Int,
   central_size : Int,
   central_offset : Int,
@@ -673,13 +673,13 @@ fn prepare_archive(
 fn write_directory(
   out : Output,
   archive : Archive,
-  order : FixedArray[Int],
+  positions : FixedArray[Int],
   plans : Array[EntryPlan],
   preserve : Bool,
 ) -> Unit raise ZipError {
-  for position in 0..<order.length() {
-    let entry = archive.entries[order[position]]
-    let plan = plans[position]
+  for index in 0..<archive.entries.length() {
+    let entry = archive.entries[index]
+    let plan = plans[positions[index]]
     if preserve && entry.source is Some(source) {
       write_preserved_central_record(out, source, plan.local_offset)
     } else {
@@ -738,64 +738,6 @@ fn write_trailer(
 }
 
 ///|
-/// A pristine rewrite needs only record lengths and patched offsets. Avoid
-/// allocating a payload/name plan for every entry when no encoding is needed.
-fn write_pristine_archive(
-  archive : Archive,
-  order : FixedArray[Int],
-  max_output : Int?,
-) -> Bytes? raise ZipError {
-  for entry in archive.entries {
-    guard entry.source is Some(_) else { return None }
-  }
-  let counting = Output::counting(max_output)
-  for index in order {
-    if archive.entries[index].source is Some(source) {
-      counting.count(source.local_record.length())
-    }
-  }
-  let central_offset = counting.size
-  for index in order {
-    if archive.entries[index].source is Some(source) {
-      counting.count(source.central_record.length())
-    }
-  }
-  let central_size = counting.size - central_offset
-  write_trailer(
-    counting,
-    archive,
-    archive.entries.length(),
-    central_size,
-    central_offset,
-    true,
-    false,
-  )
-  let out = Output::writing(None, size_hint=counting.size)
-  for index in order {
-    if archive.entries[index].source is Some(source) {
-      out.write_bytes(source.local_record)
-    }
-  }
-  let mut local_offset = 0
-  for index in order {
-    if archive.entries[index].source is Some(source) {
-      write_preserved_central_record(out, source, local_offset)
-      local_offset += source.local_record.length()
-    }
-  }
-  write_trailer(
-    out,
-    archive,
-    archive.entries.length(),
-    central_size,
-    central_offset,
-    true,
-    false,
-  )
-  Some(out.finish())
-}
-
-///|
 /// Prepare once, then serialize into an exactly sized buffer. The output limit
 /// is checked before allocating the final archive; no entry is recompressed.
 fn write_impl(
@@ -805,17 +747,25 @@ fn write_impl(
   max_output : Int?,
   fast_store : Bool,
 ) -> Bytes raise ZipError {
+  if preserve && archive.original is Some(bytes) {
+    let counting = Output::counting(max_output)
+    counting.count(bytes.length())
+    let out = Output::writing(None, size_hint=bytes.length())
+    out.write_bytes(bytes)
+    return out.finish()
+  }
   let order = archive_local_order(archive)
-  if preserve &&
-    write_pristine_archive(archive, order, max_output) is Some(bytes) {
-    return bytes
+  // Map central-directory order to the plans prepared in local-record order.
+  let positions = FixedArray::make(order.length(), 0)
+  for position in 0..<order.length() {
+    positions[order[position]] = position
   }
   let counting = Output::counting(max_output)
   let plans = prepare_archive(
     counting, archive, order, preserve, level, fast_store,
   )
   let central_offset = counting.size
-  write_directory(counting, archive, order, plans, preserve)
+  write_directory(counting, archive, positions, plans, preserve)
   let central_size = counting.size - central_offset
   write_trailer(
     counting,
@@ -847,7 +797,7 @@ fn write_impl(
       }
     }
   }
-  write_directory(out, archive, order, plans, preserve)
+  write_directory(out, archive, positions, plans, preserve)
   write_trailer(
     out,
     archive,
@@ -865,7 +815,10 @@ fn write_impl(
 ///
 /// By default every entry is encoded fresh. With `preserve=true`, unchanged
 /// entries retain their original records; a pristine archive round-trips
-/// byte-for-byte. Replaced and newly added entries are encoded normally.
+/// byte-for-byte, including prefixes, gaps and directory ordering. After any
+/// edit, records are rebuilt in their respective local and directory orders;
+/// bytes outside records (such as prefixes and gaps) are not retained in the
+/// output. Replaced and newly added entries are encoded normally.
 /// `level` is clamped to 0-9. `fast_store` opts into a speed/ratio heuristic.
 /// If `max_output_bytes` is supplied, the output is sized before allocation
 /// and an oversized archive raises `LimitExceeded(OutputBytes, ...)`.

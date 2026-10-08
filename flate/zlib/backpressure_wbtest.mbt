@@ -25,16 +25,7 @@ test "zlib wrappers bound accepted input under output backpressure" {
   assert_true(decoder.pending.length() <= DECODER_INPUT_LIMIT)
   assert_false(decoder.ending)
   let mut input_pos = dec_consumed
-  let mut saw_consumed_prefix = false
-  let mut saw_fresh_window = false
   for _ in 0..<8 {
-    if decoder.pending.length() == DECODER_INPUT_LIMIT {
-      if decoder.pending_pos > 0 {
-        saw_consumed_prefix = true
-      } else {
-        saw_fresh_window = true
-      }
-    }
     let status = decoder.step(
       compressed[input_pos:],
       no_output.mut_view(),
@@ -44,9 +35,9 @@ test "zlib wrappers bound accepted input under output backpressure" {
     let produced = decoder.last_produced()
     assert_true(status is NeedMoreOutput)
     @test.assert_eq(produced, 0)
+    @test.assert_eq(consumed, 0)
+    assert_true(decoder.pending.length() <= DECODER_INPUT_LIMIT)
     input_pos = input_pos + consumed
   }
-  assert_true(saw_consumed_prefix)
-  assert_true(saw_fresh_window)
   assert_true(input_pos < compressed.length())
 }

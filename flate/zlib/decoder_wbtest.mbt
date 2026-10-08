@@ -1,6 +1,6 @@
 ///|
 /// Successful completion must retain only the cached transport suffix, not the
-/// consumed zlib stream or the immutable inflater snapshot.
+/// consumed zlib stream.
 test "zlib completion releases consumed input and caches read-ahead" {
   let stream = compress(b"release the completed zlib stream")
   let suffix = b"NEXT-FRAME"
@@ -19,8 +19,6 @@ test "zlib completion releases consumed input and caches read-ahead" {
   @test.assert_eq(consumed, stream.length() + suffix.length())
   @test.assert_eq(decoder.pending.length(), 0)
   @test.assert_eq(decoder.pending_pos, 0)
-  @test.assert_eq(decoder.body_input, b"")
-  @test.assert_eq(decoder.body_pos, 0)
   @test.assert_eq(decoder.unused, suffix)
   @test.assert_eq(decoder.unused_input(), suffix)
   @test.assert_eq(decoder.unused_input(), suffix)
@@ -28,7 +26,7 @@ test "zlib completion releases consumed input and caches read-ahead" {
 
 ///|
 /// The failure latch is checked before buffering input or advancing either the
-/// wrapper cursor or the immutable body snapshot cursor.
+/// wrapper cursor.
 test "zlib failed state freezes decoder cursors" {
   let malformed : Bytes = [0x78, 0x01, 0x07, 0x00, 0x00, 0x00, 0x01]
   let decoder = Decoder()
@@ -38,8 +36,6 @@ test "zlib failed state freezes decoder cursors" {
   })
   let pending_pos = decoder.pending_pos
   let pending_length = decoder.pending.length()
-  let body_pos = decoder.body_pos
-  let body_input = decoder.body_input
   let ZlibError(repeated_kind, repeated_error) = @test.expect_error(() => {
     decoder.step(b"must not be accepted", output.mut_view())
   })
@@ -48,6 +44,4 @@ test "zlib failed state freezes decoder cursors" {
   @test.assert_eq(repeated_error, first_error)
   @test.assert_eq(decoder.pending_pos, pending_pos)
   @test.assert_eq(decoder.pending.length(), pending_length)
-  @test.assert_eq(decoder.body_pos, body_pos)
-  @test.assert_eq(decoder.body_input, body_input)
 }

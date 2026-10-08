@@ -13,7 +13,7 @@ priv struct EntryMeta {
   compressed_size : Int
   uncompressed_size : Int
   local_offset : Int
-  central_record : Bytes
+  central_record : BytesView
   central_zip64_offset_position : Int?
   data_descriptor : Bool
 }
@@ -149,40 +149,6 @@ fn inflate_entry(
       )
     err => raise wrap_inflate_error(err)
   }
-}
-
-///|
-/// Tracks the raw source records retained for byte-preserving rewrites against
-/// a caller-supplied ceiling.
-priv struct SourceBudget {
-  limit : Int
-  mut used : Int
-}
-
-///|
-fn SourceBudget::SourceBudget(limit : Int) -> SourceBudget {
-  { limit, used: 0, }
-}
-
-///|
-fn SourceBudget::charge(
-  self : SourceBudget,
-  amount : Int,
-) -> Unit raise ZipError {
-  guard amount >= 0 else {
-    raise ZipError(UnsupportedFeature, "zip: negative preserved source size")
-  }
-  guard amount <= self.limit - self.used else {
-    raise ZipError(
-      LimitExceeded(
-        PreservedSourceBytes,
-        self.limit,
-        (self.used + amount).min(0x7fff_ffff),
-      ),
-      "zip: preserved source records exceed their limit",
-    )
-  }
-  self.used = self.used + amount
 }
 
 ///|
@@ -386,13 +352,10 @@ fn resolve_zip64_field(
 }
 
 ///|
-/// Parse one central-directory record into `EntryMeta`, enforcing the
-/// preserved-source ceiling.
+/// Parse one central-directory record into `EntryMeta`.
 fn parse_central_record(
   central_bytes : BytesView,
   central_reader : Cursor,
-  source_budget : SourceBudget,
-  cancelled : () -> Bool,
 ) -> EntryMeta raise ZipError {
   let central_record_start = central_reader.pos
   guard central_reader.read_u32_raw() == CENTRAL_HEADER_SIG else {
@@ -425,11 +388,7 @@ fn parse_central_record(
       "zip: multi-disk archives are not supported",
     )
   }
-  source_budget.charge(central_reader.pos - central_record_start)
-  let central_record = copy_cancellable(
-    central_bytes[central_record_start:central_reader.pos],
-    cancelled,
-  )
+  let central_record = central_bytes[central_record_start:central_reader.pos]
   let need_uncomp = uncomp_size_raw == MAX_U32
   let need_comp = comp_size_raw == MAX_U32
   let need_offset = local_offset_raw == MAX_U32
@@ -463,12 +422,11 @@ fn parse_central_record(
 
 ///|
 /// Parse every central-directory record into `EntryMeta`, enforcing the entry
-/// count and preserved-source ceilings.
+/// count and decompressed-size ceilings.
 fn parse_central_directory(
   bytes : BytesView,
   eocd : EndOfCentral,
   limits : ReadLimits,
-  source_budget : SourceBudget,
   cancelled : () -> Bool,
 ) -> Array[EntryMeta] raise ZipError {
   let central_bytes = bytes[eocd.central_offset:eocd.central_boundary]
@@ -480,9 +438,7 @@ fn parse_central_directory(
     if entry_index % 64 == 0 {
       check_cancelled(cancelled)
     }
-    let meta = parse_central_record(
-      central_bytes, central_reader, source_budget, cancelled,
-    )
+    let meta = parse_central_record(central_bytes, central_reader)
     check_sizes(
       meta.uncompressed_size,
       limits.max_entry_uncompressed_bytes,
@@ -502,34 +458,20 @@ fn parse_central_directory(
 }
 
 ///|
-/// Capture the raw end-of-archive records (classic EOCD plus any ZIP64 EOCD and
-/// locator) for byte-preserving rewrites, charging the preserved-source budget.
-fn build_trailer(
-  bytes : BytesView,
-  eocd : EndOfCentral,
-  source_budget : SourceBudget,
-  cancelled : () -> Bool,
-) -> TrailerTemplate raise ZipError {
+/// Retain views of the original trailer for rewrites of edited archives.
+fn build_trailer(bytes : BytesView, eocd : EndOfCentral) -> TrailerTemplate {
   guard eocd.zip64_eocd_offset is Some(zip64_offset) else {
-    source_budget.charge(bytes.length() - eocd.eocd_offset)
     return {
-      classic_end_record: copy_cancellable(bytes[eocd.eocd_offset:], cancelled),
+      classic_end_record: bytes[eocd.eocd_offset:],
       zip64_end_record: None,
       zip64_locator: None,
     }
   }
   let locator_offset = eocd.eocd_offset - 20
-  source_budget.charge(
-    locator_offset - zip64_offset + 20 + (bytes.length() - eocd.eocd_offset),
-  )
   {
-    classic_end_record: copy_cancellable(bytes[eocd.eocd_offset:], cancelled),
-    zip64_end_record: Some(
-      copy_cancellable(bytes[zip64_offset:locator_offset], cancelled),
-    ),
-    zip64_locator: Some(
-      copy_cancellable(bytes[locator_offset:eocd.eocd_offset], cancelled),
-    ),
+    classic_end_record: bytes[eocd.eocd_offset:],
+    zip64_end_record: Some(bytes[zip64_offset:locator_offset]),
+    zip64_locator: Some(bytes[locator_offset:eocd.eocd_offset]),
   }
 }
 
@@ -543,12 +485,10 @@ fn decode_entry(
   central_offset : Int,
   limits : ReadLimits,
   actual_total : Int,
-  source_budget : SourceBudget,
   cancelled : () -> Bool,
 ) -> Entry raise ZipError {
   check_cancelled(cancelled)
   let record = read_local_record(bytes, meta, central_offset)
-  source_budget.charge(record.end - meta.local_offset)
   let entry_limit = limits.max_entry_uncompressed_bytes
   let total_limit = limits.max_total_uncompressed_bytes
   let remaining = total_limit - actual_total
@@ -607,10 +547,7 @@ fn decode_entry(
     raise ZipError(ChecksumMismatch, "zip: CRC-32 mismatch")
   }
   let source = Some({
-    local_record: copy_cancellable(
-      bytes[meta.local_offset:record.end],
-      cancelled,
-    ),
+    local_record: bytes[meta.local_offset:record.end],
     central_record: meta.central_record,
     central_zip64_offset_position: meta.central_zip64_offset_position,
   })
@@ -633,14 +570,25 @@ fn read_impl(
   cancelled : () -> Bool,
 ) -> Archive raise ZipError {
   let eocd = parse_end_of_central(bytes, limits, cancelled)
-  let source_budget = SourceBudget(limits.max_preserved_source_bytes)
-  let metas = parse_central_directory(
-    bytes, eocd, limits, source_budget, cancelled,
-  )
+  guard bytes.length() <= limits.max_preserved_source_bytes else {
+    raise ZipError(
+      LimitExceeded(
+        PreservedSourceBytes,
+        limits.max_preserved_source_bytes,
+        bytes.length(),
+      ),
+      "zip: preserved source exceeds its limit",
+    )
+  }
+  // Own exactly the supplied view once. All record views share this copy.
+  let original = copy_cancellable(bytes, cancelled)
+  let bytes = original[:]
+  let metas = parse_central_directory(bytes, eocd, limits, cancelled)
   let archive = {
+    original: Some(original),
     entries: [],
     comment: eocd.comment,
-    trailer: Some(build_trailer(bytes, eocd, source_budget, cancelled)),
+    trailer: Some(build_trailer(bytes, eocd)),
   }
   let mut actual_total = 0
   for meta in metas {
@@ -650,7 +598,6 @@ fn read_impl(
       eocd.central_offset,
       limits,
       actual_total,
-      source_budget,
       cancelled,
     )
     actual_total = actual_total + entry.data().length()
@@ -663,7 +610,7 @@ fn read_impl(
 ///|
 /// Read a ZIP archive from `bytes`, decoding every entry. `limits` bounds the
 /// package size, entry count, per-entry and total decompressed bytes, and the
-/// source records retained for byte-preserving rewrites; `cancelled` is polled
+/// complete source retained for byte-preserving rewrites; `cancelled` is polled
 /// across parsing, decoding, and CRC-32 verification. Every decoded entry must
 /// match its stored CRC-32. Failures carry a stable `ZipErrorKind`
 /// plus a diagnostic.

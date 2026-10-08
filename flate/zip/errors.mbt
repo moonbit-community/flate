@@ -1,7 +1,7 @@
 ///|
 /// Which bounded resource was exceeded during a bounded read or write. The
-/// payload-related kinds guard against decompression bombs; `PreservedSource`
-/// bounds the raw local/central records retained for byte-preserving rewrites;
+/// payload-related kinds guard against decompression bombs; `PreservedSourceBytes`
+/// bounds the complete source retained for byte-preserving rewrites;
 /// `OutputBytes` bounds a serialization's total size.
 pub(all) enum LimitKind {
   PackageBytes

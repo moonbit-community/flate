@@ -27,6 +27,7 @@ pub fn Decoder::is_finished(Self) -> Bool
 pub fn Decoder::last_consumed(Self) -> Int
 pub fn Decoder::last_produced(Self) -> Int
 pub fn Decoder::step(Self, BytesView, MutArrayView[Byte], end? : Bool) -> @flate.Status raise ZlibError
+pub fn Decoder::step_into(Self, BytesView, FixedArray[Byte], end? : Bool) -> @flate.Status raise ZlibError
 pub fn Decoder::unused_input(Self) -> Bytes
 
 pub struct Encoder {

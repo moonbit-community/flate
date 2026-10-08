@@ -244,13 +244,13 @@ fn stream_central_record(
 pub fn Writer::add(
   self : Writer,
   name : String,
-  data : Bytes,
+  data : BytesView,
   compression? : Compression = Deflate,
 ) -> Unit raise {
   self.require_ready()
   let name = stream_name(name)
   let crc = @checksum.crc32(data)
-  let compressed = match compression {
+  let compressed : BytesView = match compression {
     Store => data
     Deflate => {
       let compressor = self.compressor.unwrap_or_else(() => {

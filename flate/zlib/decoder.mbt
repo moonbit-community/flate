@@ -14,12 +14,9 @@ priv enum DecMode {
 pub struct Decoder {
   priv inf : @flate.Inflater
   priv adler : @checksum.Adler32 // of the decompressed output
-  priv mut pending : Array[Byte] // buffered input; consumed prefix kept until compacted
-  priv mut pending_pos : Int // first unconsumed byte in `pending`
-  // Stable snapshot passed to Inflater. It is retained across output
-  // backpressure, so draining one output byte never recopies all pending input.
-  priv mut body_input : Bytes
-  priv mut body_pos : Int
+  priv mut pending : BytesView
+  priv mut pending_pos : Int
+  priv mut borrowed_input : Bool
   priv mut unused : Bytes // cached read-ahead suffix after successful completion
   priv mut ending : Bool // `end=true` is sticky across output suspension
   priv mut mode : DecMode
@@ -38,10 +35,9 @@ pub fn Decoder::Decoder(dictionary? : BytesView) -> Decoder {
   {
     inf: Inflater(),
     adler: Adler32(),
-    pending: [],
+    pending: b"",
     pending_pos: 0,
-    body_input: b"",
-    body_pos: 0,
+    borrowed_input: false,
     unused: b"",
     ending: false,
     mode: ZHeader,
@@ -77,10 +73,9 @@ pub fn Decoder::last_produced(self : Decoder) -> Int {
 /// Bytes accepted by `step` beyond the end of the completed zlib stream.
 ///
 /// A buffered sync reader or async transport commonly delivers the zlib
-/// trailer and bytes from the next protocol frame in one read. `step` accepts
-/// that whole view so it can preserve its streaming/backpressure contract;
-/// after `Done`, this method returns the read-ahead suffix instead of losing
-/// it. It is empty before completion and when no suffix was buffered.
+/// trailer and bytes from the next protocol frame in one read. After `Done`,
+/// this method returns the accepted read-ahead suffix. Any unaccepted suffix
+/// remains with the caller, as reported by `last_consumed()`. It is empty before completion and when no suffix was buffered.
 pub fn Decoder::unused_input(self : Decoder) -> Bytes {
   guard self.mode is ZFinished else { return b"" }
   self.unused
@@ -94,56 +89,65 @@ fn Decoder::pending_length(self : Decoder) -> Int {
 
 ///|
 /// Enter the successful terminal state while retaining only transport
-/// read-ahead. All consumed compressed storage and the inflater snapshot can
-/// be released after the Adler-32 trailer has been verified.
+/// read-ahead after the Adler-32 trailer has been verified.
 fn Decoder::finish_stream(self : Decoder) -> Unit {
-  self.unused = Bytes::from_array(self.pending[self.pending_pos:])
-  self.pending = []
+  self.unused = copy_input(self.pending[self.pending_pos:])
+  self.pending = b""
   self.pending_pos = 0
-  self.body_input = b""
-  self.body_pos = 0
+  self.borrowed_input = false
   self.mode = ZFinished
 }
 
 ///|
-/// Reclaim a consumed prefix only when doing so is free (the buffer is empty)
-/// or removes at least half a non-trivial buffer. This makes prefix removal
-/// amortized linear rather than copying the remaining suffix on every step.
-fn Decoder::compact_pending(self : Decoder) -> Unit {
-  guard self.pending_pos != self.pending.length() else {
-    self.pending.clear()
+// Borrow only when no older input must be joined. Residual input is owned
+// before the public step returns, so a small suffix never retains a caller's
+// arbitrarily large backing allocation between calls.
+fn Decoder::buffer_input(self : Decoder, input : BytesView) -> Unit {
+  guard input.length() != 0 else { return }
+  if self.pending_length() == 0 {
+    self.pending = input
     self.pending_pos = 0
+    self.borrowed_input = true
+  } else {
+    self.pending = Bytes::from_iter(self.pending.iter().concat(input.iter()))
+    self.borrowed_input = false
+  }
+}
+
+///|
+fn Decoder::detach_input(self : Decoder) -> Unit {
+  guard self.borrowed_input else { return }
+  self.pending = copy_input(self.pending[self.pending_pos:])
+  self.pending_pos = 0
+  self.borrowed_input = false
+}
+
+///|
+fn Decoder::compact_for_input(self : Decoder) -> Unit {
+  guard self.pending_pos != 0 else { return }
+  self.pending = self.pending[self.pending_pos:]
+  self.pending_pos = 0
+}
+
+///|
+fn Decoder::advance(self : Decoder, k : Int) -> Unit {
+  guard k > 0 else { return }
+  self.pending_pos = self.pending_pos + k
+  guard self.pending_pos < self.pending.length() else {
+    self.pending = b""
+    self.pending_pos = 0
+    self.borrowed_input = false
     return
   }
   let worth_compacting = self.pending_pos >= 4096 &&
-    self.pending_pos * 2 >= self.pending.length()
+    self.pending_pos >= self.pending_length()
   guard worth_compacting else { return }
-  self.pending = self.pending[self.pending_pos:].to_owned()
-  self.pending_pos = 0
+  self.compact_for_input()
 }
 
 ///|
-/// Force prefix reclamation before admitting another bounded input window.
-fn Decoder::compact_for_input(self : Decoder) -> Unit {
-  guard self.pending_pos != 0 else { return }
-  self.pending = self.pending[self.pending_pos:].to_owned()
-  self.pending_pos = 0
-}
-
-///|
-/// Consume bytes parsed by the zlib wrapper itself.
-fn Decoder::consume_pending(self : Decoder, count : Int) -> Unit {
-  self.pending_pos = self.pending_pos + count
-  self.compact_pending()
-}
-
-///|
-/// Snapshot every currently available body byte. New input may be appended to
-/// `pending` without invalidating this immutable prefix; it is incorporated
-/// only if Inflater actually asks for more input.
-fn Decoder::stage_body_input(self : Decoder) -> Unit {
-  self.body_input = Bytes::from_array(self.pending[self.pending_pos:])
-  self.body_pos = 0
+fn Decoder::pending_view(self : Decoder) -> BytesView {
+  self.pending[self.pending_pos:]
 }
 
 ///|
@@ -198,42 +202,27 @@ fn Decoder::read_zheader(self : Decoder) -> Bool raise ZlibError {
     // validated. Preloading it in `new` would incorrectly let a stream
     // without FDICT refer to caller-supplied history.
     self.inf.reset(dictionary=dict[:])
-    self.consume_pending(6)
+    self.advance(6)
     self.mode = ZBody
     return false
   }
-  self.consume_pending(2)
+  self.advance(2)
   self.mode = ZBody
   false
 }
 
 ///|
-/// React to the inner inflater's status after one `ZBody` step, folding newly
-/// available input into a fresh snapshot when needed. Returns `None` when the
-/// decoder can keep going, or the status the step must suspend with.
+/// React to the raw inflater's status after a body step.
 fn Decoder::after_inflate_step(
   self : Decoder,
   st : @flate.Status,
 ) -> @flate.Status? raise ZlibError {
   match st {
     Done => {
-      // The unconsumed part of the body snapshot starts with the zlib
-      // trailer and remains in `pending` at `pending_pos`.
-      self.body_input = b""
-      self.body_pos = 0
-      self.compact_pending()
       self.mode = ZTrailer
       None
     }
     NeedMoreInput => {
-      let cached = self.body_input.length() - self.body_pos
-      guard self.pending_length() <= cached else {
-        // Input appended while an older snapshot was being drained is now
-        // needed to complete an atomic Inflater unit. Rebuild once with the
-        // unconsumed suffix plus all newly available bytes.
-        self.stage_body_input()
-        return None
-      }
       guard !self.ending else {
         raise ZlibError(Truncated, "zlib: truncated DEFLATE stream")
       }
@@ -256,7 +245,7 @@ fn Decoder::read_ztrailer(self : Decoder) -> Bool raise ZlibError {
   guard self.adler.finish() == self.u32_be(0) else {
     raise ZlibError(ChecksumMismatch, "zlib: Adler-32 mismatch")
   }
-  self.consume_pending(4)
+  self.advance(4)
   self.finish_stream()
   false
 }
@@ -265,7 +254,9 @@ fn Decoder::read_ztrailer(self : Decoder) -> Bool raise ZlibError {
 /// Run one decompression step. Buffers a bounded prefix of `input`, then decodes
 /// plaintext into `output`. Read the accepted and produced counts with
 /// `last_consumed()` and `last_produced()`; drop only
-/// `input[:last_consumed()]`. Output backpressure may leave a suffix unaccepted.
+/// `input[:last_consumed()]`. Pending body input is drained before accepting
+/// more; output backpressure may leave a suffix unaccepted. Input is borrowed
+/// only during this call, and any retained suffix is copied.
 /// `end=true` becomes sticky after its complete view is consumed and turns
 /// incomplete headers, DEFLATE bodies, and trailers into `ZlibError` instead of
 /// another `NeedMoreInput`. If the final accepted view also contains bytes after
@@ -278,18 +269,45 @@ pub fn Decoder::step(
   output : MutArrayView[Byte],
   end? : Bool = false,
 ) -> @flate.Status raise ZlibError {
+  self.step_output(input, output, None, end~)
+}
+
+///|
+/// Decode into a fixed output array, updating the Adler-32 checksum in batches.
+/// Consumption, backpressure and EOF semantics match `step`. The output array
+/// is borrowed only for this call.
+pub fn Decoder::step_into(
+  self : Decoder,
+  input : BytesView,
+  output : FixedArray[Byte],
+  end? : Bool = false,
+) -> @flate.Status raise ZlibError {
+  self.step_output(input, output.mut_view(), Some(output), end~)
+}
+
+///|
+fn Decoder::step_output(
+  self : Decoder,
+  input : BytesView,
+  output : MutArrayView[Byte],
+  fixed_output : FixedArray[Byte]?,
+  end~ : Bool,
+) -> @flate.Status raise ZlibError {
   self.step_consumed = 0
   self.step_produced = 0
   if self.failure_kind is Some(kind) {
     raise ZlibError(kind, self.failure_message)
   }
-  self.step_active(input, output, end~) catch {
+  let result = self.step_active(input, output, fixed_output, end~) catch {
     ZlibError(kind, message) => {
+      self.detach_input()
       self.failure_kind = Some(kind)
       self.failure_message = message
       raise ZlibError(kind, message)
     }
   }
+  self.detach_input()
+  result
 }
 
 ///|
@@ -309,27 +327,42 @@ fn Decoder::step_active(
   self : Decoder,
   input : BytesView,
   output : MutArrayView[Byte],
+  fixed_output : FixedArray[Byte]?,
   end~ : Bool,
 ) -> @flate.Status raise ZlibError {
   // A terminal decoder must not claim input that it can no longer decode.
   if self.mode is ZFinished {
     return self.finish_step(Done, 0, 0)
   }
-  if !self.ending && self.pending.length() >= DECODER_INPUT_LIMIT {
-    self.compact_for_input()
-  }
-  let capacity = DECODER_INPUT_LIMIT - self.pending.length()
-  let consumed = if self.ending || capacity <= 0 {
-    0
-  } else {
-    input.length().min(capacity)
-  }
-  self.pending.push_iter(input[:consumed].iter())
-  if end && consumed == input.length() {
-    self.ending = true
-  }
+  let mut consumed = 0
+  let mut admitted = false
   let mut op = 0
   for ;; {
+    // Drain already accepted body input before admitting a fresh chunk. Once
+    // it is exhausted, accept and process the offered chunk in this same call.
+    if !admitted &&
+      (
+        !(self.mode is ZBody) ||
+        self.pending_length() == 0 ||
+        input.length() == 0
+      ) {
+      if !self.ending && self.pending.length() >= DECODER_INPUT_LIMIT {
+        self.compact_for_input()
+      }
+      let capacity = DECODER_INPUT_LIMIT - self.pending.length()
+      consumed = if self.ending || capacity <= 0 {
+        0
+      } else {
+        input.length().min(capacity)
+      }
+      if consumed > 0 {
+        self.buffer_input(input[:consumed])
+      }
+      if end && consumed == input.length() {
+        self.ending = true
+      }
+      admitted = true
+    }
     match self.mode {
       ZHeader => {
         guard !self.read_zheader() else {
@@ -337,20 +370,8 @@ fn Decoder::step_active(
         }
       }
       ZBody => {
-        // Refresh the body snapshot once the current one has been drained.
-        if self.body_pos == self.body_input.length() {
-          self.body_input = b""
-          self.body_pos = 0
-          self.compact_pending()
-          if self.pending_length() > 0 {
-            self.stage_body_input()
-          }
-        }
         let op_before = op
-        let st = self.inf.step(
-          self.body_input[self.body_pos:],
-          output.mut_view(start=op),
-        ) catch {
+        let st = self.inf.step(self.pending_view(), output.mut_view(start=op)) catch {
           InflateError(_, message) =>
             raise ZlibError(
               InvalidDeflate,
@@ -360,13 +381,20 @@ fn Decoder::step_active(
         let used = self.inf.last_consumed()
         let produced = self.inf.last_produced()
         if produced > 0 {
-          for i in 0..<produced {
-            self.adler.update_byte(output.at(op_before + i))
+          if fixed_output is Some(fixed) {
+            let bytes = unsafe_bytes_of_array(fixed)
+            self.adler.update(bytes[op_before:op_before + produced])
+          } else {
+            for i in 0..<produced {
+              self.adler.update_byte(output.at(op_before + i))
+            }
           }
         }
         op = op + produced
-        self.pending_pos = self.pending_pos + used
-        self.body_pos = self.body_pos + used
+        self.advance(used)
+        if st is NeedMoreInput && !admitted {
+          continue
+        }
         guard self.after_inflate_step(st) is Some(status) else { continue }
         return self.finish_step(status, consumed, op)
       }
@@ -378,4 +406,19 @@ fn Decoder::step_active(
       ZFinished => return self.finish_step(Done, consumed, op)
     }
   }
+}
+
+///|
+// Callers either transfer a fresh array or borrow the alias synchronously for
+// checksum calculation, before the output array can be written again.
+fn unsafe_bytes_of_array(output : FixedArray[Byte]) -> Bytes = "%identity"
+
+///|
+// BytesView::to_owned can share a full backing buffer. Retained input must be
+// independent even when the caller lends an entire reusable I/O buffer.
+fn copy_input(input : BytesView) -> Bytes {
+  guard input.length() != 0 else { return b"" }
+  let copy = FixedArray::make(input.length(), b'\x00')
+  copy.blit_from_bytes(0, input.data(), input.start_offset(), input.length())
+  unsafe_bytes_of_array(copy)
 }

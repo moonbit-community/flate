@@ -420,12 +420,6 @@ test "zip inflate_entry maps output-limit and corrupt-stream failures" {
 }
 
 ///|
-test "zip preserved-source budget rejects oversize charges" {
-  expect_zip_error(() => SourceBudget(10).charge(11))
-  expect_zip_error(() => SourceBudget(10).charge(-1))
-}
-
-///|
 fn classic_eocd(
   disk_no : Int,
   disk_start : Int,
@@ -628,7 +622,6 @@ fn eocd_for(
 
 ///|
 test "zip central-directory parsing rejects malformed records" {
-  let budget = SourceBudget(1000)
   let default_limits = ReadLimits()
   // Wrong central record signature.
   expect_zip_error(() => {
@@ -637,7 +630,6 @@ test "zip central-directory parsing rejects malformed records" {
         b"\x00\x00\x00\x00",
         eocd_for(1, 4, 4),
         default_limits,
-        budget,
         () => false,
       ),
     )
@@ -650,7 +642,6 @@ test "zip central-directory parsing rejects malformed records" {
         disk_record,
         eocd_for(1, disk_record.length(), disk_record.length()),
         default_limits,
-        budget,
         () => false,
       ),
     )
@@ -666,7 +657,6 @@ test "zip central-directory parsing rejects malformed records" {
         missing_uncomp,
         eocd_for(1, missing_uncomp.length(), missing_uncomp.length()),
         default_limits,
-        budget,
         () => false,
       ),
     )
@@ -680,7 +670,6 @@ test "zip central-directory parsing rejects malformed records" {
         missing_comp,
         eocd_for(1, missing_comp.length(), missing_comp.length()),
         default_limits,
-        budget,
         () => false,
       ),
     )
@@ -694,7 +683,6 @@ test "zip central-directory parsing rejects malformed records" {
         missing_offset,
         eocd_for(1, missing_offset.length(), missing_offset.length()),
         default_limits,
-        budget,
         () => false,
       ),
     )
@@ -707,7 +695,6 @@ test "zip central-directory parsing rejects malformed records" {
         good_record,
         eocd_for(1, good_record.length() + 3, good_record.length()),
         default_limits,
-        budget,
         () => false,
       ),
     )
@@ -716,7 +703,6 @@ test "zip central-directory parsing rejects malformed records" {
 
 ///|
 test "zip entry decode rejects oversized and mismatched payloads" {
-  let budget = SourceBudget(1000)
   // Stored entry larger than the per-entry limit.
   let big_store = local_record(
     0, 0, 0x11111111U, 10, 10, b"a.txt", b"", b"0123456789", b"",
@@ -730,7 +716,6 @@ test "zip entry decode rejects oversized and mismatched payloads" {
           100,
           ReadLimits(max_entry_uncompressed_bytes=5),
           0,
-          budget,
           () => false,
         ),
       )
@@ -749,7 +734,6 @@ test "zip entry decode rejects oversized and mismatched payloads" {
         100,
         ReadLimits(),
         0,
-        budget,
         () => false,
       ),
     )
@@ -767,7 +751,6 @@ test "zip entry decode rejects oversized and mismatched payloads" {
           100,
           ReadLimits(max_total_uncompressed_bytes=3),
           2,
-          budget,
           () => false,
         ),
       )
@@ -837,6 +820,7 @@ test "zip local-order sorts read-origin entries ahead of fresh ones" {
     entries: [archive.entries[2], archive.entries[0], archive.entries[1]],
     comment: b"",
     trailer: None,
+    original: None,
   }
   let reordered = archive_local_order(mixed)
   @test.assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
@@ -934,16 +918,7 @@ test "zip local name mismatch preserves UTF-8 error classification" {
     // Even identical invalid raw names must fail central-directory decoding.
     let central = central_record(0, 0, 0, 0x11111111U, 3, 3, name, b"", 0)
     expect_zip_kind(
-      () => {
-        ignore(
-          parse_central_record(
-            central,
-            Cursor(central, 0),
-            SourceBudget(0x7fff_ffff),
-            () => false,
-          ),
-        )
-      },
+      () => ignore(parse_central_record(central, Cursor(central, 0))),
       InvalidUtf8,
     )
   }

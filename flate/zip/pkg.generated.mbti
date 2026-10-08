@@ -67,7 +67,7 @@ pub struct Writer {
   // private fields
 }
 pub fn Writer::Writer((BytesView) -> Unit raise, level? : Int, fast_store? : Bool) -> Self
-pub fn Writer::add(Self, String, Bytes, compression? : Compression) -> Unit raise
+pub fn Writer::add(Self, String, BytesView, compression? : Compression) -> Unit raise
 pub fn Writer::begin_entry(Self, String, compression? : Compression, size? : UInt64) -> Unit raise
 pub fn Writer::end_entry(Self) -> Unit raise
 pub fn Writer::finish(Self, comment? : BytesView) -> Unit raise

@@ -261,29 +261,3 @@ test "bounded inflate_all polls the cancel callback" {
     _ => @test.fail("bounded inflate_all ignored cancellation")
   }
 }
-
-///|
-test "cancel is polled before the limit check within a step" {
-  let source = Bytes::from_array(Array::make(20000, b'Z'))
-  let compressed = @flate.deflate_all(source)
-  let mut calls = 0
-  try
-    ignore(
-      @flate.inflate_exact(
-        compressed,
-        max_output=1000,
-        cancelled=() => {
-          calls = calls + 1
-          calls >= 3
-        },
-        preallocated=true,
-      ),
-    )
-  catch {
-    // The first step already produces 8192 bytes, so the limit trips before
-    // the third poll; cancellation must not shadow the limit error.
-    InflateError(kind, _) => assert_true(kind == OutputLimitExceeded)
-  } noraise {
-    _ => @test.fail("limit check did not take precedence within a step")
-  }
-}

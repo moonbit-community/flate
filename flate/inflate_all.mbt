@@ -275,6 +275,15 @@ fn MemDecoder::reset_into(
 }
 
 ///|
+/// Release caller-owned storage while keeping only reusable decoding workspace.
+fn MemDecoder::release_buffers(self : MemDecoder) -> Unit {
+  self.input = b""
+  self.out.storage = []
+  self.out.length = 0
+  self.cancelled = no_cancellation
+}
+
+///|
 fn MemDecoder::set_cancellation(
   self : MemDecoder,
   cancelled : (() -> Bool)?,
@@ -989,8 +998,11 @@ pub fn Decompressor::decompress_into(
   cancelled? : () -> Bool,
 ) -> Int raise InflateError {
   self.decoder.reset_into(input, output, cancelled)
+  errdefer self.decoder.release_buffers()
   self.decoder.run()
-  self.decoder.out.length
+  let length = self.decoder.out.length
+  self.decoder.release_buffers()
+  length
 }
 
 ///|

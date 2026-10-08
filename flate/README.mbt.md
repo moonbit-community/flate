@@ -200,7 +200,7 @@ test "README zip round-trip" {
 
 Supported features include STORED and DEFLATE entries, ZIP64, data descriptors,
 UTF-8 names, and archive comments. `read` accepts `ReadLimits` to bound archive
-size, entry count, decompressed sizes, and retained source records, plus a
+size, entry count, decompressed sizes, and the complete retained source, plus a
 `cancelled` callback. Exceeding a limit raises
 `ZipError(LimitExceeded(kind, limit, actual))`.
 
@@ -209,8 +209,11 @@ payload. Cancellation remains `Cancelled` throughout parsing, decoding and
 checksum verification.
 
 `write(archive, preserve=true)` reuses unchanged source records; an unmodified
-archive can round-trip byte-for-byte. Supply `max_output_bytes` to bound the
-serialized size before allocating it. `write` returns the complete ZIP as `Bytes`.
+archive round-trips byte-for-byte, including prefixes, gaps and directory order.
+After an edit, local records and directory entries keep their respective order;
+bytes outside records, such as prefixes and gaps, are omitted.
+`max_preserved_source_bytes` covers the full source, including these bytes.
+Supply `max_output_bytes` to bound the serialized size before allocating it. `write` returns the complete ZIP as `Bytes`.
 
 For incremental output, use `Writer` with a synchronous sink. `add` accepts a
 complete file; `begin_entry` / `write` / `end_entry` accept chunks. Supply `size`
