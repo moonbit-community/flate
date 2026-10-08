@@ -232,25 +232,7 @@ test "zip Archive::clone preserves source records for byte-preserving writes" {
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
   let fork = parsed.clone()
-  assert_true(fork.entries()[0].raw_local_record() is Some(_))
-  assert_true(fork.entries()[0].raw_central_record() is Some(_))
   @test.assert_eq(@zip.write(fork, preserve=true), bytes)
-}
-
-///|
-test "zip Archive::retained_size_estimate is conservative and counts source records" {
-  let archive = @zip.Archive()
-  assert_true(archive.retained_size_estimate() >= 0L)
-  archive.add("a.txt", b"abc")
-  let base = archive.retained_size_estimate()
-  assert_true(base > 0L)
-  archive.add("b.txt", b"x")
-  assert_true(archive.retained_size_estimate() > base)
-  // A freshly read archive also counts its trailer and preserved source records.
-  let parsed = @zip.read(@zip.write(archive))
-  assert_true(
-    parsed.retained_size_estimate() > archive.retained_size_estimate(),
-  )
 }
 
 ///|

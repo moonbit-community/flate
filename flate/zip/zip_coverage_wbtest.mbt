@@ -777,55 +777,6 @@ test "zip entry decode rejects oversized and mismatched payloads" {
 }
 
 ///|
-fn zip64_end_record_bytes() -> Bytes {
-  let buf : Array[Byte] = []
-  push_u32le(buf, ZIP64_EOCD_SIG)
-  push_u64le(buf, 44)
-  push_u16le(buf, 45)
-  push_u16le(buf, 45)
-  push_u32le(buf, 0)
-  push_u32le(buf, 0)
-  push_u64le(buf, 1)
-  push_u64le(buf, 1)
-  push_u64le(buf, 0)
-  push_u64le(buf, 0)
-  bytes_of(buf)
-}
-
-///|
-fn zip64_locator_bytes() -> Bytes {
-  let buf : Array[Byte] = []
-  push_u32le(buf, ZIP64_LOCATOR_SIG)
-  push_u32le(buf, 0)
-  push_u64le(buf, 0)
-  push_u32le(buf, 1)
-  bytes_of(buf)
-}
-
-///|
-test "zip retained_size_estimate counts zip64 trailer records" {
-  let classic = classic_eocd(0, 0, 0xffff, 0xffff, 0xffffffff, 0xffffffff)
-  let with_zip64 = Archive()
-  with_zip64.add("a.txt", b"payload")
-  with_zip64.trailer = Some({
-    classic_end_record: classic,
-    zip64_end_record: Some(zip64_end_record_bytes()),
-    zip64_locator: Some(zip64_locator_bytes()),
-  })
-  let without_zip64 = Archive()
-  without_zip64.add("a.txt", b"payload")
-  without_zip64.trailer = Some({
-    classic_end_record: classic,
-    zip64_end_record: None,
-    zip64_locator: None,
-  })
-  assert_true(
-    with_zip64.retained_size_estimate() > without_zip64.retained_size_estimate(),
-  )
-  assert_true(with_zip64.retained_size_estimate() > 0L)
-}
-
-///|
 test "zip classic trailer rejects too many entries and long comments" {
   let out = Output::writing(None)
   expect_zip_error(() => {

@@ -51,9 +51,8 @@ priv struct SourceRecord {
 
 ///|
 /// A single archive entry: its decoded payload plus the metadata the central
-/// directory carried for it. Entries produced by `read` also retain their raw
-/// source records (`raw_local_record` / `raw_central_record`) for
-/// byte-preserving rewrites; entries built with `Archive::add` do not.
+/// directory carried for it. Entries produced by `read` retain their source
+/// records for byte-preserving rewrites; entries built with `Archive::add` do not.
 pub struct Entry {
   priv name : String
   priv data : Bytes
@@ -94,21 +93,6 @@ pub fn Entry::crc32(self : Entry) -> UInt {
 /// A read-only view of the decompressed payload.
 pub fn Entry::data_descriptor(self : Entry) -> Bool {
   self.data_descriptor
-}
-
-///|
-/// The original local header + payload (+ data descriptor) bytes of a pristine
-/// entry read from an archive, or `None` for entries created in memory or
-/// replaced after a read.
-pub fn Entry::raw_local_record(self : Entry) -> BytesView? {
-  self.source.map(source => source.local_record)
-}
-
-///|
-/// The original central directory record bytes of a pristine entry read from an
-/// archive, or `None` for entries created in memory or replaced after a read.
-pub fn Entry::raw_central_record(self : Entry) -> BytesView? {
-  self.source.map(source => source.central_record)
 }
 
 ///|
@@ -243,36 +227,4 @@ pub fn Archive::clone(self : Archive) -> Archive {
     comment: self.comment,
     trailer: self.trailer,
   }
-}
-
-///|
-/// Conservatively estimates bytes retained by this materialized archive: the
-/// archive comment, captured trailer records, and per-entry payloads, names,
-/// and preserved source records (each with a bookkeeping reserve). Payloads
-/// and records are counted exactly; only allocator/container overhead uses a
-/// fixed per-entry reserve. The source package buffer an archive was read from
-/// is not included.
-pub fn Archive::retained_size_estimate(self : Archive) -> Int64 {
-  let mut total = self.comment.length().to_int64()
-  if self.trailer is Some(trailer) {
-    total += trailer.classic_end_record.length().to_int64()
-    if trailer.zip64_end_record is Some(record) {
-      total += record.length().to_int64()
-    }
-    if trailer.zip64_locator is Some(locator) {
-      total += locator.length().to_int64()
-    }
-  }
-  for entry in self.entries {
-    total = total + entry.data.length().to_int64()
-    total = total + entry.name.length().to_int64() * 2L
-    // Entry/array slots, references, option wrappers, and allocator metadata.
-    total = total + 512L
-    if entry.source is Some(source) {
-      total += source.local_record.length().to_int64()
-      total += source.central_record.length().to_int64()
-      total += 128L
-    }
-  }
-  total
 }
