@@ -7,60 +7,61 @@ const MIN_LOOKAHEAD : Int = 258
 // The parser and its 32 KiB matchfinder survive every block boundary.
 
 ///|
-fn Deflater::pending_bytes(self : Deflater) -> Int {
-  self.pending_end - self.parse_pos
+fn Deflater::pending_bytes(deflater : Deflater) -> Int {
+  deflater.pending_end - deflater.parse_pos
 }
 
 ///|
 /// Append `input` to the ring with bulk copies into both mirrored halves,
 /// split at the ring wrap.
-fn Deflater::push_pending(self : Deflater, input : BytesView) -> Unit {
+fn Deflater::push_pending(deflater : Deflater, input : BytesView) -> Unit {
   let mut rest = input
   while rest.length() > 0 {
-    let offset = self.pending_end & STREAM_RING_MASK
+    let offset = deflater.pending_end & STREAM_RING_MASK
     let count = rest.length().min(STREAM_RING_SIZE - offset)
     let chunk = rest[:count]
-    self.pending.blit_from_bytesview(offset, chunk)
-    self.pending.blit_from_bytesview(offset + STREAM_RING_SIZE, chunk)
-    self.pending_end = self.pending_end + count
+    deflater.pending.blit_from_bytesview(offset, chunk)
+    deflater.pending.blit_from_bytesview(offset + STREAM_RING_SIZE, chunk)
+    deflater.pending_end = deflater.pending_end + count
     rest = rest[count:]
   }
 }
 
 ///|
-fn Deflater::write_stored_pending(self : Deflater, is_final~ : Bool) -> Unit {
-  write_stored_window(
-    self.w,
-    self.pending,
-    self.parse_pos,
-    self.pending_end,
+fn Deflater::write_stored_pending(
+  deflater : Deflater,
+  is_final~ : Bool,
+) -> Unit {
+  deflater.w.write_stored_window(
+    deflater.pending,
+    deflater.parse_pos,
+    deflater.pending_end,
     is_final~,
   )
-  self.parse_pos = self.pending_end
+  deflater.parse_pos = deflater.pending_end
 }
 
 ///|
 // The final three bytes of an earlier accepted chunk could not yet form a
 // 4-byte hash. Insert them once new lookahead makes them hashable; all older
 // history is already present in the persistent chain.
-fn Deflater::chain_ready_history(self : Deflater) -> Unit {
-  let ready_end = self.parse_pos.min((self.pending_end - 3).max(0))
-  while self.hashed_through < ready_end {
-    insert_window_pos(
-      self.pending,
-      self.finder,
-      self.hashed_through,
-      self.pending_end,
+fn Deflater::chain_ready_history(deflater : Deflater) -> Unit {
+  let ready_end = deflater.parse_pos.min((deflater.pending_end - 3).max(0))
+  while deflater.hashed_through < ready_end {
+    deflater.finder.insert_window_pos(
+      deflater.pending,
+      deflater.hashed_through,
+      deflater.pending_end,
     )
-    self.hashed_through = self.hashed_through + 1
+    deflater.hashed_through = deflater.hashed_through + 1
   }
 }
 
 ///|
-fn Deflater::record_chained_positions(self : Deflater, processed : Int) -> Unit {
-  let chained_end = processed.min((self.pending_end - 3).max(0))
-  if chained_end > self.hashed_through {
-    self.hashed_through = chained_end
+fn Deflater::record_chained_positions(deflater : Deflater, processed : Int) -> Unit {
+  let chained_end = processed.min((deflater.pending_end - 3).max(0))
+  if chained_end > deflater.hashed_through {
+    deflater.hashed_through = chained_end
   }
 }
 
@@ -69,26 +70,25 @@ fn Deflater::record_chained_positions(self : Deflater, processed : Int) -> Unit 
 // history if a later block resumes normal matching. Keep both hash tables
 // current without spending time on token search or Huffman construction.
 fn Deflater::try_fast_store(
-  self : Deflater,
+  deflater : Deflater,
   end : Int,
   is_final~ : Bool,
 ) -> Bool {
-  guard self.fast_store &&
-    should_fast_store_window(self.pending, self.parse_pos, end) else {
+  guard deflater.fast_store &&
+    should_fast_store_window(deflater.pending, deflater.parse_pos, end) else {
     return false
   }
-  self.chain_ready_history()
-  write_stored_window(self.w, self.pending, self.parse_pos, end, is_final~)
-  insert_window_positions(
-    self.pending,
-    self.finder,
-    self.parse_pos,
+  deflater.chain_ready_history()
+  deflater.w.write_stored_window(deflater.pending, deflater.parse_pos, end, is_final~)
+  deflater.finder.insert_window_positions(
+    deflater.pending,
+    deflater.parse_pos,
     end,
-    self.pending_end,
+    deflater.pending_end,
   )
-  self.parse_pos = end
-  self.record_chained_positions(end)
-  self.maybe_rebase()
+  deflater.parse_pos = end
+  deflater.record_chained_positions(end)
+  deflater.maybe_rebase()
   true
 }
 
@@ -96,139 +96,137 @@ fn Deflater::try_fast_store(
 /// Emit one non-final parsed block. `pending` already includes the lookahead
 /// tail, and `tokenize_window` only commits `DEFLATE_BLOCK_SIZE` bytes except
 /// for an ordinary 258-byte match overhang.
-fn Deflater::emit_capped(self : Deflater) -> Unit {
-  let target = (self.parse_pos + DEFLATE_BLOCK_SIZE).min(self.pending_end)
-  if self.try_fast_store(target, is_final=false) {
+fn Deflater::emit_capped(deflater : Deflater) -> Unit {
+  let target = (deflater.parse_pos + DEFLATE_BLOCK_SIZE).min(deflater.pending_end)
+  if deflater.try_fast_store(target, is_final=false) {
     return
   }
-  self.tokens.clear()
-  self.ll_freq.fill(0)
-  self.d_freq.fill(0)
-  self.chain_ready_history()
+  deflater.tokens.clear()
+  deflater.ll_freq.fill(0)
+  deflater.d_freq.fill(0)
+  deflater.chain_ready_history()
   let processed = tokenize_window(
-    self.pending,
-    self.finder,
-    self.parse_pos,
+    deflater.pending,
+    deflater.finder,
+    deflater.parse_pos,
     target,
-    self.pending_end,
-    self.cfg,
-    self.tokens,
-    self.ll_freq,
-    self.d_freq,
+    deflater.pending_end,
+    deflater.cfg,
+    deflater.tokens,
+    deflater.ll_freq,
+    deflater.d_freq,
   )
-  emit_window_block(
-    self.w,
-    self.pending,
-    self.parse_pos,
+  deflater.w.emit_window_block(
+    deflater.pending,
+    deflater.parse_pos,
     processed,
-    self.tokens,
-    self.ll_freq,
-    self.d_freq,
+    deflater.tokens,
+    deflater.ll_freq,
+    deflater.d_freq,
     is_final=false,
   )
-  self.parse_pos = processed
-  self.record_chained_positions(processed)
-  self.maybe_rebase()
+  deflater.parse_pos = processed
+  deflater.record_chained_positions(processed)
+  deflater.maybe_rebase()
 }
 
 ///|
 /// Level 0 bypasses parsing entirely and writes buffered bytes straight out of
 /// the ring. With no matches, neither matchfinder nor history needs updates.
-fn Deflater::emit_stored_all(self : Deflater, is_final~ : Bool) -> Unit {
-  self.write_stored_pending(is_final~)
-  self.parse_pos = 0
-  self.pending_end = 0
+fn Deflater::emit_stored_all(deflater : Deflater, is_final~ : Bool) -> Unit {
+  deflater.write_stored_pending(is_final~)
+  deflater.parse_pos = 0
+  deflater.pending_end = 0
 }
 
 ///|
-fn Deflater::emit_one(self : Deflater) -> Unit {
-  guard self.level != 0 else {
-    self.emit_stored_all(is_final=false)
+fn Deflater::emit_one(deflater : Deflater) -> Unit {
+  guard deflater.level != 0 else {
+    deflater.emit_stored_all(is_final=false)
     return
   }
-  self.emit_capped()
+  deflater.emit_capped()
 }
 
 ///|
 /// Tokenize all remaining input into one trailing block. The end bound removes
 /// the non-final lookahead restriction while preserving the same parse policy.
-fn Deflater::emit_trailing_block(self : Deflater, is_final~ : Bool) -> Int {
-  let end = self.pending_end
-  if self.try_fast_store(end, is_final~) {
+fn Deflater::emit_trailing_block(deflater : Deflater, is_final~ : Bool) -> Int {
+  let end = deflater.pending_end
+  if deflater.try_fast_store(end, is_final~) {
     return end
   }
-  self.tokens.clear()
-  self.ll_freq.fill(0)
-  self.d_freq.fill(0)
-  self.chain_ready_history()
+  deflater.tokens.clear()
+  deflater.ll_freq.fill(0)
+  deflater.d_freq.fill(0)
+  deflater.chain_ready_history()
   let processed = tokenize_window(
-    self.pending,
-    self.finder,
-    self.parse_pos,
-    self.pending_end,
-    self.pending_end,
-    self.cfg,
-    self.tokens,
-    self.ll_freq,
-    self.d_freq,
+    deflater.pending,
+    deflater.finder,
+    deflater.parse_pos,
+    deflater.pending_end,
+    deflater.pending_end,
+    deflater.cfg,
+    deflater.tokens,
+    deflater.ll_freq,
+    deflater.d_freq,
   )
-  emit_window_block(
-    self.w,
-    self.pending,
-    self.parse_pos,
+  deflater.w.emit_window_block(
+    deflater.pending,
+    deflater.parse_pos,
     processed,
-    self.tokens,
-    self.ll_freq,
-    self.d_freq,
+    deflater.tokens,
+    deflater.ll_freq,
+    deflater.d_freq,
     is_final~,
   )
-  self.parse_pos = processed
-  self.record_chained_positions(processed)
-  self.maybe_rebase()
+  deflater.parse_pos = processed
+  deflater.record_chained_positions(processed)
+  deflater.maybe_rebase()
   processed
 }
 
 ///|
 /// Keep absolute positions comfortably below backend integer limits. This is
 /// amortized over 1 GiB of source and preserves every live 32 KiB chain link.
-fn Deflater::maybe_rebase(self : Deflater) -> Unit {
+fn Deflater::maybe_rebase(deflater : Deflater) -> Unit {
   let rebase_at = 1 << 30
-  guard self.parse_pos >= rebase_at else { return }
-  let offset = (self.parse_pos / STREAM_RING_SIZE - 1) * STREAM_RING_SIZE
-  self.finder.rebase(offset)
-  self.parse_pos = self.parse_pos - offset
-  self.pending_end = self.pending_end - offset
-  self.hashed_through = self.hashed_through - offset
+  guard deflater.parse_pos >= rebase_at else { return }
+  let offset = (deflater.parse_pos / STREAM_RING_SIZE - 1) * STREAM_RING_SIZE
+  deflater.finder.rebase(offset)
+  deflater.parse_pos = deflater.parse_pos - offset
+  deflater.pending_end = deflater.pending_end - offset
+  deflater.hashed_through = deflater.hashed_through - offset
 }
 
 ///|
-fn Deflater::emit_final(self : Deflater) -> Unit {
-  if self.level == 0 {
-    self.emit_stored_all(is_final=true)
+fn Deflater::emit_final(deflater : Deflater) -> Unit {
+  if deflater.level == 0 {
+    deflater.emit_stored_all(is_final=true)
   } else {
-    while self.pending_bytes() > DEFLATE_BLOCK_SIZE {
-      self.emit_capped()
+    while deflater.pending_bytes() > DEFLATE_BLOCK_SIZE {
+      deflater.emit_capped()
     }
-    ignore(self.emit_trailing_block(is_final=true))
+    ignore(deflater.emit_trailing_block(is_final=true))
   }
-  self.w.flush()
-  self.emitted_final = true
+  deflater.w.flush()
+  deflater.emitted_final = true
 }
 
 ///|
-fn Deflater::flush_stored(self : Deflater) -> Unit {
-  if self.pending_bytes() > 0 {
-    self.emit_stored_all(is_final=false)
+fn Deflater::flush_stored(deflater : Deflater) -> Unit {
+  if deflater.pending_bytes() > 0 {
+    deflater.emit_stored_all(is_final=false)
   }
 }
 
 ///|
-fn Deflater::flush_capped(self : Deflater) -> Unit {
-  while self.pending_bytes() > DEFLATE_BLOCK_SIZE {
-    self.emit_capped()
+fn Deflater::flush_capped(deflater : Deflater) -> Unit {
+  while deflater.pending_bytes() > DEFLATE_BLOCK_SIZE {
+    deflater.emit_capped()
   }
-  if self.pending_bytes() > 0 {
-    ignore(self.emit_trailing_block(is_final=false))
+  if deflater.pending_bytes() > 0 {
+    ignore(deflater.emit_trailing_block(is_final=false))
   }
 }
 
@@ -236,11 +234,11 @@ fn Deflater::flush_capped(self : Deflater) -> Unit {
 /// Sync flush (zlib `Z_SYNC_FLUSH`): drain all buffered bytes, then append an
 /// empty byte-aligned stored block. The persistent matchfinder retains the
 /// preceding window for the stream's next input.
-fn Deflater::emit_flush(self : Deflater) -> Unit {
-  if self.level == 0 {
-    self.flush_stored()
+fn Deflater::emit_flush(deflater : Deflater) -> Unit {
+  if deflater.level == 0 {
+    deflater.flush_stored()
   } else {
-    self.flush_capped()
+    deflater.flush_capped()
   }
-  write_stored(self.w, b"", 0, 0, is_final=false)
+  deflater.w.write_stored(b"", 0, 0, is_final=false)
 }
