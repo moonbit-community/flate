@@ -92,7 +92,7 @@ fn Compressor::encode(
   let n = input.length()
   // Level 0 or an explicit heuristic decision bypasses parsing entirely.
   guard self.level != 0 && !(self.fast_store && should_fast_store(input)) else {
-    write_stored(w, input, 0, n, is_final=true)
+    w.write_stored(input, 0, n, is_final=true)
     w.flush()
     if w.overflowed {
       None
@@ -134,7 +134,7 @@ pub fn deflate_all(
   let n = input.length()
   // Level 0 or an explicit heuristic decision bypasses parsing entirely.
   guard lv != 0 && !(fast_store && should_fast_store(input)) else {
-    write_stored(w, input, 0, n, is_final=true)
+    w.write_stored(input, 0, n, is_final=true)
     w.flush()
     return Bytes::from_array(w.out)
   }
@@ -189,8 +189,7 @@ fn encode_blocks(
     let processed = tokenize(
       input, finder, pos, target, cfg, tokens, ll_freq, d_freq,
     )
-    emit_block(
-      w,
+    w.emit_block(
       input,
       pos,
       processed,

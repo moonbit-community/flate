@@ -453,9 +453,9 @@ fn match_candidate_can_beat(
 ///|
 /// Find a recent length-3 match, then search the independent 4-byte chain.
 /// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
-fn find_match_hashed(
-  data : BytesView,
+fn MatchFinder::find_match_hashed(
   finder : MatchFinder,
+  data : BytesView,
   i : Int,
   n : Int,
   base : Int,
@@ -524,9 +524,9 @@ fn find_match_hashed(
 }
 
 ///|
-fn find_match(
-  data : BytesView,
+fn MatchFinder::find_match(
   finder : MatchFinder,
+  data : BytesView,
   i : Int,
   n : Int,
   base : Int,
@@ -556,15 +556,15 @@ fn find_match(
   }
   let prefix = read_match_word(data, i)
   let product = prefix * 0x1E35A7BDU
-  find_match_hashed(data, finder, i, n, base, cfg, prefix, product)
+  finder.find_match_hashed(data, i, n, base, cfg, prefix, product)
 }
 
 ///|
 /// Find a recent length-3 match, then search the independent 4-byte chain.
 /// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
-fn find_window_match_hashed(
-  data : FixedArray[Byte],
+fn MatchFinder::find_window_match_hashed(
   finder : MatchFinder,
+  data : FixedArray[Byte],
   i : Int,
   end : Int,
   base : Int,
@@ -634,9 +634,9 @@ fn find_window_match_hashed(
 }
 
 ///|
-fn find_window_match(
-  data : FixedArray[Byte],
+fn MatchFinder::find_window_match(
   finder : MatchFinder,
+  data : FixedArray[Byte],
   i : Int,
   end : Int,
   base : Int,
@@ -668,11 +668,15 @@ fn find_window_match(
   }
   let prefix = read_window_match_word(data, i)
   let product = prefix * 0x1E35A7BDU
-  find_window_match_hashed(data, finder, i, end, base, cfg, prefix, product)
+  finder.find_window_match_hashed(data, i, end, base, cfg, prefix, product)
 }
 
 ///|
-fn insert_pos_hashed(finder : MatchFinder, i : Int, product : UInt) -> Unit {
+fn MatchFinder::insert_pos_hashed(
+  finder : MatchFinder,
+  i : Int,
+  product : UInt,
+) -> Unit {
   let h = long_hash_product(product, shift=finder.long_shift)
   let stamped = i + finder.position_base
   finder.short_head.unsafe_set(
@@ -688,9 +692,14 @@ fn insert_pos_hashed(finder : MatchFinder, i : Int, product : UInt) -> Unit {
 }
 
 ///|
-fn insert_pos(data : BytesView, finder : MatchFinder, i : Int, n : Int) -> Unit {
+fn MatchFinder::insert_pos(
+  finder : MatchFinder,
+  data : BytesView,
+  i : Int,
+  n : Int,
+) -> Unit {
   if n - i >= 4 {
-    insert_pos_hashed(finder, i, read_match_word(data, i) * 0x1E35A7BDU)
+    finder.insert_pos_hashed(i, read_match_word(data, i) * 0x1E35A7BDU)
   } else if n - i >= 3 {
     finder.short_head.unsafe_set(
       short_hash3(data, i, shift=finder.short_shift),
@@ -702,9 +711,9 @@ fn insert_pos(data : BytesView, finder : MatchFinder, i : Int, n : Int) -> Unit 
 ///|
 // One packed load and multiplication feed both hash tables. The loop proves
 // four available bytes. Masked indices address the private fixed-size tables.
-fn insert_positions(
-  data : BytesView,
+fn MatchFinder::insert_positions(
   finder : MatchFinder,
+  data : BytesView,
   start : Int,
   end : Int,
   available_end : Int,
@@ -730,12 +739,12 @@ fn insert_positions(
     head.unsafe_set(h, stamped)
   }
   if long_end < end {
-    insert_pos(data, finder, long_end, available_end)
+    finder.insert_pos(data, long_end, available_end)
   }
 }
 
 ///|
-fn insert_window_pos_hashed(
+fn MatchFinder::insert_window_pos_hashed(
   finder : MatchFinder,
   i : Int,
   product : UInt,
@@ -755,15 +764,14 @@ fn insert_window_pos_hashed(
 }
 
 ///|
-fn insert_window_pos(
-  data : FixedArray[Byte],
+fn MatchFinder::insert_window_pos(
   finder : MatchFinder,
+  data : FixedArray[Byte],
   i : Int,
   n : Int,
 ) -> Unit {
   if n - i >= 4 {
-    insert_window_pos_hashed(
-      finder,
+    finder.insert_window_pos_hashed(
       i,
       read_window_match_word(data, i) * 0x1E35A7BDU,
     )
@@ -778,9 +786,9 @@ fn insert_window_pos(
 ///|
 // One packed load and multiplication feed both hash tables. The loop proves
 // four available bytes. Masked indices address the private fixed-size tables.
-fn insert_window_positions(
-  data : FixedArray[Byte],
+fn MatchFinder::insert_window_positions(
   finder : MatchFinder,
+  data : FixedArray[Byte],
   start : Int,
   end : Int,
   available_end : Int,
@@ -806,7 +814,7 @@ fn insert_window_positions(
     head.unsafe_set(h, stamped)
   }
   if long_end < end {
-    insert_window_pos(data, finder, long_end, available_end)
+    finder.insert_window_pos(data, long_end, available_end)
   }
 }
 
@@ -843,9 +851,9 @@ fn commit_match(
   d_freq[dist_index(dist)] += 1
   let match_end = start + length
   if length >= 32 {
-    insert_matched_positions(data, finder, start + 1, match_end, n)
+    finder.insert_matched_positions(data, start + 1, match_end, n)
   } else {
-    insert_positions(data, finder, start + 1, match_end, n)
+    finder.insert_positions(data, start + 1, match_end, n)
   }
   match_end
 }
@@ -868,9 +876,9 @@ fn commit_window_match(
   d_freq[dist_index(dist)] += 1
   let match_end = start + length
   if length >= 32 {
-    insert_matched_window_positions(data, finder, start + 1, match_end, end)
+    finder.insert_matched_window_positions(data, start + 1, match_end, end)
   } else {
-    insert_window_positions(data, finder, start + 1, match_end, end)
+    finder.insert_window_positions(data, start + 1, match_end, end)
   }
   match_end
 }
@@ -991,9 +999,9 @@ fn tokenize(
     }
     let match_info = if searching {
       if has_word {
-        find_match_hashed(data, finder, i, n, base, search_cfg, prefix, product)
+        finder.find_match_hashed(data, i, n, base, search_cfg, prefix, product)
       } else {
-        find_match(data, finder, i, n, base, search_cfg)
+        finder.find_match(data, i, n, base, search_cfg)
       }
     } else {
       0
@@ -1027,9 +1035,9 @@ fn tokenize(
     // A deferred commit inserts i as an interior position. Insert it here
     // only when that commit did not happen, so prev never links to itself.
     if has_word {
-      insert_pos_hashed(finder, i, product)
+      finder.insert_pos_hashed(i, product)
     } else {
-      insert_pos(data, finder, i, n)
+      finder.insert_pos(data, i, n)
     }
     // A longer match starts at i: emit a literal for i-1, keep deferring.
     guard !have_prev else {
@@ -1167,11 +1175,11 @@ fn tokenize_window(
     }
     let match_info = if searching {
       if has_word {
-        find_window_match_hashed(
-          data, finder, i, available_end, base, search_cfg, prefix, product,
+        finder.find_window_match_hashed(
+          data, i, available_end, base, search_cfg, prefix, product,
         )
       } else {
-        find_window_match(data, finder, i, available_end, base, search_cfg)
+        finder.find_window_match(data, i, available_end, base, search_cfg)
       }
     } else {
       0
@@ -1203,9 +1211,9 @@ fn tokenize_window(
     }
     // The deferred commit above already inserts its interior positions.
     if has_word {
-      insert_window_pos_hashed(finder, i, product)
+      finder.insert_window_pos_hashed(i, product)
     } else {
-      insert_window_pos(data, finder, i, available_end)
+      finder.insert_window_pos(data, i, available_end)
     }
     guard !have_prev else {
       emit_literal(tokens, ll_freq, data[(i - 1) & STREAM_RING_MASK].to_int())
@@ -1289,9 +1297,9 @@ fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
 // live window, so its predecessor distance needs no saturation. The final
 // three positions may cross the match boundary and use general insertion.
 // Callers have already proved a match length of at least 32 bytes.
-fn insert_matched_positions(
-  data : BytesView,
+fn MatchFinder::insert_matched_positions(
   finder : MatchFinder,
+  data : BytesView,
   start : Int,
   end : Int,
   available_end : Int,
@@ -1318,13 +1326,13 @@ fn insert_matched_positions(
     prev.unsafe_set(index + 1, (delta >> 8).to_byte())
     head.unsafe_set(h, stamped)
   }
-  insert_positions(data, finder, long_end, end, available_end)
+  finder.insert_positions(data, long_end, end, available_end)
 }
 
 ///|
-fn insert_matched_window_positions(
-  data : FixedArray[Byte],
+fn MatchFinder::insert_matched_window_positions(
   finder : MatchFinder,
+  data : FixedArray[Byte],
   start : Int,
   end : Int,
   available_end : Int,
@@ -1351,7 +1359,7 @@ fn insert_matched_window_positions(
     prev.unsafe_set(index + 1, (delta >> 8).to_byte())
     head.unsafe_set(h, stamped)
   }
-  insert_window_positions(data, finder, long_end, end, available_end)
+  finder.insert_window_positions(data, long_end, end, available_end)
 }
 
 ///|

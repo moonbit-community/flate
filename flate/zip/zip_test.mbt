@@ -152,7 +152,7 @@ test "zip write with preserve=true round-trips a data-descriptor entry byte-for-
 }
 
 ///|
-test "zip write with preserve=true keeps pristine records and re-encodes replacements" {
+test "zip write with preserve=true keeps unchanged payloads and applies replacements" {
   let archive = @zip.Archive()
   archive.add("keep.txt", b"keep me", compression=Store)
   archive.add("replace.txt", b"old payload", compression=Store)
@@ -165,7 +165,6 @@ test "zip write with preserve=true keeps pristine records and re-encodes replace
   @test.assert_eq(reparsed.get("keep.txt"), Some(b"keep me"))
   @test.assert_eq(reparsed.get("replace.txt"), Some(b"new payload"))
   @test.assert_eq(reparsed.entries().length(), 2)
-  // The unchanged entry keeps its raw local record.
   assert_true(reparsed.get("keep.txt").unwrap() == b"keep me")
 }
 

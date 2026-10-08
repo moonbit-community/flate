@@ -104,7 +104,7 @@ fn Deflater::preload_dictionary(
   let start = (dictionary.length() - WINDOW_SIZE).max(0)
   self.push_pending(dictionary[start:])
   for i in 0..<self.pending_end {
-    insert_window_pos(self.pending, self.finder, i, self.pending_end)
+    self.finder.insert_window_pos(self.pending, i, self.pending_end)
   }
   self.hashed_through = (self.pending_end - 3).max(0)
   self.parse_pos = self.pending_end

@@ -1,11 +1,10 @@
 ///|
 const OPTIMAL_MASTER_BLOCK : Int = 262144
 
-// Optimal block planning (zopfli-style block splitting): the drop-in
-// counterpart to the threshold planner in block_planner.mbt. A cheap greedy
+// Optimal block planning (zopfli-style block splitting). A greedy/lazy
 // parse of each master chunk provides reference tokens; split points are
 // searched by recursive narrowing (zopfli's FindMinimum) and inserted
-// greedily while two blocks cost fewer exact bits than one, under a block
+// greedily while two blocks have a lower estimated cost than one, under a block
 // budget. Segments are then re-parsed by the optimal parser, the splitting is
 // repeated once on the optimal tokens (zopfli's blocksplittinglast), and the
 // cheaper of the two groupings is emitted through the ordinary `emit_block` —
@@ -16,11 +15,10 @@ const OPTIMAL_MASTER_BLOCK : Int = 262144
 const OPTIMAL_MAX_BLOCKS : Int = 15
 
 ///|
-/// Exact cost in bits of one block (3-bit header included): the cheapest of
+/// Estimated cost in bits of one block: the cheapest of
 /// stored / fixed / dynamic, mirroring `emit_block`'s choice. Judges both
 /// split candidates and squeeze iterations. Delegates the accounting to the
-/// shared dynamic-length builder + `estimate_block_cost` pair, so the planner
-/// can never drift from what the writer actually emits.
+/// shared dynamic-length builder and `estimate_block_cost`.
 fn block_cost_bits(
   byte_len : Int,
   ll_freq_in : FixedArray[Int],
@@ -59,7 +57,7 @@ fn range_freqs(
 }
 
 ///|
-/// Exact block cost of `tokens[lo:hi)` covering `byte_len` input bytes.
+/// Estimated block cost of `tokens[lo:hi)` covering `byte_len` input bytes.
 fn split_range_cost(
   tokens : Array[Int],
   lo : Int,
@@ -88,7 +86,7 @@ fn split_candidate_cost(
 
 ///|
 /// zopfli's FindMinimum: locate the split point inside (lo, hi) minimizing
-/// the two halves' summed exact cost, by sampling 9 evenly spaced candidates
+/// the two halves' summed estimated cost, by sampling 9 evenly spaced candidates
 /// and recursively narrowing to the winner's neighborhood; small intervals
 /// are scanned exhaustively. Writes split index and cost to `result[0:2]`;
 /// index -1 means the interval admits no interior point. The caller reuses the
@@ -143,7 +141,7 @@ fn find_best_split(
 
 ///|
 /// Greedily insert split points (token indices) while a split still lowers
-/// the exact total cost, up to `OPTIMAL_MAX_BLOCKS` blocks. `tok_pos[k]` is
+/// the estimated total cost, up to `OPTIMAL_MAX_BLOCKS` blocks. `tok_pos[k]` is
 /// the byte offset where token k starts (with `tok_pos[m]` = chunk end).
 fn plan_split_points(
   tokens : Array[Int],
@@ -189,7 +187,7 @@ fn plan_split_points(
 }
 
 ///|
-/// Total exact cost of a grouping (consecutive bounds over `tokens`).
+/// Total estimated cost of a grouping (consecutive bounds over `tokens`).
 fn grouping_cost(
   tokens : Array[Int],
   tok_pos : FixedArray[Int],
@@ -283,7 +281,7 @@ fn optimal_parse_chunk(
 
 ///|
 /// Phase 2 for one master chunk (zopfli's blocksplittinglast): re-split the
-/// optimal tokens, then emit whichever grouping is cheaper by exact cost
+/// optimal tokens, then emit whichever grouping is cheaper by estimated cost
 /// through the ordinary `emit_block`.
 fn emit_optimal_chunk(
   w : BitWriter,
@@ -307,8 +305,7 @@ fn emit_optimal_chunk(
     let ll_freq = FixedArray::make(286, 0)
     let d_freq = FixedArray::make(30, 0)
     range_freqs(all, lo, hi, ll_freq, d_freq)
-    emit_block(
-      w,
+    w.emit_block(
       input,
       all_pos[lo],
       all_pos[hi],
@@ -323,9 +320,8 @@ fn emit_optimal_chunk(
 ///|
 /// Compress with zopfli-style effort: content-driven block splitting plus
 /// iterated optimal parsing, with a second splitting pass over the optimal
-/// tokens (blocksplittinglast). Tens to hundreds of times slower than
-/// `deflate_all` — for compress-once, serve-forever artifacts.  `iterations` is the squeeze count
-/// per block (zopfli's default is 15).
+/// tokens (blocksplittinglast). `iterations` is the squeeze count per block,
+/// clamped to at least 1; the default is 15.
 /// `fast_store` is disabled by default. Enabling it can bypass this strategy
 /// for heuristically incompressible input, trading output size for speed.
 pub fn deflate_all_optimal(
@@ -340,7 +336,7 @@ pub fn deflate_all_optimal(
   let w = BitWriter()
   let n = input.length()
   guard n != 0 else {
-    emit_empty_block(w, input)
+    w.emit_empty_block(input)
     w.flush()
     return Bytes::from_array(w.out)
   }

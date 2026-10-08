@@ -1,6 +1,6 @@
 ///|
-/// The optimal path round-trips and is never worse than the default level on
-/// compressible text (the unit embeds a lazy-matching trap: "abcde abcdef").
+/// Compare round-trip output and encoded size on repeated text containing
+/// the lazy-matching pattern "abcde abcdef".
 test "deflate_all_optimal round-trips and beats greedy" {
   let unit = b"optimal parsing pays where greedy grabs too early: abcde abcdef. "
   let arr : Array[Byte] = []
@@ -16,9 +16,8 @@ test "deflate_all_optimal round-trips and beats greedy" {
 }
 
 ///|
-/// Heterogeneous input (compressible text, then pseudo-random bytes): the
-/// content-driven splitter plus per-block stored/fixed/dynamic choice keeps
-/// the optimal path at least as good as the leveled encoder.
+/// On this mixed text and pseudo-random input, compare the optimal output
+/// with level 9, allowing 16 bytes of additional output.
 test "deflate_all_optimal splits heterogeneous data" {
   let arr : Array[Byte] = []
   let text = b"a stretch of plain compressible text, over and over again. "

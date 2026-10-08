@@ -22,7 +22,7 @@ priv struct PendingEntry {
 ///|
 /// An incremental ZIP writer over a synchronous byte sink. `add` handles an
 /// already loaded file; `begin_entry`/`write`/`end_entry` handle bounded chunks.
-/// Only central-directory records and reusable codec buffers are retained.
+/// Retains central-directory records, current-entry metadata and codec buffers.
 /// The sink must consume each view before returning. A sink exception poisons
 /// the writer and is propagated unchanged; no further output can be emitted.
 pub struct Writer {
@@ -76,7 +76,7 @@ pub fn Writer::is_finished(self : Writer) -> Bool {
 }
 
 ///|
-/// Whether a sink failure has made this writer unusable.
+/// Whether an emission failure has made this writer unusable.
 pub fn Writer::is_failed(self : Writer) -> Bool {
   self.mode is Failed
 }
@@ -141,14 +141,6 @@ fn stream_name(name : String) -> Bytes raise ZipError {
 }
 
 ///|
-fn stream_method(compression : Compression) -> UInt16 {
-  match compression {
-    Store => (0).to_uint16()
-    Deflate => (8).to_uint16()
-  }
-}
-
-///|
 fn stream_local_header(
   name : Bytes,
   compression : Compression,
@@ -166,7 +158,7 @@ fn stream_local_header(
   out.write_uint16_le(
     (FLAG_UTF8 | (if descriptor { FLAG_DATA_DESCRIPTOR } else { 0 })).to_uint16(),
   )
-  out.write_uint16_le(stream_method(compression))
+  out.write_uint16_le(compression.code().to_uint16())
   out.write_uint_le(0U)
   out.write_uint_le(crc)
   out.write_uint_le(if zip64 { MAX_U32 } else { compressed_size.to_uint() })
@@ -210,7 +202,7 @@ fn stream_central_record(
   out.write_uint16_le(
     (FLAG_UTF8 | (if descriptor { FLAG_DATA_DESCRIPTOR } else { 0 })).to_uint16(),
   )
-  out.write_uint16_le(stream_method(compression))
+  out.write_uint16_le(compression.code().to_uint16())
   out.write_uint_le(0U)
   out.write_uint_le(crc)
   out.write_uint_le(if zip64 { MAX_U32 } else { compressed_size.to_uint() })
@@ -373,7 +365,7 @@ pub fn Writer::write(self : Writer, bytes : BytesView) -> Unit raise {
 
 ///|
 /// Finish the current entry and emit its data descriptor. The next file may
-/// then be started; the writer retains only the completed directory record.
+/// then be started. Codec buffers are retained for reuse across entries.
 pub fn Writer::end_entry(self : Writer) -> Unit raise {
   let entry = self.pending()
   if entry.expected_size is Some(size) {

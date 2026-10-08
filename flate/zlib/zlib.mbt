@@ -1,5 +1,5 @@
-// zlib (RFC 1950) = a 2-byte header + raw DEFLATE + a 4-byte big-endian
-// Adler-32 trailer. Thin wrapper over the `@flate` engine.
+// zlib (RFC 1950): a header, optional dictionary ID, raw DEFLATE and an
+// Adler-32 trailer. The streaming decoder supports preset dictionaries.
 
 ///|
 /// Machine-readable category for a zlib decoding failure. The accompanying
@@ -64,10 +64,9 @@ pub fn compress(
 }
 
 ///|
-/// Compress `input` into the zlib format with zopfli-style optimal parsing:
-/// far slower (offline, whole input in memory) for a few percent smaller
-/// output. For compress-once, serve-forever artifacts (e.g. a PNG's zlib
-/// stream). `iterations` is the squeeze count per block (zopfli's default 15).
+/// Compress `input` into the zlib format with zopfli-style optimal parsing
+/// over the complete input. `iterations` controls the parsing effort
+/// per block and defaults to 15. Compression ratio depends on the input.
 /// Optional `fast_store` is off by default; sampled inputs may use stored
 /// DEFLATE blocks, sacrificing compression ratio for speed.
 pub fn compress_optimal(

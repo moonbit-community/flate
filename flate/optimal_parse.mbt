@@ -6,7 +6,7 @@
 // which depend on the parse — so the parse is iterated: each round's
 // frequencies build length-limited Huffman codes (the writer's own
 // `gen_huffman`) whose code lengths become the next round's costs, and the
-// cheapest parse seen (by exact block cost) wins.
+// cheapest parse seen (by estimated block cost) wins.
 
 ///|
 /// One Pareto-frontier entry among the matches at a position: lengths in
@@ -20,9 +20,7 @@ priv struct MatchRange {
 }
 
 ///|
-// The optimal parser has a separate candidate frontier and deliberately keeps
-// its own temporary table. Its future binary-tree/cache work must not inherit
-// the greedy/lazy session matchfinder's lifecycle.
+// The optimal parser builds its own match frontiers for each input range.
 fn insert_optimal_pos(
   data : BytesView,
   head : FixedArray[Int],
@@ -39,8 +37,7 @@ fn insert_optimal_pos(
 }
 
 ///|
-/// Chain candidates examined per position; effectively exhaustive, in keeping
-/// with the offline effort budget.
+/// Maximum chain candidates examined per position.
 const OPTIMAL_MAX_CHAIN : Int = 8192
 
 ///|
@@ -213,7 +210,7 @@ fn stats_to_costs(
 ///|
 /// Iterated optimal parse of `data[start:end)`: squeeze under fixed-table
 /// costs first, then re-derive costs from each round's own statistics,
-/// keeping the cheapest parse seen (judged by exact block cost).
+/// keeping the cheapest parse seen (judged by estimated block cost).
 fn tokenize_optimal(
   data : BytesView,
   start : Int,

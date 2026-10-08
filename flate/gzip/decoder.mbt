@@ -3,8 +3,8 @@ const DECODER_INPUT_LIMIT : Int = 65536
 
 // Streaming gzip (RFC 1952) decompressor: a push-based, suspendable state
 // machine wrapping the `@flate.Inflater`. The variable-length header is parsed
-// zlib-style with one state per field: the unbounded fields (FEXTRA payload,
-// FNAME, FCOMMENT) are consumed as they arrive and discarded, never retained,
+// with one state per field: FEXTRA, FNAME and FCOMMENT bytes are discarded
+// as they are consumed,
 // so header-phase memory is O(1) even against an adversarial unterminated
 // FNAME. It then drives the inflater over the DEFLATE body (folding
 // decompressed output into a running CRC-32 and length) and verifies the
@@ -51,7 +51,8 @@ pub struct Decoder {
 /// Create a fresh gzip decompressor. With the default `multistream=true`,
 /// adjacent RFC 1952 members are decoded as one logical stream. Set it to
 /// false for a framed transport that must stop after the first member and
-/// recover every following byte through `unused_input()`.
+/// recover accepted read-ahead through `unused_input()`. Unaccepted bytes
+/// remain with the caller, as reported by `last_consumed()`.
 pub fn Decoder::Decoder(multistream? : Bool = true) -> Decoder {
   {
     inf: Inflater(),

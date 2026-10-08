@@ -763,11 +763,11 @@ test "zip entry decode rejects oversized and mismatched payloads" {
 test "zip classic trailer rejects too many entries and long comments" {
   let out = Output::writing(None)
   expect_zip_error(() => {
-    write_generated_classic_end_record(out, false, 70000, 0, 0, b"")
+    out.write_generated_classic_end_record(false, 70000, 0, 0, b"")
   })
   let long_comment = Bytes::from_array(Array::make(70000, b'x'))
   expect_zip_error(() => {
-    write_generated_classic_end_record(out, false, 1, 0, 0, long_comment)
+    out.write_generated_classic_end_record(false, 1, 0, 0, long_comment)
   })
 }
 
@@ -796,7 +796,7 @@ test "zip local-order keeps a replaced entry in its original position" {
   src.add("b.txt", b"y")
   let archive = read(write(src))
   @test.assert_eq(archive.replace("a.txt", b"xx"), true)
-  let order = archive_local_order(archive)
+  let order = archive.local_order()
   @test.assert_eq(order.length(), 2)
   @test.assert_eq(archive.entries()[order[0]].name(), "a.txt")
   @test.assert_eq(archive.entries()[order[1]].name(), "b.txt")
@@ -810,7 +810,7 @@ test "zip local-order sorts read-origin entries ahead of fresh ones" {
   let archive = read(write(src))
   archive.add("fresh.txt", b"z")
   // Read-origin entries (origin Some) precede a fresh entry (origin None).
-  let forward = archive_local_order(archive)
+  let forward = archive.local_order()
   @test.assert_eq(forward.length(), 3)
   @test.assert_eq(archive.entries()[forward[0]].name(), "a.txt")
   @test.assert_eq(archive.entries()[forward[1]].name(), "b.txt")
@@ -822,7 +822,7 @@ test "zip local-order sorts read-origin entries ahead of fresh ones" {
     trailer: None,
     original: None,
   }
-  let reordered = archive_local_order(mixed)
+  let reordered = mixed.local_order()
   @test.assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
   @test.assert_eq(mixed.entries()[reordered[1]].name(), "b.txt")
   @test.assert_eq(mixed.entries()[reordered[2]].name(), "fresh.txt")
@@ -935,8 +935,7 @@ test "zip output rejects Int overflow and oversized raw header names" {
   let long_name = Bytes::make(65536, b'x')
   expect_zip_kind(
     () => {
-      write_local_record(
-        Output::writing(None),
+      Output::writing(None).write_local_record(
         entry,
         long_name,
         { compressed_size: 0, compressed: None, },
@@ -948,14 +947,8 @@ test "zip output rejects Int overflow and oversized raw header names" {
   )
   expect_zip_kind(
     () => {
-      write_central_record(
-        Output::writing(None),
-        entry,
-        long_name,
-        0,
-        0,
-        false,
-        false,
+      Output::writing(None).write_central_record(
+        entry, long_name, 0, 0, false, false,
       )
     },
     UnsupportedFeature,
@@ -978,7 +971,7 @@ test "zip local order sorts source offsets and keeps new entries stable" {
       }
     }
   }
-  let order = archive_local_order(archive)
+  let order = archive.local_order()
   for i in 0..<11 {
     @test.assert_eq(order[i], 30 - i * 3)
   }
@@ -999,15 +992,14 @@ test "ZIP64 sizing agrees with emitted headers and descriptors" {
   let counting = Output::counting(None)
   let output = Output::writing(None)
   for out in [counting, output] {
-    write_local_record(
-      out,
+    out.write_local_record(
       entry,
       b"a",
       { compressed_size: 0, compressed: None, },
       true,
       true,
     )
-    write_central_record(out, entry, b"a", 0, 0, true, true)
+    out.write_central_record(entry, b"a", 0, 0, true, true)
   }
   let bytes = output.finish()
   @test.assert_eq(counting.size, bytes.length())

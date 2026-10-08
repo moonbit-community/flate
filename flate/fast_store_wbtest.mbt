@@ -75,9 +75,8 @@ test "stored streaming blocks remain searchable as history" {
     d.push_pending(Bytes::make(1, input[DEFLATE_BLOCK_SIZE - 512 + i]))
   }
   d.chain_ready_history()
-  let packed_match = find_window_match(
+  let packed_match = d.finder.find_window_match(
     d.pending,
-    d.finder,
     start,
     d.pending_end,
     0,

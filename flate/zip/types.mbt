@@ -6,6 +6,14 @@ pub(all) enum Compression {
 } derive(Eq, @debug.Debug)
 
 ///|
+fn Compression::code(compression : Compression) -> Int {
+  match compression {
+    Store => 0
+    Deflate => 8
+  }
+}
+
+///|
 /// Resource bounds applied to a bounded read. Every field is a ceiling in
 /// bytes (or, for `max_entries`, a count); `ReadLimits()` imposes no
 /// limits. `max_preserved_source_bytes` bounds the complete source
@@ -40,8 +48,8 @@ pub fn ReadLimits::ReadLimits(
 }
 
 ///|
-/// Raw local and central directory records captured from a read, kept so an
-/// unchanged entry can be re-emitted byte-for-byte without re-encoding.
+/// Views of source records used to reuse an unchanged entry's encoded payload
+/// and metadata. Central-directory offsets may be patched when writing.
 priv struct SourceRecord {
   local_record : BytesView
   central_record : BytesView
@@ -121,8 +129,7 @@ pub fn Archive::Archive() -> Archive {
 }
 
 ///|
-/// Append a new entry whose payload is `data`. `data` is owned by the archive,
-/// so later `Bytes` mutation cannot corrupt it. The default method is
+/// Append a new entry, retaining its payload as `Bytes`. The default method is
 /// `Deflate`; pass `Store` to keep the payload verbatim. Setting
 /// `data_descriptor=true` emits the entry in streaming form (zeroed local
 /// sizes + a trailing data descriptor).
@@ -222,9 +229,9 @@ pub fn Archive::set_comment(self : Archive, comment : BytesView) -> Unit {
 
 ///|
 /// Returns an independently mutable snapshot of this archive. The clone shares
-/// entry payloads and preserved source records (immutable `Bytes`) but owns a
+/// entry payloads and source storage but owns a
 /// fresh entries array, so `add`/`replace`/`remove` on either side never
-/// affects the other. `add` and `replace` defensively own their inputs.
+/// affects the other.
 pub fn Archive::clone(self : Archive) -> Archive {
   {
     entries: self.entries.copy(),

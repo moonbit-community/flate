@@ -1,7 +1,7 @@
 # flate
 
 Pure-MoonBit **DEFLATE** (RFC 1951) — a runtime-agnostic, suspendable, io-free
-compression engine, with thin **gzip** (RFC 1952), **zlib** (RFC 1950), and
+compression engine, with **gzip** (RFC 1952), **zlib** (RFC 1950), and
 **zip** (APPNOTE.TXT) container wrappers.
 
 CRC-32 and Adler-32 are provided by the `moonbit-community/flate/checksum`
@@ -17,7 +17,7 @@ moon add moonbit-community/flate
 
 The one-shot API is useful when the complete payload is already in memory.
 Read-only codec inputs accept `BytesView`, so a slice of a larger buffer needs
-no ownership conversion or input copy:
+no ownership conversion at the call site:
 
 ```mbt check
 ///|
@@ -31,9 +31,9 @@ test "README raw DEFLATE round-trip" {
 For whole-buffer callers that already own their output storage, use the direct
 buffer API. `deflate_bound` supplies a conservative DEFLATE capacity (it panics
 for a negative input length or an unrepresentable bound);
-compression returns `None` if the supplied buffer is smaller, while decompression
-raises `OutputLimitExceeded`. Reuse `Compressor` and `Decompressor` for many
-streams so their parser and Huffman workspace stays allocated:
+compression returns `None` if its encoded output does not fit, while decompression
+raises `OutputLimitExceeded` if its decoded output does not fit. Reuse
+`Compressor` and `Decompressor` across streams to retain their workspace.
 
 ```mbt check
 ///|
@@ -57,16 +57,15 @@ test "README caller-buffer DEFLATE" {
 ```
 
 `deflate_into` and `inflate_into` are single-use convenience forms of those
-methods. They retain `deflate_all` / `inflate_all`'s complete-stream prefix
-semantics: trailing raw bytes after a valid final block are ignored. Use the
-streaming APIs when input or output must suspend under backpressure.
+methods. Like `inflate_all`, `inflate_into` ignores trailing bytes after a valid
+final DEFLATE block. Use the streaming APIs when input or output must suspend
+under backpressure.
 
 `Compressor::compress(input)` returns independent `Bytes` and reuses its
 workspace across calls, without requiring a caller-owned output buffer.
 
 The streaming API is a pure push state machine. It owns no I/O object, so both
-an async event loop and a future synchronous reader/writer adapter can feed and
-drain the same engine with whatever buffers their runtime provides:
+synchronous and asynchronous callers can supply input and drain output:
 
 ```mbt check
 ///|
@@ -119,8 +118,8 @@ test "README streaming Deflater" {
   and uses bulk window copies. It has the same consumption and backpressure
   semantics as `step`, which accepts arbitrary mutable output views. Both
   release caller buffers after each call.
-- `gzip.Decoder::step_into(input, output)` accepts a complete `FixedArray[Byte]`
-  and checksums decoded output in batches. Use it when the caller owns a fixed
+- gzip and zlib `Decoder::step_into(input, output)` accept a complete
+  `FixedArray[Byte]` and checksum decoded output in batches. Use it when the caller owns a fixed
   output buffer; `step` accepts arbitrary mutable views. Both drain pending
   body input before accepting more, so output can be produced while
   `last_consumed()` is zero. Re-present the unaccepted input on the next call.
@@ -131,8 +130,7 @@ test "README streaming Deflater" {
 - Once `Done` is returned, new input is not consumed; reset the raw engine or
   the zlib `Encoder` (`reset(dictionary?)`), or create a new wrapper, before
   reuse. A reset encoder produces exactly the bytes of a freshly constructed
-  one while reusing its ~0.5 MiB of match-finder and window allocations,
-  which dominates the cost of compressing many small streams.
+  one with the same options and driving schedule, while reusing its workspace.
 - Configure a raw preset dictionary through `Deflater(...)`/`Inflater(...)`, or
   while starting a fresh stream through `reset(dictionary=...)`; dictionary
   selection cannot be mutated after a stream begins.
@@ -175,7 +173,7 @@ test "README exact and limited inflate" {
 
 `inflate_exact` combines exact framing with optional bounds: `max_output` caps
 the decoded size (raising `OutputLimitExceeded` before any oversized result is
-built; negative limits are rejected), and `preallocated=true` replays the
+returned; negative limits are rejected), and `preallocated=true` replays the
 deterministic decode a second time into one exactly sized allocation. The
 preallocated mode trades roughly double the decode work for a peak memory of
 about one decoded output (instead of a growing buffer plus a final copy), which
@@ -202,7 +200,7 @@ Supported features include STORED and DEFLATE entries, ZIP64, data descriptors,
 UTF-8 names, and archive comments. `read` accepts `ReadLimits` to bound archive
 size, entry count, decompressed sizes, and the complete retained source, plus a
 `cancelled` callback. Exceeding a limit raises
-`ZipError(LimitExceeded(kind, limit, actual))`.
+`ZipError(LimitExceeded(kind, limit, actual), message)`.
 
 `read` verifies each entry's CRC-32, raising `ChecksumMismatch` for a damaged
 payload. Cancellation remains `Cancelled` throughout parsing, decoding and
@@ -213,7 +211,8 @@ archive round-trips byte-for-byte, including prefixes, gaps and directory order.
 After an edit, local records and directory entries keep their respective order;
 bytes outside records, such as prefixes and gaps, are omitted.
 `max_preserved_source_bytes` covers the full source, including these bytes.
-Supply `max_output_bytes` to bound the serialized size before allocating it. `write` returns the complete ZIP as `Bytes`.
+Supply `max_output_bytes` to bound the serialized size before allocating it.
+`write` returns the complete ZIP as `Bytes`.
 
 For incremental output, use `Writer` with a synchronous sink. `add` accepts a
 complete file; `begin_entry` / `write` / `end_entry` accept chunks. Supply `size`
@@ -240,90 +239,36 @@ Call `finish` to write the central directory. The sink must consume each chunk
 before returning. If it raises an error, the writer becomes unusable and the
 partial output must be discarded.
 
-`Writer` retains directory metadata and codec buffers, plus the current file
-for `add` or chunks for `write`. Chunked input reduces memory use at some cost
-to throughput. Folder traversal and file I/O belong to the caller.
+`Writer` retains directory metadata, current-entry metadata and codec buffers.
+`add` processes a complete file during the call; `write` feeds chunks through
+the codec or directly to the sink. Folder traversal and file I/O belong to
+the caller.
 
 ## Architecture
 
-```
-ENCODE: bytes → raw DEFLATE
-═══════════════════════════
+The raw engine shares Huffman construction, block writing and format validation
+across its encoding and decoding paths:
 
- deflate_all /    Deflater::step             deflate_all_split(input)   deflate_all_optimal(input)
- Compressor::      streaming, suspendable;    one-shot, adaptive         one-shot, offline
- compress_into sync flush, preset dict    block splitting            (zopfli-style)
- one-shot, up to
-  64 KB blocks
-        │              │                           │                        │
-        └──────┬───────┘                           │                        │
-               ▼                                   ▼                        ▼
- ┌─ parser ─────────────────┐    ┌─ planner ─────────────────┐  ┌─ parser ───────────────────┐
- │ lz77.mbt                 │    │ split_plan.mbt            │  │ optimal_parse.mbt          │
- │ greedy/lazy hash chains  │    │ observation-divergence    │  │ squeeze: iterated          │
- │ (levels 1-9; 0 = stored) │    │ split, arbitrated vs      │  │ cost-optimal shortest path │
- ├─ block driver ───────────┤    │ the ordinary block size   │  ├─ planner ──────────────────┤
- │ block_planner.mbt (strm) │    └────────────┬──────────────┘  │ optimal_plan.mbt           │
- │ or deflate_all.mbt driver│                 │                 │ content-driven splitting   │
- │ streaming: 16 KB blocks  │                 │                 │ (FindMinimum + resplit)    │
- └────────────┬─────────────┘    └─────────────┬──────────────┘
-              └────────────┬───────────────────┘
-                           ▼
-           packed tokens + caller-owned frequencies
-                           │              ← the seam: any parser/planner
-                           │                pair feeds the same writer
-                           ▼
-           block_writer.mbt  ◄──  huffman_build.mbt
-           one block: stored /      (package-merge length-limited
-           fixed / dynamic,          canonical codes)
-           whichever is smallest
-                           │
-                           ▼
-           bitwriter.mbt (LSB-first)  →  raw DEFLATE bit stream
+| Path | Implementation |
+| --- | --- |
+| Whole-buffer compression | `deflate_all.mbt`, `lz77.mbt` |
+| Streaming compression | `deflate.mbt`, `block_planner.mbt`, `lz77.mbt` |
+| Content-driven block splitting | `split_plan.mbt` |
+| Iterated optimal parsing and splitting | `optimal_parse.mbt`, `optimal_plan.mbt` |
+| Block encoding and bit output | `block_writer.mbt`, `huffman_build.mbt`, `bitwriter.mbt` |
+| Whole-buffer decompression | `inflate_all.mbt` |
+| Streaming decompression | `inflate.mbt` |
+| Shared decoding tables and validation | `huffman_table.mbt`, `tables.mbt`, `decode_rules.mbt` |
 
+Unbounded `inflate_all` uses the direct `MemDecoder` path. Bounded
+`inflate_all` and `inflate_exact` drive the streaming inflater.
+`Decompressor::decompress_into` uses the direct decoder with caller-owned output.
+Differential tests compare one-shot and streaming decoding across randomized
+chunk/output schedules, truncations and bit flips.
 
-DECODE: raw DEFLATE → bytes
-═══════════════════════════
-
-           raw DEFLATE bit stream
-                    │
-           huffman_table.mbt — code lengths → zlib-style chunked tables
-                    │
-        ┌───────────┴─────────────┐
-        ▼                         ▼
- Inflater::step             inflate_all / Decompressor::decompress_into
- (inflate.mbt)              (inflate_all.mbt)
- streaming, suspendable     one-shot, growable or caller-owned output —
- (internal atomic staging); trusted input only
- 32 KB window, 1-byte
- output progress,
- preset dictionary
-
-
-CONTAINERS: thin framing over the engine
-════════════════════════════════════════
-
-  gzip/  Encoder/Decoder, compress/decompress            (RFC 1952)
-         10 B header (O(1) header memory, FHCRC verified) + CRC-32 + ISIZE;
-         decodes concatenated multi-member streams (§2.2)
-  zlib/  Encoder/Decoder, compress/decompress   (RFC 1950)
-         2 B header (+ FDICT dictionary id) + Adler-32
-  zip/   read/write, Archive/Entry, Writer, ZIP64,         (APPNOTE.TXT)
-         bounded reads, incremental writes, byte-preserving rewrites
-  checksum/  shared CRC-32 / Adler-32 package
-
- shared by both pipelines:
-   tables.mbt  RFC 1951 symbol tables, fixed codes, window size
-   decode_rules.mbt  pure distance/count/stored-block/history validation shared
-                     by the one-shot and streaming decoders
-   status.mbt  Done / NeedMoreInput / NeedMoreOutput
-```
-
-`inflate_all` intentionally keeps its direct, growable-output `MemDecoder` fast
-path instead of paying the streaming state machine's staging and circular-window
-costs. Both decoders call the same pure RFC validation rules, and a deterministic
-differential-fuzz suite checks them across randomized chunk/output schedules,
-truncations, and bit flips.
+The gzip and zlib packages add framing, checksums and streaming wrappers.
+ZIP provides in-memory archives and a synchronous incremental writer.
+The checksum package supplies CRC-32 and Adler-32 independently of the codecs.
 
 ## Optional fast stored blocks
 
@@ -353,7 +298,7 @@ functions, and `zip.Writer`. Whole-buffer APIs classify the entire input;
 streaming encoders decide per block and retain stored bytes as match history.
 ZIP entries declared `Deflate` remain method 8; this option selects stored blocks
 inside DEFLATE, rather than changing the entry to ZIP method 0. Preserved ZIP
-records remain byte-for-byte unchanged.
+payloads are reused; record offsets may be patched.
 
 This is **not a proof of incompressibility**. Long repeated patterns or useful
 dictionary matches can be missed, potentially making output much larger. Enable
@@ -365,17 +310,15 @@ lossless, and the normal output bounds and output limits still apply.
 All standard DEFLATE on the wire. Levels 0-9 are available on
 `deflate_all` / `Deflater`. The default level 6 uses distance-aware lazy
 matching and a sampled minimum match length; the other levels retain their
-zlib-derived tuning. Whole-buffer level 6 uses 65,535-byte block targets,
-while streaming keeps its bounded 16 KiB input blocks. `deflate_all_split` is a one-shot mid-tier that
-tokenizes each large window once with the full 32 KB history and cuts blocks
+zlib-derived tuning. Whole-buffer compression uses 65,535-byte block targets,
+while streaming keeps its bounded 16 KiB input blocks. `deflate_all_split`
+tokenizes each input range once with the full 32 KB history and cuts blocks
 where the literal/match observation distribution drifts (libdeflate's
 observation-divergence splitter, `split_plan.mbt`), arbitrating each chunk
-against the ordinary block cadence by exact cost so it is never larger — typically
-several percent smaller on prose, code, and repetitive data. `deflate_all_optimal`
+against fixed-cadence cuts using estimated block costs. `deflate_all_optimal`
 adds zopfli-style iterated optimal parsing (`optimal_parse.mbt`) plus
-content-driven block splitting (`optimal_plan.mbt`) — drop-in replacements for
-the greedy parser (`lz77.mbt`) and the threshold planner (`block_planner.mbt`)
-behind the same (tokens, frequencies) → `emit_block` seam.
+content-driven block splitting (`optimal_plan.mbt`). Both paths use the shared
+block writer. Output size depends on the input and chosen parsing strategy.
 
 The containers expose both tiers: `@gzip.compress` / `@zlib.compress` and their
 streaming `Encoder`s take `level` 0-9; `@gzip.compress_optimal` /

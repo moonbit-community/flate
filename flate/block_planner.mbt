@@ -58,7 +58,10 @@ fn Deflater::chain_ready_history(deflater : Deflater) -> Unit {
 }
 
 ///|
-fn Deflater::record_chained_positions(deflater : Deflater, processed : Int) -> Unit {
+fn Deflater::record_chained_positions(
+  deflater : Deflater,
+  processed : Int,
+) -> Unit {
   let chained_end = processed.min((deflater.pending_end - 3).max(0))
   if chained_end > deflater.hashed_through {
     deflater.hashed_through = chained_end
@@ -79,7 +82,12 @@ fn Deflater::try_fast_store(
     return false
   }
   deflater.chain_ready_history()
-  deflater.w.write_stored_window(deflater.pending, deflater.parse_pos, end, is_final~)
+  deflater.w.write_stored_window(
+    deflater.pending,
+    deflater.parse_pos,
+    end,
+    is_final~,
+  )
   deflater.finder.insert_window_positions(
     deflater.pending,
     deflater.parse_pos,
@@ -97,7 +105,9 @@ fn Deflater::try_fast_store(
 /// tail, and `tokenize_window` only commits `DEFLATE_BLOCK_SIZE` bytes except
 /// for an ordinary 258-byte match overhang.
 fn Deflater::emit_capped(deflater : Deflater) -> Unit {
-  let target = (deflater.parse_pos + DEFLATE_BLOCK_SIZE).min(deflater.pending_end)
+  let target = (deflater.parse_pos + DEFLATE_BLOCK_SIZE).min(
+    deflater.pending_end,
+  )
   if deflater.try_fast_store(target, is_final=false) {
     return
   }

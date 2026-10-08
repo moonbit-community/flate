@@ -162,7 +162,7 @@ priv struct PreparedPayload {
 
 ///|
 /// Compress an entry once using the archive's reusable workspace.
-fn prepare_payload(
+fn Entry::prepare_payload(
   entry : Entry,
   compressor : @flate.Compressor,
 ) -> PreparedPayload {
@@ -176,15 +176,7 @@ fn prepare_payload(
 }
 
 ///|
-fn method_code(entry : Entry) -> Int {
-  match entry.compression {
-    Store => 0
-    Deflate => 8
-  }
-}
-
-///|
-fn entry_name_bytes(entry : Entry) -> Bytes raise ZipError {
+fn Entry::name_bytes(entry : Entry) -> Bytes raise ZipError {
   let name = @encoding/utf8.encode(entry.name)
   if name.length() > 0xffff {
     raise ZipError(UnsupportedFeature, "zip: entry name too long")
@@ -193,27 +185,27 @@ fn entry_name_bytes(entry : Entry) -> Bytes raise ZipError {
 }
 
 ///|
-fn write_local_record(
-  out : Output,
+fn Output::write_local_record(
+  output : Output,
   entry : Entry,
   name_bytes : Bytes,
   payload : PreparedPayload,
   use_descriptor : Bool,
   force_zip64 : Bool,
 ) -> Unit raise ZipError {
-  let method_id = method_code(entry)
+  let method_id = entry.compression.code()
   let data_len = entry.data.length()
   let compressed_size = payload.compressed_size
   let crc = entry.crc32
   let needs_zip64_sizes = force_zip64 ||
     data_len.to_uint_checked() > MAX_U32 ||
     compressed_size.to_uint_checked() > MAX_U32
-  if out.is_counting() {
+  if output.is_counting() {
     let extra_size = if needs_zip64_sizes { 20 } else { 0 }
-    out.count(30 + name_bytes.length() + extra_size)
-    out.count(compressed_size)
+    output.count(30 + name_bytes.length() + extra_size)
+    output.count(compressed_size)
     if use_descriptor {
-      out.count(if needs_zip64_sizes { 24 } else { 16 })
+      output.count(if needs_zip64_sizes { 24 } else { 16 })
     }
     return
   }
@@ -246,9 +238,9 @@ fn write_local_record(
   } else {
     data_len.to_uint_checked()
   }
-  let start = out.size
-  out.grow(30)
-  if out.buf is Some(buf) {
+  let start = output.size
+  output.grow(30)
+  if output.buf is Some(buf) {
     // grow reserves the entire fixed header before any unchecked store.
     // All u16 fields are constants, bounded enum codes, or validated lengths.
     buf.unsafe_write_uint32_le(start, LOCAL_HEADER_SIG)
@@ -262,30 +254,30 @@ fn write_local_record(
     buf.unsafe_write_uint16_le(start + 26, name_bytes.length().to_uint16())
     buf.unsafe_write_uint16_le(start + 28, local_extra.length().to_uint16())
   }
-  out.write_bytes(name_bytes)
-  out.write_bytes(local_extra)
+  output.write_bytes(name_bytes)
+  output.write_bytes(local_extra)
   // Both stored and compressed payloads may be followed by a descriptor.
   if payload.compressed is Some(compressed) {
-    out.write_bytes(compressed)
+    output.write_bytes(compressed)
   } else {
-    out.write_bytes(entry.data)
+    output.write_bytes(entry.data)
   }
   if use_descriptor {
-    out.write_u32(DATA_DESCRIPTOR_SIG)
-    out.write_u32(crc)
+    output.write_u32(DATA_DESCRIPTOR_SIG)
+    output.write_u32(crc)
     if needs_zip64_sizes {
-      out.write_u64(compressed_size.to_uint64_checked())
-      out.write_u64(data_len.to_uint64_checked())
+      output.write_u64(compressed_size.to_uint64_checked())
+      output.write_u64(data_len.to_uint64_checked())
     } else {
-      out.write_u32(compressed_size.to_uint_checked())
-      out.write_u32(data_len.to_uint_checked())
+      output.write_u32(compressed_size.to_uint_checked())
+      output.write_u32(data_len.to_uint_checked())
     }
   }
 }
 
 ///|
-fn write_central_record(
-  out : Output,
+fn Output::write_central_record(
+  output : Output,
   entry : Entry,
   name_bytes : Bytes,
   local_offset : Int,
@@ -293,17 +285,17 @@ fn write_central_record(
   use_descriptor : Bool,
   force_zip64 : Bool,
 ) -> Unit raise ZipError {
-  let method_id = method_code(entry)
+  let method_id = entry.compression.code()
   let data_len = entry.data.length()
   let needs_zip64_sizes = force_zip64 ||
     data_len.to_uint_checked() > MAX_U32 ||
     compressed_size.to_uint_checked() > MAX_U32
   let needs_zip64_offset = force_zip64 ||
     local_offset.to_uint_checked() > MAX_U32
-  if out.is_counting() {
+  if output.is_counting() {
     let extra_size = (if needs_zip64_sizes { 16 } else { 0 }) +
       (if needs_zip64_offset { 8 } else { 0 })
-    out.count(
+    output.count(
       46 +
       name_bytes.length() +
       (if extra_size > 0 { 4 + extra_size } else { 0 }),
@@ -337,9 +329,9 @@ fn write_central_record(
   } else {
     local_offset.to_uint_checked()
   }
-  let start = out.size
-  out.grow(46)
-  if out.buf is Some(buf) {
+  let start = output.size
+  output.grow(46)
+  if output.buf is Some(buf) {
     // grow reserves all 46 bytes; the generated extra is at most 28 bytes.
     buf.unsafe_write_uint32_le(start, CENTRAL_HEADER_SIG)
     buf.unsafe_write_uint16_le(start + 4, version.to_uint16())
@@ -357,13 +349,13 @@ fn write_central_record(
     buf.unsafe_write_uint32_le(start + 38, 0)
     buf.unsafe_write_uint32_le(start + 42, offset_field)
   }
-  out.write_bytes(name_bytes)
-  out.write_bytes(central_extra)
+  output.write_bytes(name_bytes)
+  output.write_bytes(central_extra)
 }
 
 ///|
-fn write_preserved_central_record(
-  out : Output,
+fn Output::write_preserved_central_record(
+  output : Output,
   source : SourceRecord,
   local_offset : Int,
 ) -> Unit raise ZipError {
@@ -376,33 +368,33 @@ fn write_preserved_central_record(
     )
   }
   guard source.central_zip64_offset_position is Some(position) else {
-    out.write_bytes(template[0:42])
-    out.write_u32(local_offset.to_uint_checked())
-    out.write_bytes(template[46:])
+    output.write_bytes(template[0:42])
+    output.write_u32(local_offset.to_uint_checked())
+    output.write_bytes(template[46:])
     return
   }
-  out.write_bytes(template[0:position])
-  out.write_u64(local_offset.to_uint64_checked())
-  out.write_bytes(template[position + 8:])
+  output.write_bytes(template[0:position])
+  output.write_u64(local_offset.to_uint64_checked())
+  output.write_bytes(template[position + 8:])
 }
 
 ///|
-fn write_generated_classic_end_record(
-  out : Output,
+fn Output::write_generated_classic_end_record(
+  output : Output,
   zip64 : Bool,
   total_entries : Int,
   central_size : Int,
   central_offset : Int,
   comment : Bytes,
 ) -> Unit raise ZipError {
-  out.write_u32(END_OF_CENTRAL_SIG)
-  out.write_u16(0)
-  out.write_u16(0)
+  output.write_u32(END_OF_CENTRAL_SIG)
+  output.write_u16(0)
+  output.write_u16(0)
   if zip64 {
-    out.write_u16(0xffff)
-    out.write_u16(0xffff)
-    out.write_u32(MAX_U32)
-    out.write_u32(MAX_U32)
+    output.write_u16(0xffff)
+    output.write_u16(0xffff)
+    output.write_u32(MAX_U32)
+    output.write_u32(MAX_U32)
   } else {
     if total_entries > 0xffff {
       raise ZipError(
@@ -410,50 +402,50 @@ fn write_generated_classic_end_record(
         "zip: too many entries for a classic archive",
       )
     }
-    out.write_u16(total_entries)
-    out.write_u16(total_entries)
-    out.write_u32(central_size.to_uint_checked())
-    out.write_u32(central_offset.to_uint_checked())
+    output.write_u16(total_entries)
+    output.write_u16(total_entries)
+    output.write_u32(central_size.to_uint_checked())
+    output.write_u32(central_offset.to_uint_checked())
   }
   if comment.length() > 0xffff {
     raise ZipError(UnsupportedFeature, "zip: archive comment too long")
   }
-  out.write_u16(comment.length())
-  out.write_bytes(comment)
+  output.write_u16(comment.length())
+  output.write_bytes(comment)
 }
 
 ///|
-fn write_generated_zip64_trailer(
-  out : Output,
+fn Output::write_generated_zip64_trailer(
+  output : Output,
   total_entries : Int,
   central_size : Int,
   central_offset : Int,
   comment : Bytes,
 ) -> Unit raise ZipError {
-  let zip64_offset = out.size
-  out.write_u32(ZIP64_EOCD_SIG)
-  out.write_u64((44).to_uint64_checked())
-  out.write_u16(45)
-  out.write_u16(45)
-  out.write_u32(0)
-  out.write_u32(0)
+  let zip64_offset = output.size
+  output.write_u32(ZIP64_EOCD_SIG)
+  output.write_u64((44).to_uint64_checked())
+  output.write_u16(45)
+  output.write_u16(45)
+  output.write_u32(0)
+  output.write_u32(0)
   let entry_count = total_entries.to_uint64_checked()
-  out.write_u64(entry_count)
-  out.write_u64(entry_count)
-  out.write_u64(central_size.to_uint64_checked())
-  out.write_u64(central_offset.to_uint64_checked())
-  out.write_u32(ZIP64_LOCATOR_SIG)
-  out.write_u32(0)
-  out.write_u64(zip64_offset.to_uint64_checked())
-  out.write_u32(1)
-  write_generated_classic_end_record(
-    out, true, total_entries, central_size, central_offset, comment,
+  output.write_u64(entry_count)
+  output.write_u64(entry_count)
+  output.write_u64(central_size.to_uint64_checked())
+  output.write_u64(central_offset.to_uint64_checked())
+  output.write_u32(ZIP64_LOCATOR_SIG)
+  output.write_u32(0)
+  output.write_u64(zip64_offset.to_uint64_checked())
+  output.write_u32(1)
+  output.write_generated_classic_end_record(
+    true, total_entries, central_size, central_offset, comment,
   )
 }
 
 ///|
-fn write_preserved_trailer(
-  out : Output,
+fn Output::write_preserved_trailer(
+  output : Output,
   trailer : TrailerTemplate,
   total_entries : Int,
   central_size : Int,
@@ -465,8 +457,8 @@ fn write_preserved_trailer(
     raise ZipError(UnsupportedFeature, "zip: preserved end record is malformed")
   }
   guard trailer.zip64_end_record is Some(end_record) else {
-    write_preserved_classic_end_record(
-      out, classic, total_entries, central_size, central_offset,
+    output.write_preserved_classic_end_record(
+      classic, total_entries, central_size, central_offset,
     )
     return
   }
@@ -477,15 +469,15 @@ fn write_preserved_trailer(
       "zip: preserved zip64 end record is malformed",
     )
   }
-  let zip64_offset = out.size
+  let zip64_offset = output.size
   // Patch the two entry-count fields, central size, and central offset
   // (offsets 24/32/40/48 within the record) over the verbatim template.
-  out.write_bytes(end_record[0:24])
-  out.write_u64(total_entries.to_uint64_checked())
-  out.write_u64(total_entries.to_uint64_checked())
-  out.write_u64(central_size.to_uint64_checked())
-  out.write_u64(central_offset.to_uint64_checked())
-  out.write_bytes(end_record[56:])
+  output.write_bytes(end_record[0:24])
+  output.write_u64(total_entries.to_uint64_checked())
+  output.write_u64(total_entries.to_uint64_checked())
+  output.write_u64(central_size.to_uint64_checked())
+  output.write_u64(central_offset.to_uint64_checked())
+  output.write_bytes(end_record[56:])
   guard trailer.zip64_locator is Some(locator) else {
     raise ZipError(
       UnsupportedFeature,
@@ -499,20 +491,20 @@ fn write_preserved_trailer(
       "zip: preserved zip64 locator is malformed",
     )
   }
-  out.write_bytes(locator[0:8])
-  out.write_u64(zip64_offset.to_uint64_checked())
-  out.write_bytes(locator[16:])
+  output.write_bytes(locator[0:8])
+  output.write_u64(zip64_offset.to_uint64_checked())
+  output.write_bytes(locator[16:])
   // The classic record of a preserved ZIP64 archive carries sentinels;
   // re-emit it verbatim.
-  out.write_bytes(classic)
+  output.write_bytes(classic)
 }
 
 ///|
 /// Streams a classic end record while patching both entry-count fields
 /// (offsets 8, 10) and the central size/offset (offsets 12, 16). Fields
 /// carrying ZIP64 sentinels are left untouched.
-fn write_preserved_classic_end_record(
-  out : Output,
+fn Output::write_preserved_classic_end_record(
+  output : Output,
   classic : BytesView,
   total_entries : Int,
   central_size : Int,
@@ -526,29 +518,29 @@ fn write_preserved_classic_end_record(
   let mut cursor = 0
   let entries_on_disk = read_u16_le_at(classic, 8)
   if entries_on_disk != 0xffff {
-    out.write_bytes(classic[cursor:8])
-    out.write_u16(count)
+    output.write_bytes(classic[cursor:8])
+    output.write_u16(count)
     cursor = 10
   }
   let total_on_disk = read_u16_le_at(classic, 10)
   if total_on_disk != 0xffff {
-    out.write_bytes(classic[cursor:10])
-    out.write_u16(count)
+    output.write_bytes(classic[cursor:10])
+    output.write_u16(count)
     cursor = 12
   }
   let size_field = read_u32_le_at_raw(classic, 12)
   if size_field != MAX_U32 {
-    out.write_bytes(classic[cursor:12])
-    out.write_u32(central_size.to_uint_checked())
+    output.write_bytes(classic[cursor:12])
+    output.write_u32(central_size.to_uint_checked())
     cursor = 16
   }
   let offset_field = read_u32_le_at_raw(classic, 16)
   if offset_field != MAX_U32 {
-    out.write_bytes(classic[cursor:16])
-    out.write_u32(central_offset.to_uint_checked())
+    output.write_bytes(classic[cursor:16])
+    output.write_u32(central_offset.to_uint_checked())
     cursor = 20
   }
-  out.write_bytes(classic[cursor:])
+  output.write_bytes(classic[cursor:])
 }
 
 ///|
@@ -568,7 +560,7 @@ priv struct EntryPlan {
 /// (its source records are dropped for re-encoding, but its ordering hint
 /// survives), so a byte-preserving rewrite never silently moves an edited part
 /// to the end of the archive.
-fn archive_local_order(archive : Archive) -> FixedArray[Int] {
+fn Archive::local_order(archive : Archive) -> FixedArray[Int] {
   let order = FixedArray::makei(archive.entries.length(), index => index)
   // Most archives are already in local-record order, including all newly built
   // archives. Avoid sorting (and its comparisons) on this common path.
@@ -630,7 +622,7 @@ fn prepare_archive(
       })
       continue
     }
-    let name_bytes = entry_name_bytes(entry)
+    let name_bytes = entry.name_bytes()
     // Reject an impossible header before doing compression work.
     if out.limit is Some(limit) {
       guard 30 + name_bytes.length() <= limit - out.size else {
@@ -648,11 +640,10 @@ fn prepare_archive(
           compressor = Some(codec)
           codec
         })
-        prepare_payload(entry, codec)
+        entry.prepare_payload(codec)
       }
     }
-    write_local_record(
-      out,
+    out.write_local_record(
       entry,
       name_bytes,
       payload,
@@ -681,10 +672,9 @@ fn write_directory(
     let entry = archive.entries[index]
     let plan = plans[positions[index]]
     if preserve && entry.source is Some(source) {
-      write_preserved_central_record(out, source, plan.local_offset)
+      out.write_preserved_central_record(source, plan.local_offset)
     } else {
-      write_central_record(
-        out,
+      out.write_central_record(
         entry,
         plan.name_bytes,
         plan.local_offset,
@@ -712,21 +702,19 @@ fn write_trailer(
     central_offset.to_uint_checked() > MAX_U32
   match (preserve, archive.trailer) {
     (true, Some(trailer)) if !needs_zip64 || trailer.zip64_end_record is Some(_) =>
-      write_preserved_trailer(
-        out, trailer, total_entries, central_size, central_offset,
+      out.write_preserved_trailer(
+        trailer, total_entries, central_size, central_offset,
       )
     _ =>
       if needs_zip64 {
-        write_generated_zip64_trailer(
-          out,
+        out.write_generated_zip64_trailer(
           total_entries,
           central_size,
           central_offset,
           archive.comment,
         )
       } else {
-        write_generated_classic_end_record(
-          out,
+        out.write_generated_classic_end_record(
           false,
           total_entries,
           central_size,
@@ -754,7 +742,7 @@ fn write_impl(
     out.write_bytes(bytes)
     return out.finish()
   }
-  let order = archive_local_order(archive)
+  let order = archive.local_order()
   // Map central-directory order to the plans prepared in local-record order.
   let positions = FixedArray::make(order.length(), 0)
   for position in 0..<order.length() {
@@ -783,8 +771,7 @@ fn write_impl(
     if preserve && entry.source is Some(source) {
       out.write_bytes(source.local_record)
     } else {
-      write_local_record(
-        out,
+      out.write_local_record(
         entry,
         plan.name_bytes,
         plan.payload,
@@ -814,8 +801,8 @@ fn write_impl(
 /// Serialize `archive` into a ZIP byte stream.
 ///
 /// By default every entry is encoded fresh. With `preserve=true`, unchanged
-/// entries retain their original records; a pristine archive round-trips
-/// byte-for-byte, including prefixes, gaps and directory ordering. After any
+/// entries reuse their source records with updated offsets. A pristine archive
+/// round-trips byte-for-byte, including prefixes, gaps and directory ordering. After any
 /// edit, records are rebuilt in their respective local and directory orders;
 /// bytes outside records (such as prefixes and gaps) are not retained in the
 /// output. Replaced and newly added entries are encoded normally.

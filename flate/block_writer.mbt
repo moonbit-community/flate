@@ -186,7 +186,7 @@ fn canonical_code_values(
 
 ///|
 /// Materialize the code words for a dynamic block after its lengths have
-/// already been used for exact cost estimation.
+/// already been used for cost estimation.
 fn materialize_dynamic_codes(lengths : DynamicCodeLengths) -> DynamicCodes {
   {
     lengths,
@@ -197,8 +197,9 @@ fn materialize_dynamic_codes(lengths : DynamicCodeLengths) -> DynamicCodes {
 }
 
 ///|
-/// Exact bit cost of each candidate encoding for one block of `byte_len`
-/// input bytes. `ll_freq` must already include the end-of-block symbol.
+/// Estimated bit cost of each encoding for `byte_len` input bytes. Stored
+/// blocks use five framing bytes per chunk, without tracking the current bit
+/// alignment. `ll_freq` must already include the end-of-block symbol.
 /// Shared by `emit_block`'s encoding choice and the optimal planner's split
 /// decisions, so both always use the same accounting.
 fn estimate_block_cost(
@@ -266,18 +267,18 @@ fn choose_block_encoding(
 }
 
 ///|
-fn write_huffman_block(
-  w : BitWriter,
+fn BitWriter::write_huffman_block(
+  writer : BitWriter,
   dynamic_codes : DynamicCodes?,
   tokens : ArrayView[Int],
   is_final : Bool,
 ) -> Unit {
-  w.write_bit(if is_final { 1 } else { 0 }) // BFINAL
+  writer.write_bit(if is_final { 1 } else { 0 }) // BFINAL
   guard dynamic_codes is Some(codes) else {
-    write_fixed_block(w, tokens)
+    writer.write_fixed_block(tokens)
     return
   }
-  write_dynamic_block(w, codes, tokens)
+  writer.write_dynamic_block(codes, tokens)
 }
 
 ///|
@@ -290,16 +291,16 @@ fn write_huffman_block(
 /// before each field and no field exceeds 15 bits, so the 31-bit positive
 /// range of `Int` is never exceeded. Bytes are emitted exactly as by
 /// `write_bits`, which this inlines.
-fn write_tokens(
-  w : BitWriter,
+fn BitWriter::write_tokens(
+  writer : BitWriter,
   tokens : ArrayView[Int],
   ll_val : FixedArray[UInt],
   ll_len : FixedArray[Int],
   dd_val : FixedArray[UInt],
   dd_len : FixedArray[Int],
 ) -> Unit {
-  let mut bitbuf = w.bitbuf
-  let mut bit_count = w.bit_count
+  let mut bitbuf = writer.bitbuf
+  let mut bit_count = writer.bit_count
   for tok in tokens {
     if tok < 256 {
       bitbuf = bitbuf | (ll_val[tok].reinterpret_as_int() << bit_count)
@@ -317,7 +318,7 @@ fn write_tokens(
       bitbuf = bitbuf | ((length - len_base[lidx]) << bit_count)
       bit_count = bit_count + len_extra[lidx]
       while bit_count >= 8 {
-        w.write_byte((bitbuf & 0xFF).to_byte())
+        writer.write_byte((bitbuf & 0xFF).to_byte())
         bitbuf = bitbuf >> 8
         bit_count = bit_count - 8
       }
@@ -325,7 +326,7 @@ fn write_tokens(
       bitbuf = bitbuf | (dd_val[didx].reinterpret_as_int() << bit_count)
       bit_count = bit_count + dd_len[didx]
       while bit_count >= 8 {
-        w.write_byte((bitbuf & 0xFF).to_byte())
+        writer.write_byte((bitbuf & 0xFF).to_byte())
         bitbuf = bitbuf >> 8
         bit_count = bit_count - 8
       }
@@ -333,70 +334,72 @@ fn write_tokens(
       bit_count = bit_count + dist_extra[didx]
     }
     while bit_count >= 8 {
-      w.write_byte((bitbuf & 0xFF).to_byte())
+      writer.write_byte((bitbuf & 0xFF).to_byte())
       bitbuf = bitbuf >> 8
       bit_count = bit_count - 8
     }
   }
-  w.bitbuf = bitbuf
-  w.bit_count = bit_count
+  writer.bitbuf = bitbuf
+  writer.bit_count = bit_count
 }
 
 ///|
 /// Write one dynamic-Huffman block (BTYPE=10): the HLIT/HDIST/HCLEN fields, the
 /// code-length code lengths, the RLE-coded code lengths, the token stream, and
 /// the end-of-block symbol.
-fn write_dynamic_block(
-  w : BitWriter,
+fn BitWriter::write_dynamic_block(
+  writer : BitWriter,
   codes : DynamicCodes,
   tokens : ArrayView[Int],
 ) -> Unit {
-  w.write_bits(2, 2) // BTYPE = 10 (dynamic)
-  w.write_bits(codes.lengths.hlit - 257, 5)
-  w.write_bits(codes.lengths.hdist - 1, 5)
-  w.write_bits(codes.lengths.hclen - 4, 4)
+  writer.write_bits(2, 2) // BTYPE = 10 (dynamic)
+  writer.write_bits(codes.lengths.hlit - 257, 5)
+  writer.write_bits(codes.lengths.hdist - 1, 5)
+  writer.write_bits(codes.lengths.hclen - 4, 4)
   for k in 0..<codes.lengths.hclen {
-    w.write_bits(codes.lengths.codelen_code_len[code_order[k]], 3)
+    writer.write_bits(codes.lengths.codelen_code_len[code_order[k]], 3)
   }
   for it in codes.lengths.codelen_syms {
-    w.write_rcode(
+    writer.write_rcode(
       codes.codelen_code_val[it.sym],
       codes.lengths.codelen_code_len[it.sym],
     )
     if it.nextra > 0 {
-      w.write_bits(it.extra, it.nextra)
+      writer.write_bits(it.extra, it.nextra)
     }
   }
-  write_tokens(
-    w,
+  writer.write_tokens(
     tokens,
     codes.dll_val,
     codes.lengths.dll_len,
     codes.dd_val,
     codes.lengths.dd_len,
   )
-  w.write_rcode(codes.dll_val[256], codes.lengths.dll_len[256]) // EOB
+  writer.write_rcode(codes.dll_val[256], codes.lengths.dll_len[256]) // EOB
 }
 
 ///|
 /// Write one fixed-Huffman block (BTYPE=01): the token stream with the fixed
 /// literal/length and distance tables, then the end-of-block symbol.
-fn write_fixed_block(w : BitWriter, tokens : ArrayView[Int]) -> Unit {
-  w.write_bits(1, 2) // BTYPE = 01 (fixed)
-  write_tokens(
-    w, tokens, fixed_ll_val, fixed_ll_len, fixed_dist_val, fixed_dist_len,
+fn BitWriter::write_fixed_block(
+  writer : BitWriter,
+  tokens : ArrayView[Int],
+) -> Unit {
+  writer.write_bits(1, 2) // BTYPE = 01 (fixed)
+  writer.write_tokens(
+    tokens, fixed_ll_val, fixed_ll_len, fixed_dist_val, fixed_dist_len,
   )
-  w.write_rcode(fixed_ll_val[256], fixed_ll_len[256]) // EOB
+  writer.write_rcode(fixed_ll_val[256], fixed_ll_len[256]) // EOB
 }
 
 ///|
 /// Write one empty final block (no tokens) — the one-shot drivers' encoding of
 /// an empty input.
-fn emit_empty_block(w : BitWriter, input : BytesView) -> Unit {
+fn BitWriter::emit_empty_block(writer : BitWriter, input : BytesView) -> Unit {
   let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
   let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
   let none : FixedArray[Int] = []
-  emit_block(w, input, 0, 0, none, ll_freq, d_freq, is_final=true)
+  writer.emit_block(input, 0, 0, none, ll_freq, d_freq, is_final=true)
 }
 
 ///|
@@ -406,8 +409,8 @@ fn emit_empty_block(w : BitWriter, input : BytesView) -> Unit {
 /// data). `is_final` sets the BFINAL bit. Counts the end-of-block symbol into
 /// `ll_freq` itself. Does not flush `w`: the bit stream continues into the
 /// next block, so the caller flushes once, after the final block.
-fn emit_block(
-  w : BitWriter,
+fn BitWriter::emit_block(
+  writer : BitWriter,
   data : BytesView,
   start : Int,
   end : Int,
@@ -418,9 +421,9 @@ fn emit_block(
 ) -> Unit {
   let encoding = choose_block_encoding(end - start, ll_freq, d_freq)
   match encoding {
-    Stored => write_stored(w, data, start, end, is_final~)
-    Fixed => write_huffman_block(w, None, tokens, is_final)
-    Dynamic(codes) => write_huffman_block(w, Some(codes), tokens, is_final)
+    Stored => writer.write_stored(data, start, end, is_final~)
+    Fixed => writer.write_huffman_block(None, tokens, is_final)
+    Dynamic(codes) => writer.write_huffman_block(Some(codes), tokens, is_final)
   }
 }
 
@@ -429,8 +432,8 @@ fn emit_block(
 /// bytes, at most 65535 per block (LEN is 16-bit). `start == end` writes one
 /// empty stored block — which is also the sync-flush marker (`00 00 FF FF`),
 /// since the mandatory alignment pads the bit stream to a byte boundary.
-fn write_stored(
-  w : BitWriter,
+fn BitWriter::write_stored(
+  writer : BitWriter,
   data : BytesView,
   start : Int,
   end : Int,
@@ -442,18 +445,18 @@ fn write_stored(
     let chunk = n.min(65535)
     let last = p + chunk == end
     if is_final && last {
-      w.write_bit(1) // BFINAL
+      writer.write_bit(1) // BFINAL
     } else {
-      w.write_bit(0)
+      writer.write_bit(0)
     }
-    w.write_bits(0, 2) // BTYPE = 00 (stored)
-    w.flush() // stored blocks are byte-aligned
+    writer.write_bits(0, 2) // BTYPE = 00 (stored)
+    writer.flush() // stored blocks are byte-aligned
     let nlen = chunk ^ 0xFFFF
-    w.write_byte((chunk & 0xFF).to_byte())
-    w.write_byte(((chunk >> 8) & 0xFF).to_byte())
-    w.write_byte((nlen & 0xFF).to_byte())
-    w.write_byte(((nlen >> 8) & 0xFF).to_byte())
-    w.write_bytes(data, p, chunk)
+    writer.write_byte((chunk & 0xFF).to_byte())
+    writer.write_byte(((chunk >> 8) & 0xFF).to_byte())
+    writer.write_byte((nlen & 0xFF).to_byte())
+    writer.write_byte(((nlen >> 8) & 0xFF).to_byte())
+    writer.write_bytes(data, p, chunk)
     p = p + chunk
     if last {
       break
@@ -465,8 +468,8 @@ fn write_stored(
 // Streaming equivalent of `write_stored`: absolute positions map through the
 // low half of the mirrored input ring, so no temporary `Bytes` needs to be
 // materialized for an incompressible block.
-fn write_stored_window(
-  w : BitWriter,
+fn BitWriter::write_stored_window(
+  writer : BitWriter,
   data : FixedArray[Byte],
   start : Int,
   end : Int,
@@ -478,22 +481,22 @@ fn write_stored_window(
     let chunk = n.min(65535)
     let last = p + chunk == end
     if is_final && last {
-      w.write_bit(1)
+      writer.write_bit(1)
     } else {
-      w.write_bit(0)
+      writer.write_bit(0)
     }
-    w.write_bits(0, 2)
-    w.flush()
+    writer.write_bits(0, 2)
+    writer.flush()
     let nlen = chunk ^ 0xFFFF
-    w.out.push((chunk & 0xFF).to_byte())
-    w.out.push(((chunk >> 8) & 0xFF).to_byte())
-    w.out.push((nlen & 0xFF).to_byte())
-    w.out.push(((nlen >> 8) & 0xFF).to_byte())
+    writer.out.push((chunk & 0xFF).to_byte())
+    writer.out.push(((chunk >> 8) & 0xFF).to_byte())
+    writer.out.push((nlen & 0xFF).to_byte())
+    writer.out.push(((nlen >> 8) & 0xFF).to_byte())
     // A stored block is smaller than the ring, so at most one wrap occurs.
     let offset = p & STREAM_RING_MASK
     let first = chunk.min(STREAM_RING_SIZE - offset)
-    w.out.append(data[offset:offset + first])
-    w.out.append(data[:chunk - first])
+    writer.out.append(data[offset:offset + first])
+    writer.out.append(data[:chunk - first])
     p = p + chunk
     if last {
       break
@@ -502,8 +505,8 @@ fn write_stored_window(
 }
 
 ///|
-fn emit_window_block(
-  w : BitWriter,
+fn BitWriter::emit_window_block(
+  writer : BitWriter,
   data : FixedArray[Byte],
   start : Int,
   end : Int,
@@ -514,8 +517,8 @@ fn emit_window_block(
 ) -> Unit {
   let encoding = choose_block_encoding(end - start, ll_freq, d_freq)
   match encoding {
-    Stored => write_stored_window(w, data, start, end, is_final~)
-    Fixed => write_huffman_block(w, None, tokens, is_final)
-    Dynamic(codes) => write_huffman_block(w, Some(codes), tokens, is_final)
+    Stored => writer.write_stored_window(data, start, end, is_final~)
+    Fixed => writer.write_huffman_block(None, tokens, is_final)
+    Dynamic(codes) => writer.write_huffman_block(Some(codes), tokens, is_final)
   }
 }

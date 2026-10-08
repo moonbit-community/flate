@@ -17,8 +17,7 @@ test "compression levels clamp at both public boundaries" {
 test "stored blocks split at the 16-bit LEN limit" {
   let split_source = Bytes::from_array(Array::make(65536, b'\x5A'))
   let split_stored = BitWriter()
-  write_stored(
-    split_stored,
+  split_stored.write_stored(
     split_source,
     0,
     split_source.length(),
@@ -41,7 +40,7 @@ test "lazy match pending at a block boundary is committed" {
   let d_freq = FixedArray::make(30, 0)
   let finder = MatchFinder()
   for i in 0..<3 {
-    insert_pos(data, finder, i, data.length())
+    finder.insert_pos(data, i, data.length())
   }
   let processed = tokenize(
     data,
@@ -138,8 +137,7 @@ test "split planner cuts and resets observations across literal-class changes" {
     for i in start..<end {
       literal_freq[tokens[i]] += 1
     }
-    emit_block(
-      writer,
+    writer.emit_block(
       data,
       start,
       end,

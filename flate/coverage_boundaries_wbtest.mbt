@@ -99,7 +99,7 @@ test "stored ring blocks split at LEN limit and preserve wrapped bytes" {
   let start = STREAM_RING_SIZE - 7
   for length in [0, 65535, 65536] {
     let w = BitWriter()
-    write_stored_window(w, ring, start, start + length, is_final=true)
+    w.write_stored_window(ring, start, start + length, is_final=true)
     let expected = Bytes::makei(length, i => {
       ring[(start + i) & STREAM_RING_MASK]
     })
@@ -118,7 +118,7 @@ test "streaming lazy match commits lookahead beyond a one-byte token range" {
   }
   let finder = MatchFinder()
   for i in 0..<3 {
-    insert_window_pos(ring, finder, i, data.length())
+    finder.insert_window_pos(ring, i, data.length())
   }
   let tokens : Array[Int] = []
   let ll = FixedArray::make(286, 0)

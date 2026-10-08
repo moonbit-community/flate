@@ -9,7 +9,7 @@ import {
 
 // Package "@zip": the ZIP (APPNOTE.TXT) container format over the `@flate`
 // DEFLATE engine. In-memory `Archive` convenience plus bounded reads, ZIP64,
-// data descriptors, and byte-preserving rewrites. io-free and suspendable.
+// data descriptors, and byte-preserving rewrites. File I/O is supplied by the caller.
 
 import {
   "moonbitlang/core/test",

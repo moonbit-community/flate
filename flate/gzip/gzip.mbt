@@ -1,5 +1,5 @@
-// gzip (RFC 1952) = a 10-byte header + raw DEFLATE + an 8-byte trailer
-// (CRC-32 then ISIZE, both little-endian). Thin wrapper over the `@flate` engine.
+// gzip (RFC 1952): a fixed header with optional fields, raw DEFLATE and an
+// 8-byte trailer (CRC-32 and ISIZE, both little-endian).
 
 ///|
 /// Machine-readable category for a gzip decoding failure. The accompanying
@@ -66,10 +66,8 @@ pub fn compress(
 
 ///|
 /// Compress `input` into the gzip file format with zopfli-style optimal
-/// parsing: far slower (offline, whole input in memory) for a few percent
-/// smaller output. For compress-once, serve-forever artifacts (e.g. a
-/// precompressed `.gz` asset). `iterations` is the squeeze count per block
-/// (zopfli's default 15).
+/// parsing over the complete input. `iterations` controls the parsing effort
+/// per block and defaults to 15. Compression ratio depends on the input.
 /// Optional `fast_store` is off by default; sampled inputs may use stored
 /// DEFLATE blocks, sacrificing compression ratio for speed.
 pub fn compress_optimal(

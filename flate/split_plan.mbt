@@ -1,11 +1,9 @@
 // Content-driven block planning (libdeflate's observation-divergence split,
-// as adopted by lean-zip): the drop-in counterpart to the fixed-cadence
-// threshold planner for the one-shot `deflate_all`. A large window is
-// tokenized once with the full 32 KB history, then the token stream is
+// as adopted by lean-zip). Each input range is tokenized once with the full
+// 32 KB history, then the token stream is
 // partitioned where the literal/match observation distribution drifts —
-// each segment becomes one dynamic-Huffman block, so trees track local
-// statistics instead of a fixed cadence. Emits through the ordinary
-// `emit_block`, so the writer is untouched and output stays standard DEFLATE.
+// each segment is emitted as stored, fixed-Huffman or dynamic-Huffman data
+// through the shared `emit_block`.
 
 ///|
 /// Number of literal observation classes (libdeflate `NUM_LITERAL_OBSERVATION_TYPES`):
@@ -155,8 +153,7 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
 ///|
 /// Token-boundary cuts approximating the selected whole-buffer cadence:
 /// cut at the first token whose start offset reaches each block-size
-/// multiple. Used as the arbitration baseline so the adaptive split can never
-/// regress the fixed-cadence ratio.
+/// multiple. Used as the baseline when comparing estimated partition costs.
 fn fixed_cadence_cuts(
   tokens : Array[Int],
   all_pos : FixedArray[Int],
@@ -178,10 +175,9 @@ fn fixed_cadence_cuts(
 }
 
 ///|
-/// Exact bit cost of emitting `tokens` partitioned by `cuts`, judged by the
-/// same accounting `emit_block` uses (`block_cost_bits`: the cheapest of
-/// stored / fixed / dynamic, 3-bit header included). Mirrors the emitter's
-/// grouping exactly, so the cheaper partition is never larger on the wire.
+/// Estimated cost of emitting `tokens` partitioned by `cuts`, using
+/// `block_cost_bits`. Stored-block alignment and final bit padding are not
+/// tracked across the partition.
 fn partition_cost(
   tokens : Array[Int],
   all_pos : FixedArray[Int],
@@ -224,8 +220,7 @@ fn emit_split_blocks(
     let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
     let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     range_freqs(tokens, lo, cut, ll_freq, d_freq)
-    emit_block(
-      w,
+    w.emit_block(
       data,
       all_pos[lo],
       all_pos[cut],
@@ -240,8 +235,7 @@ fn emit_split_blocks(
     let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
     let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     range_freqs(tokens, lo, m, ll_freq, d_freq)
-    emit_block(
-      w,
+    w.emit_block(
       data,
       all_pos[lo],
       all_pos[m],
@@ -256,7 +250,8 @@ fn emit_split_blocks(
 ///|
 /// Compress with content-driven block splitting: tokenize each master chunk
 /// once (full 32 KB cross-block history), cut the token stream where the
-/// symbol statistics drift, and emit one dynamic-Huffman block per segment.
+/// symbol statistics drift, and select stored, fixed or dynamic encoding for
+/// each segment.
 /// A mid-tier between the fixed-cadence `deflate_all` and the offline zopfli
 /// `deflate_all_optimal`.
 /// `fast_store` is disabled by default. Enabling it can bypass this strategy
@@ -270,19 +265,19 @@ pub fn deflate_all_split(
   let w = BitWriter()
   let n = input.length()
   guard lv != 0 && !(fast_store && should_fast_store(input)) else {
-    write_stored(w, input, 0, n, is_final=true)
+    w.write_stored(input, 0, n, is_final=true)
     w.flush()
     return Bytes::from_array(w.out)
   }
   guard n != 0 else {
-    emit_empty_block(w, input)
+    w.emit_empty_block(input)
     w.flush()
     return Bytes::from_array(w.out)
   }
   let cfg = level_configs[lv]
   let block_size = 65535
   // Keep splitter chunks aligned with the ordinary whole-buffer cadence so
-  // exact-cost arbitration compares the same legal block boundaries.
+  // cost estimates compare partitions over the same tokenized range.
   let master_size = block_size
   let long_hash_bits = long_hash_bits_for_input(input)
   let finder = MatchFinder(input_size=n, long_hash_bits~)
@@ -298,10 +293,7 @@ pub fn deflate_all_split(
     )
     let all_pos = token_positions(tokens, pos, processed)
     let split_cuts = choose_splits(tokens)
-    // Arbitrate against the fixed cadence by exact cost so the adaptive split
-    // never regresses the fixed-cadence ratio (libdeflate-style arbitration).
-    // This must run even when `split_cuts` is empty: a single undivided block
-    // can still lose to the fixed cadence when the chunk drifts slowly.
+    // Compare adaptive and fixed-cadence partitions using the shared cost model.
     let fixed_cuts = fixed_cadence_cuts(tokens, all_pos, pos, block_size)
     let cuts = if partition_cost(tokens, all_pos, split_cuts) <
       partition_cost(tokens, all_pos, fixed_cuts) {

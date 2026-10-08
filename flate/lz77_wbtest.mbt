@@ -86,7 +86,7 @@ test "match search agrees with scalar candidates across budgets tails and ring b
         window[offset] = input[i]
         window[offset + STREAM_RING_SIZE] = input[i]
         if i < position {
-          insert_pos(input, finder, i, input.length())
+          finder.insert_pos(input, i, input.length())
         }
       }
       for available in [3, 4, 16, 129, 258] {
@@ -98,11 +98,11 @@ test "match search agrees with scalar candidates across budgets tails and ring b
               input, finder, position, end, base, cfg,
             )
             @test.assert_eq(
-              find_match(input, finder, position, end, base, cfg),
+              finder.find_match(input, position, end, base, cfg),
               expected,
             )
             @test.assert_eq(
-              find_window_match(window, finder, position, end, base, cfg),
+              finder.find_window_match(window, position, end, base, cfg),
               expected,
             )
           }
@@ -118,7 +118,7 @@ test "match search cutoff includes distance 32768 and excludes stale history" {
   let window = FixedArray::make(STREAM_RING_STORAGE_SIZE, b'a')
   for position in [WINDOW_SIZE - 1, WINDOW_SIZE, WINDOW_SIZE + 1] {
     let finder = MatchFinder()
-    insert_pos(input, finder, 0, input.length())
+    finder.insert_pos(input, 0, input.length())
     for budget in [0, 1, 2] {
       let cfg = {
         good_length: 4,
@@ -132,11 +132,11 @@ test "match search cutoff includes distance 32768 and excludes stale history" {
         2 << 16
       }
       @test.assert_eq(
-        find_match(input, finder, position, position + 8, 2, cfg),
+        finder.find_match(input, position, position + 8, 2, cfg),
         expected,
       )
       @test.assert_eq(
-        find_window_match(window, finder, position, position + 8, 2, cfg),
+        finder.find_window_match(window, position, position + 8, 2, cfg),
         expected,
       )
     }
@@ -165,7 +165,7 @@ test "match probes refresh after improvements and retain the nearest equal match
   }
   let finder = MatchFinder()
   for candidate in [0, 300, 600, 900, 1200] {
-    insert_pos(input, finder, candidate, input.length())
+    finder.insert_pos(input, candidate, input.length())
   }
   for budget in [1, 2, 3, 4, 5, 128] {
     for nice_length in [16, 32, 64, 258] {
@@ -185,11 +185,11 @@ test "match probes refresh after improvements and retain the nearest equal match
           cfg,
         )
         @test.assert_eq(
-          find_match(input, finder, position, input.length(), base, cfg),
+          finder.find_match(input, position, input.length(), base, cfg),
           expected,
         )
         @test.assert_eq(
-          find_window_match(window, finder, position, input.length(), base, cfg),
+          finder.find_window_match(window, position, input.length(), base, cfg),
           expected,
         )
       }
@@ -230,15 +230,15 @@ test "batch insertion preserves scalar hash chains across tails and ring boundar
           let direct = MatchFinder()
           let streaming = MatchFinder()
           for i in first..<start {
-            insert_pos(input, scalar, i, available_end)
-            insert_pos(input, direct, i, available_end)
-            insert_window_pos(window, streaming, i, available_end)
+            scalar.insert_pos(input, i, available_end)
+            direct.insert_pos(input, i, available_end)
+            streaming.insert_window_pos(window, i, available_end)
           }
           for i in start..<end {
-            insert_pos(input, scalar, i, available_end)
+            scalar.insert_pos(input, i, available_end)
           }
-          insert_positions(input, direct, start, end, available_end)
-          insert_window_positions(window, streaming, start, end, available_end)
+          direct.insert_positions(input, start, end, available_end)
+          streaming.insert_window_positions(window, start, end, available_end)
           @test.assert_eq(direct.short_head, scalar.short_head)
           @test.assert_eq(direct.head, scalar.head)
           @test.assert_eq(direct.prev, scalar.prev)
@@ -469,11 +469,10 @@ test "dual hash separates long matches from a nearer three-byte prefix" {
   let data = b"abcX0123456789---abcY9876543210---abcX0123456789"
   let target = 34
   let finder = MatchFinder()
-  insert_pos(data, finder, 0, data.length())
-  insert_pos(data, finder, 17, data.length())
-  let packed = find_match(
+  finder.insert_pos(data, 0, data.length())
+  finder.insert_pos(data, 17, data.length())
+  let packed = finder.find_match(
     data,
-    finder,
     target,
     data.length(),
     0,
@@ -482,7 +481,7 @@ test "dual hash separates long matches from a nearer three-byte prefix" {
   @test.assert_eq(packed >> 16, 14)
   @test.assert_eq(packed & 0xFFFF, 34)
   // At a three-byte tail the short table must still work without a wide read.
-  let short = find_match(data, finder, target, target + 3, 0, level_configs[6])
+  let short = finder.find_match(data, target, target + 3, 0, level_configs[6])
   @test.assert_eq(short >> 16, 3)
   @test.assert_eq(short & 0xFFFF, 17)
 }
@@ -498,20 +497,13 @@ test "streaming dual hash backfills a fourth byte exactly once" {
   for byte in b"efabcd" {
     d.push_pending(Bytes::make(1, byte))
   }
-  let packed = find_window_match(
-    d.pending,
-    d.finder,
-    6,
-    10,
-    0,
-    level_configs[6],
-  )
+  let packed = d.finder.find_window_match(d.pending, 6, 10, 0, level_configs[6])
   @test.assert_eq(packed >> 16, 4)
   @test.assert_eq(packed & 0xFFFF, 6)
   d.reset()
   d.push_pending(b"abcd")
   @test.assert_eq(
-    find_window_match(d.pending, d.finder, 0, 4, 0, level_configs[6]),
+    d.finder.find_window_match(d.pending, 0, 4, 0, level_configs[6]),
     0,
   )
 }
@@ -564,9 +556,8 @@ test "stamped heads isolate successive inputs without clearing tables" {
       for position in 0..<(input.length() - 2).max(0) {
         for base in [0, 2, 3, 8] {
           @test.assert_eq(
-            find_match(
+            finder.find_match(
               input,
-              finder,
               position,
               input.length(),
               base,
@@ -582,7 +573,7 @@ test "stamped heads isolate successive inputs without clearing tables" {
             ),
           )
         }
-        insert_pos(input, finder, position, input.length())
+        finder.insert_pos(input, position, input.length())
       }
     }
   }
@@ -597,7 +588,7 @@ test "stamped heads reset before the position base can overflow" {
   @test.assert_eq(finder.next_base, 2147483647)
   for position in 0..<(input.length() - 2) {
     @test.assert_eq(
-      find_match(input, finder, position, input.length(), 0, level_configs[6]),
+      finder.find_match(input, position, input.length(), 0, level_configs[6]),
       scalar_find_match_reference(
         input,
         finder,
@@ -607,7 +598,7 @@ test "stamped heads reset before the position base can overflow" {
         level_configs[6],
       ),
     )
-    insert_pos(input, finder, position, input.length())
+    finder.insert_pos(input, position, input.length())
   }
   finder.reset_for_input(b"")
   @test.assert_eq(finder.position_base, 2147483647)
@@ -615,7 +606,7 @@ test "stamped heads reset before the position base can overflow" {
   @test.assert_eq(finder.position_base, 0)
   @test.assert_eq(finder.next_base, input.length())
   @test.assert_eq(
-    find_match(input, finder, 3, input.length(), 0, level_configs[6]),
+    finder.find_match(input, 3, input.length(), 0, level_configs[6]),
     0,
   )
 }
@@ -653,10 +644,10 @@ test "three-byte tails remain matchable after arbitrary fourth bytes" {
   let finder = MatchFinder()
   finder.reset_for_input(data)
   for position = 0; position < 1024; position = position + 4 {
-    insert_pos(data, finder, position, data.length())
+    finder.insert_pos(data, position, data.length())
   }
   @test.assert_eq(
-    find_match(data, finder, 1024, 1027, 0, level_configs[6]),
+    finder.find_match(data, 1024, 1027, 0, level_configs[6]),
     (3 << 16) | 4,
   )
 }
@@ -668,7 +659,7 @@ test "stream bases retain rebase headroom and discard prior dictionaries" {
   d.reset()
   @test.assert_eq(d.finder.position_base, 0)
   @test.assert_eq(
-    find_window_match(d.pending, d.finder, 3, 7, 0, level_configs[6]),
+    d.finder.find_window_match(d.pending, 3, 7, 0, level_configs[6]),
     0,
   )
   d.reset(dictionary=b"abcabcabc")
@@ -723,14 +714,14 @@ test "short hash collision must not hide an older four-byte match" {
       short_hash3(data, 0, shift=finder.short_shift),
       short_hash3(data, 8, shift=finder.short_shift),
     )
-    insert_pos(data, finder, 0, data.length())
-    insert_pos(data, finder, 8, data.length())
+    finder.insert_pos(data, 0, data.length())
+    finder.insert_pos(data, 8, data.length())
     @test.assert_eq(
-      find_match(data, finder, 16, data.length(), 0, level_configs[6]),
+      finder.find_match(data, 16, data.length(), 0, level_configs[6]),
       (8 << 16) | 16,
     )
     @test.assert_eq(
-      find_window_match(window, finder, 16, data.length(), 0, level_configs[6]),
+      finder.find_window_match(window, 16, data.length(), 0, level_configs[6]),
       (8 << 16) | 16,
     )
   }
