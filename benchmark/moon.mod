@@ -14,5 +14,5 @@ description = "Benchmarks for flate."
 
 import {
   "moonbitlang/x@0.5.5",
-  "moonbit-community/flate@0.8.5",
+  "moonbit-community/flate@0.9.0",
 }
