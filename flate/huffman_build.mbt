@@ -5,17 +5,17 @@
 ///|
 #valtype
 priv struct Node {
-  lit : Int
-  freq : Int
+  lit : Int32
+  freq : Int32
 }
 
 ///|
 priv struct LevelInfo {
-  mut level : Int
-  mut last_freq : Int
-  mut next_char_freq : Int
-  mut next_pair_freq : Int
-  mut needed : Int
+  mut level : Int32
+  mut last_freq : Int32
+  mut next_char_freq : Int32
+  mut next_pair_freq : Int32
+  mut needed : Int32
 }
 
 ///|
@@ -24,7 +24,7 @@ fn LevelInfo::LevelInfo() -> LevelInfo {
 }
 
 ///|
-fn reverse_bits(number : UInt, bit_length : Int) -> UInt {
+fn reverse_bits(number : UInt32, bit_length : Int32) -> UInt32 {
   reverse16(number << (16 - bit_length))
 }
 
@@ -33,9 +33,9 @@ fn reverse_bits(number : UInt, bit_length : Int) -> UInt {
 /// `nodes` sorted by ascending frequency, with `n >= 3`.
 fn bounded_bit_counts(
   nodes : Array[Node],
-  n : Int,
-  max_bits_in : Int,
-) -> FixedArray[Int] {
+  n : Int32,
+  max_bits_in : Int32,
+) -> FixedArray[Int32] {
   let maxi = 2147483647
   let max_bits = max_bits_in.min(n - 1)
   let levels = FixedArray::makei(17, _ => LevelInfo())
@@ -102,10 +102,10 @@ fn bounded_bit_counts(
 
 ///|
 fn assign_codes(
-  bit_count : FixedArray[Int],
+  bit_count : FixedArray[Int32],
   nodes : Array[Node],
-  code_len : FixedArray[Int],
-  code_val : FixedArray[UInt]?,
+  code_len : FixedArray[Int32],
+  code_val : FixedArray[UInt32]?,
 ) -> Unit {
   // Assign lengths in frequency order, then generate canonical codes in
   // symbol order. No per-length arrays or sorting are needed.
@@ -136,11 +136,11 @@ fn assign_codes(
 /// frequencies into caller-owned arrays. Omit `code_val` when only lengths are
 /// needed; this avoids both the unused code array and a tuple return allocation.
 fn gen_huffman(
-  freq : FixedArray[Int],
-  size : Int,
-  max_bits : Int,
-  code_len : FixedArray[Int],
-  code_val? : FixedArray[UInt],
+  freq : FixedArray[Int32],
+  size : Int32,
+  max_bits : Int32,
+  code_len : FixedArray[Int32],
+  code_val? : FixedArray[UInt32],
 ) -> Unit {
   let nodes : Array[Node] = []
   for i in 0..<size {
@@ -175,7 +175,11 @@ fn gen_huffman(
 // Internal nodes are created after their children; walking parents backward
 // then replaces indices with depths. Use the length-limited construction only
 // when a depth exceeds the DEFLATE limit.
-fn bit_counts(nodes : Array[Node], n : Int, max_bits : Int) -> FixedArray[Int] {
+fn bit_counts(
+  nodes : Array[Node],
+  n : Int32,
+  max_bits : Int32,
+) -> FixedArray[Int32] {
   let parents = FixedArray::make(2 * n - 1, 0)
   let weights = FixedArray::make(n - 1, 0)
   let mut leaf = 0

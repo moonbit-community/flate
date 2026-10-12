@@ -29,7 +29,7 @@ pub suberror ZlibError {
 }
 
 ///|
-fn u32_be(data : BytesView, off : Int) -> UInt {
+fn u32_be(data : BytesView, off : Int32) -> UInt32 {
   (data[off].to_uint() << 24) |
   (data[off + 1].to_uint() << 16) |
   (data[off + 2].to_uint() << 8) |
@@ -57,8 +57,8 @@ fn zlib_frame(input : BytesView, deflated : Bytes) -> Bytes {
 /// DEFLATE blocks, sacrificing compression ratio for speed.
 pub fn compress(
   input : BytesView,
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Bytes {
   zlib_frame(input, @flate.deflate_all(input, level~, fast_store~))
 }
@@ -71,8 +71,8 @@ pub fn compress(
 /// DEFLATE blocks, sacrificing compression ratio for speed.
 pub fn compress_optimal(
   input : BytesView,
-  iterations? : Int = 15,
-  fast_store? : Bool = false,
+  iterations~ : Int32 = 15,
+  fast_store~ : Bool = false,
 ) -> Bytes {
   zlib_frame(input, @flate.deflate_all_optimal(input, iterations~, fast_store~))
 }

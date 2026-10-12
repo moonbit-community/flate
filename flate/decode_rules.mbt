@@ -1,7 +1,7 @@
 ///|
 /// Validate the one's-complement length pair carried by a stored block.
 #inline
-fn validate_stored_length(len : Int, nlen : Int) -> Unit raise InflateError {
+fn validate_stored_length(len : Int32, nlen : Int32) -> Unit raise InflateError {
   guard len == (nlen ^ 0xFFFF) else {
     raise InflateError(Corrupt, "stored block length mismatch")
   }
@@ -11,7 +11,7 @@ fn validate_stored_length(len : Int, nlen : Int) -> Unit raise InflateError {
 /// Interpret HLIT while preserving its reserved-value diagnostic before any
 /// later dynamic-header fields are read.
 #inline
-fn dynamic_literal_count(bits : Int) -> Int raise InflateError {
+fn dynamic_literal_count(bits : Int32) -> Int32 raise InflateError {
   let count = bits + 257
   guard count <= MAX_NUM_LIT else {
     raise InflateError(Corrupt, "corrupt: too many literal codes")
@@ -22,7 +22,7 @@ fn dynamic_literal_count(bits : Int) -> Int raise InflateError {
 ///|
 /// Interpret HDIST and reject the two reserved five-bit encodings.
 #inline
-fn dynamic_distance_count(bits : Int) -> Int raise InflateError {
+fn dynamic_distance_count(bits : Int32) -> Int32 raise InflateError {
   let count = bits + 1
   guard count <= MAX_NUM_DIST else {
     raise InflateError(Corrupt, "corrupt: too many distance codes")
@@ -39,8 +39,8 @@ fn dynamic_distance_count(bits : Int) -> Int raise InflateError {
 /// negative distances wrap above the bound and are rejected as well.
 #inline
 fn back_reference_distance_is_valid(
-  distance : Int,
-  available_history : Int,
+  distance : Int32,
+  available_history : Int32,
 ) -> Bool {
   distance.reinterpret_as_uint() - 1U < available_history.reinterpret_as_uint()
 }
@@ -51,15 +51,15 @@ fn back_reference_distance_is_valid(
 /// agree on the symbol's base count, extra-bit width, and repeated value.
 #valtype
 priv struct CodeLengthRepeat {
-  base : Int
-  extra_bits : Int
-  value : Int
+  base : Int32
+  extra_bits : Int32
+  value : Int32
 }
 
 ///|
 fn interpret_code_length_repeat(
-  symbol : Int,
-  previous : Int?,
+  symbol : Int32,
+  previous : Int32?,
 ) -> CodeLengthRepeat raise InflateError {
   match symbol {
     16 => {
@@ -78,7 +78,7 @@ fn interpret_code_length_repeat(
 /// The fixed-Huffman distance symbol carried by a raw five-bit code: the code
 /// is stored bit-reversed in the lowest five bits (RFC 1951 §3.2.6).
 #inline
-fn fixed_distance_symbol(bits5 : Int) -> Int {
+fn fixed_distance_symbol(bits5 : Int32) -> Int32 {
   reverse8(((bits5 << 3) & 0xFF).to_byte()).to_int()
 }
 
@@ -93,12 +93,12 @@ fn fixed_distance_symbol(bits5 : Int) -> Int {
 /// `NUM_CODES` slots and `clbits` room for `nlit + ndist`. Returns the
 /// literal/length and distance code counts.
 fn decode_dynamic_header(
-  read_bits : (Int) -> Int raise InflateError,
-  huff_sym : () -> Int raise InflateError,
+  read_bits : (Int32) -> Int32 raise InflateError,
+  huff_sym : () -> Int32 raise InflateError,
   dyn_litlen : HuffmanDecoder,
-  codebits : FixedArray[Int],
-  clbits : FixedArray[Int],
-) -> (Int, Int) raise InflateError {
+  codebits : FixedArray[Int32],
+  clbits : FixedArray[Int32],
+) -> (Int32, Int32) raise InflateError {
   let nlit = dynamic_literal_count(read_bits(5))
   let ndist = dynamic_distance_count(read_bits(5))
   let nclen = read_bits(4) + 4

@@ -4,7 +4,7 @@ priv suberror CliError {
 }
 
 ///|
-fn parse_level(value : String) -> Int raise CliError {
+fn parse_level(value : String) -> Int32 raise CliError {
   let level = @string.parse_int(value, base=10) catch {
     _ => raise InvalidCompressionLevel(value)
   }

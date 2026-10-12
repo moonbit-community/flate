@@ -41,13 +41,13 @@ test "zip cursor and field readers reject truncated input" {
 }
 
 ///|
-fn push_u16le(buf : Array[Byte], v : Int) -> Unit {
+fn push_u16le(buf : Array[Byte], v : Int32) -> Unit {
   buf.push((v & 0xFF).to_byte())
   buf.push(((v >> 8) & 0xFF).to_byte())
 }
 
 ///|
-fn push_u32le(buf : Array[Byte], v : UInt) -> Unit {
+fn push_u32le(buf : Array[Byte], v : UInt32) -> Unit {
   for i in 0..<4 {
     buf.push(((v >> (i * 8)) & 0xFF).reinterpret_as_int().to_byte())
   }
@@ -154,7 +154,7 @@ test "zip zip64 end record rejects malformed trailers" {
 }
 
 ///|
-fn descriptor_meta(crc~ : UInt) -> EntryMeta {
+fn descriptor_meta(crc~ : UInt32) -> EntryMeta {
   {
     name: "",
     name_len: 0,
@@ -258,11 +258,11 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
 
 ///|
 fn local_record(
-  flags : Int,
-  method_id : Int,
-  crc : UInt,
-  comp_size : Int,
-  uncomp_size : Int,
+  flags : Int32,
+  method_id : Int32,
+  crc : UInt32,
+  comp_size : Int32,
+  uncomp_size : Int32,
   name : Bytes,
   extra : Bytes,
   payload : Bytes,
@@ -421,12 +421,12 @@ test "zip inflate_entry maps output-limit and corrupt-stream failures" {
 
 ///|
 fn classic_eocd(
-  disk_no : Int,
-  disk_start : Int,
-  disk_entries : Int,
-  total_entries : Int,
-  central_size : Int,
-  central_offset : Int,
+  disk_no : Int32,
+  disk_start : Int32,
+  disk_entries : Int32,
+  total_entries : Int32,
+  central_size : Int32,
+  central_offset : Int32,
 ) -> Bytes {
   let buf : Array[Byte] = []
   push_u32le(buf, END_OF_CENTRAL_SIG)
@@ -445,10 +445,10 @@ fn zip64_trailer(
   zip_entries : UInt64,
   zip_size : UInt64,
   zip_offset : UInt64,
-  classic_disk_entries : Int,
-  classic_total_entries : Int,
-  classic_size_raw : UInt,
-  classic_offset_raw : UInt,
+  classic_disk_entries : Int32,
+  classic_total_entries : Int32,
+  classic_size_raw : UInt32,
+  classic_offset_raw : UInt32,
 ) -> Bytes {
   let buf : Array[Byte] = []
   push_u32le(buf, ZIP64_EOCD_SIG)
@@ -566,15 +566,15 @@ test "zip end-of-central parsing rejects inconsistent trailers" {
 
 ///|
 fn central_record(
-  disk : Int,
-  flags : Int,
-  method_id : Int,
-  crc : UInt,
-  comp_size : Int,
-  uncomp_size : Int,
+  disk : Int32,
+  flags : Int32,
+  method_id : Int32,
+  crc : UInt32,
+  comp_size : Int32,
+  uncomp_size : Int32,
   name : Bytes,
   extra : Bytes,
-  local_offset : Int,
+  local_offset : Int32,
 ) -> Bytes {
   let buf : Array[Byte] = []
   push_u32le(buf, CENTRAL_HEADER_SIG)
@@ -605,9 +605,9 @@ fn central_record(
 
 ///|
 fn eocd_for(
-  entry_count : Int,
-  central_size : Int,
-  central_len : Int,
+  entry_count : Int32,
+  central_size : Int32,
+  central_len : Int32,
 ) -> EndOfCentral {
   {
     eocd_offset: central_len,

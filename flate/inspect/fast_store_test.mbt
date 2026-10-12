@@ -1,5 +1,5 @@
 ///|
-fn optional_store_input(size : Int) -> Bytes {
+fn optional_store_input(size : Int32) -> Bytes {
   Bytes::makei(size, i => (i % 251).to_byte())
 }
 
@@ -7,8 +7,8 @@ fn optional_store_input(size : Int) -> Bytes {
 fn optional_store_stream(
   input : Bytes,
   step : (BytesView, MutArrayView[Byte], @flate.DeflateAction) -> @flate.Status,
-  consumed : () -> Int,
-  produced : () -> Int,
+  consumed : () -> Int32,
+  produced : () -> Int32,
 ) -> Bytes {
   let output = FixedArray::make(7, b'\x00')
   let result = @buffer.Buffer()

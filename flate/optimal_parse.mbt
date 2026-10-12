@@ -15,19 +15,19 @@
 /// reaching a new length has the minimal distance for it).
 #valtype
 priv struct MatchRange {
-  len : Int
-  dist : Int
+  len : Int32
+  dist : Int32
 }
 
 ///|
 // The optimal parser builds its own match frontiers for each input range.
 fn insert_optimal_pos(
   data : BytesView,
-  head : FixedArray[Int],
-  prev : FixedArray[Int],
-  i : Int,
-  n : Int,
-  seed_from : Int,
+  head : FixedArray[Int32],
+  prev : FixedArray[Int32],
+  i : Int32,
+  n : Int32,
+  seed_from : Int32,
 ) -> Unit {
   if i + 3 <= n {
     let h = hash3(data, i)
@@ -38,7 +38,7 @@ fn insert_optimal_pos(
 
 ///|
 /// Maximum chain candidates examined per position.
-const OPTIMAL_MAX_CHAIN : Int = 8192
+const OPTIMAL_MAX_CHAIN : Int32 = 8192
 
 ///|
 /// The match frontier at every position of `data[start:end)`, computed once
@@ -48,8 +48,8 @@ const OPTIMAL_MAX_CHAIN : Int = 8192
 /// boundaries.
 fn collect_matches(
   data : BytesView,
-  start : Int,
-  end : Int,
+  start : Int32,
+  end : Int32,
 ) -> FixedArray[Array[MatchRange]] {
   let seed_from = (start - WINDOW_SIZE).max(0)
   let head = FixedArray::make(1 << HASH_BITS, -1)
@@ -98,15 +98,15 @@ fn collect_matches(
 /// tallying the literal/length and distance symbols consumed.
 fn replay_tokens(
   data : BytesView,
-  start : Int,
-  m : Int,
-  len_choice : FixedArray[Int],
-  dist_choice : FixedArray[Int],
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
+  start : Int32,
+  m : Int32,
+  len_choice : FixedArray[Int32],
+  dist_choice : FixedArray[Int32],
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
 ) -> Unit {
-  let steps : Array[Int] = []
+  let steps : Array[Int32] = []
   let mut o = m
   while o > 0 {
     steps.push(o)
@@ -134,14 +134,14 @@ fn replay_tokens(
 /// and every frontier match length.
 fn squeeze_parse(
   data : BytesView,
-  start : Int,
-  end : Int,
+  start : Int32,
+  end : Int32,
   matches : FixedArray[Array[MatchRange]],
-  ll_cost : FixedArray[Int],
-  d_cost : FixedArray[Int],
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
+  ll_cost : FixedArray[Int32],
+  d_cost : FixedArray[Int32],
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
 ) -> Unit {
   let m = end - start
   let inf = 0x3FFFFFFF
@@ -187,10 +187,10 @@ fn squeeze_parse(
 /// uses), with unused symbols priced at the maximum length so the parse may
 /// still explore them.
 fn stats_to_costs(
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
-  ll_cost : FixedArray[Int],
-  d_cost : FixedArray[Int],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+  ll_cost : FixedArray[Int32],
+  d_cost : FixedArray[Int32],
 ) -> Unit {
   let ll_freq_eob = FixedArray::make(286, 0)
   ll_freq.blit_to(ll_freq_eob, len=286)
@@ -213,17 +213,17 @@ fn stats_to_costs(
 /// keeping the cheapest parse seen (judged by estimated block cost).
 fn tokenize_optimal(
   data : BytesView,
-  start : Int,
-  end : Int,
-  iterations : Int,
-) -> Array[Int] {
+  start : Int32,
+  end : Int32,
+  iterations : Int32,
+) -> Array[Int32] {
   let matches = collect_matches(data, start, end)
   let mut ll_cost = FixedArray::makei(286, s => fixed_litlen_info[s] & 0xF)
   let mut d_cost = FixedArray::make(30, 5)
   let mut best_bits = 0x3FFFFFFF
-  let mut best_tokens : Array[Int]? = None
+  let mut best_tokens : Array[Int32]? = None
   for _it in 0..<iterations {
-    let toks : Array[Int] = []
+    let toks : Array[Int32] = []
     let ll_freq = FixedArray::make(286, 0)
     let d_freq = FixedArray::make(30, 0)
     squeeze_parse(

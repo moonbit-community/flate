@@ -6,18 +6,18 @@ priv enum InflateDifferentialOutcome {
 
 ///|
 priv struct InflateDifferentialRng {
-  mut state : UInt
+  mut state : UInt32
 }
 
 ///|
 fn InflateDifferentialRng::InflateDifferentialRng(
-  seed : UInt,
+  seed : UInt32,
 ) -> InflateDifferentialRng {
   { state: seed, }
 }
 
 ///|
-fn InflateDifferentialRng::next(self : InflateDifferentialRng) -> UInt {
+fn InflateDifferentialRng::next(self : InflateDifferentialRng) -> UInt32 {
   self.state = self.state * 1664525 + 1013904223
   self.state
 }
@@ -25,16 +25,16 @@ fn InflateDifferentialRng::next(self : InflateDifferentialRng) -> UInt {
 ///|
 fn InflateDifferentialRng::size(
   self : InflateDifferentialRng,
-  maximum : Int,
-) -> Int {
+  maximum : Int32,
+) -> Int32 {
   (self.next() >> 1).reinterpret_as_int() % maximum + 1
 }
 
 ///|
 fn inflate_differential_random_bytes(
-  seed : UInt,
-  length : Int,
-  alphabet : Int,
+  seed : UInt32,
+  length : Int32,
+  alphabet : Int32,
 ) -> Bytes {
   let rng = InflateDifferentialRng(seed)
   let bytes = Array::make(length, b'\x00')
@@ -45,7 +45,7 @@ fn inflate_differential_random_bytes(
 }
 
 ///|
-fn inflate_differential_pattern(pattern : Bytes, length : Int) -> Bytes {
+fn inflate_differential_pattern(pattern : Bytes, length : Int32) -> Bytes {
   let bytes = Array::make(length, b'\x00')
   for i in 0..<length {
     bytes[i] = pattern[i % pattern.length()]
@@ -79,7 +79,7 @@ fn inflate_differential_one_shot(input : Bytes) -> InflateDifferentialOutcome {
 ///|
 fn inflate_differential_stream_bytes(
   input : Bytes,
-  schedule_seed : UInt,
+  schedule_seed : UInt32,
   one_byte_only : Bool,
 ) -> Bytes raise {
   let inflater = Inflater()
@@ -135,7 +135,7 @@ fn inflate_differential_stream_bytes(
 ///|
 fn inflate_differential_streaming(
   input : Bytes,
-  schedule_seed : UInt,
+  schedule_seed : UInt32,
   one_byte_only : Bool,
 ) -> InflateDifferentialOutcome raise {
   try
@@ -151,7 +151,7 @@ fn inflate_differential_streaming(
 ///|
 fn inflate_differential_compare(
   input : Bytes,
-  schedule_seed : UInt,
+  schedule_seed : UInt32,
   corpus : String,
   one_byte_only : Bool,
 ) -> Unit raise {
@@ -167,7 +167,11 @@ fn inflate_differential_compare(
 }
 
 ///|
-fn inflate_differential_flip(input : Bytes, index : Int, mask : Int) -> Bytes {
+fn inflate_differential_flip(
+  input : Bytes,
+  index : Int32,
+  mask : Int32,
+) -> Bytes {
   let mutated = input.to_array()
   mutated[index] = (mutated[index].to_int() ^ mask).to_byte()
   Bytes::from_array(mutated)

@@ -2,11 +2,11 @@
 
 ///|
 priv struct RoundtripRng {
-  mut state : UInt
+  mut state : UInt32
 }
 
 ///|
-fn RoundtripRng::next(self : RoundtripRng) -> Int {
+fn RoundtripRng::next(self : RoundtripRng) -> Int32 {
   self.state = self.state * 1103515245U + 12345U
   ((self.state >> 16) & 0x7FFFU).reinterpret_as_int()
 }
@@ -21,7 +21,7 @@ let roundtrip_words : ReadOnlyArray[String] = [
 
 ///|
 /// Word salad with punctuation and line breaks.
-fn roundtrip_text(size : Int, seed : UInt) -> Bytes {
+fn roundtrip_text(size : Int32, seed : UInt32) -> Bytes {
   let rng = RoundtripRng::{ state: seed, }
   let buf = Buffer()
   while buf.length() < size {
@@ -38,14 +38,14 @@ fn roundtrip_text(size : Int, seed : UInt) -> Bytes {
 }
 
 ///|
-fn roundtrip_random(size : Int, seed : UInt) -> Bytes {
+fn roundtrip_random(size : Int32, seed : UInt32) -> Bytes {
   let rng = RoundtripRng::{ state: seed, }
   Bytes::makei(size, _ => (rng.next() & 0xFF).to_byte())
 }
 
 ///|
 /// Text-showing operators with varying coordinates, like a PDF content stream.
-fn roundtrip_content_stream(size : Int, seed : UInt) -> Bytes {
+fn roundtrip_content_stream(size : Int32, seed : UInt32) -> Bytes {
   let rng = RoundtripRng::{ state: seed, }
   let buf = Buffer()
   while buf.length() < size {
@@ -75,7 +75,7 @@ fn roundtrip_content_stream(size : Int, seed : UInt) -> Bytes {
 
 ///|
 /// Big-endian 16/32-bit records with small deltas, like font tables.
-fn roundtrip_binary(size : Int, seed : UInt) -> Bytes {
+fn roundtrip_binary(size : Int32, seed : UInt32) -> Bytes {
   let rng = RoundtripRng::{ state: seed, }
   let out = FixedArray::make(size, b'\x00')
   let mut value = 0
@@ -95,7 +95,7 @@ fn roundtrip_binary(size : Int, seed : UInt) -> Bytes {
 
 ///|
 /// Short periods, long single-byte runs and an exact repeat beyond 32 KiB.
-fn roundtrip_repetitive(size : Int, seed : UInt) -> Bytes {
+fn roundtrip_repetitive(size : Int32, seed : UInt32) -> Bytes {
   let rng = RoundtripRng::{ state: seed, }
   let buf = Buffer()
   let head = roundtrip_text(40000, seed + 1)
@@ -151,10 +151,10 @@ fn roundtrip_corpus() -> Array[(String, Bytes)] {
 /// optionally requesting a sync flush after every input chunk.
 fn roundtrip_stream(
   input : Bytes,
-  level : Int,
-  in_chunk : Int,
-  out_chunk : Int,
-  sync_flush? : Bool = false,
+  level : Int32,
+  in_chunk : Int32,
+  out_chunk : Int32,
+  sync_flush~ : Bool = false,
   dictionary? : Bytes,
 ) -> Bytes {
   let deflater = match dictionary {

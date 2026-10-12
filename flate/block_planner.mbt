@@ -1,5 +1,5 @@
 ///|
-const MIN_LOOKAHEAD : Int = 258
+const MIN_LOOKAHEAD : Int32 = 258
 
 // Block planning for the streaming encoder. Input lives in a fixed mirrored
 // ring: the first half is indexed by absolute position modulo 64 KiB and the
@@ -7,7 +7,7 @@ const MIN_LOOKAHEAD : Int = 258
 // The parser and its 32 KiB matchfinder survive every block boundary.
 
 ///|
-fn Deflater::pending_bytes(deflater : Deflater) -> Int {
+fn Deflater::pending_bytes(deflater : Deflater) -> Int32 {
   deflater.pending_end - deflater.parse_pos
 }
 
@@ -60,7 +60,7 @@ fn Deflater::chain_ready_history(deflater : Deflater) -> Unit {
 ///|
 fn Deflater::record_chained_positions(
   deflater : Deflater,
-  processed : Int,
+  processed : Int32,
 ) -> Unit {
   let chained_end = processed.min((deflater.pending_end - 3).max(0))
   if chained_end > deflater.hashed_through {
@@ -74,7 +74,7 @@ fn Deflater::record_chained_positions(
 // current without spending time on token search or Huffman construction.
 fn Deflater::try_fast_store(
   deflater : Deflater,
-  end : Int,
+  end : Int32,
   is_final~ : Bool,
 ) -> Bool {
   guard deflater.fast_store &&
@@ -161,7 +161,10 @@ fn Deflater::emit_one(deflater : Deflater) -> Unit {
 ///|
 /// Tokenize all remaining input into one trailing block. The end bound removes
 /// the non-final lookahead restriction while preserving the same parse policy.
-fn Deflater::emit_trailing_block(deflater : Deflater, is_final~ : Bool) -> Int {
+fn Deflater::emit_trailing_block(
+  deflater : Deflater,
+  is_final~ : Bool,
+) -> Int32 {
   let end = deflater.pending_end
   if deflater.try_fast_store(end, is_final~) {
     return end

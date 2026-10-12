@@ -3,7 +3,7 @@
 // It never changes decompressed bytes, but can miss profitable LZ matches.
 
 ///|
-fn fast_store_sample(length : Int, byte_at : (Int) -> Byte) -> Bool {
+fn fast_store_sample(length : Int32, byte_at : (Int32) -> Byte) -> Bool {
   let frequencies = FixedArray::make(256, 0)
   if length < 8192 {
     let mut distinct = 0
@@ -77,8 +77,8 @@ fn should_fast_store(input : BytesView) -> Bool {
 ///|
 fn should_fast_store_window(
   data : FixedArray[Byte],
-  start : Int,
-  end : Int,
+  start : Int32,
+  end : Int32,
 ) -> Bool {
   guard end - start >= 1024 else { return false }
   fast_store_sample(end - start, i => data[(start + i) & STREAM_RING_MASK])

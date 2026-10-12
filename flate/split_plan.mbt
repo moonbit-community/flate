@@ -9,43 +9,43 @@
 /// Number of literal observation classes (libdeflate `NUM_LITERAL_OBSERVATION_TYPES`):
 /// literals are bucketed by bits 7,6,0 — a cheap proxy separating
 /// case/digit/punctuation regimes.
-const SPLIT_NUM_LITERAL_CLASSES : Int = 8
+const SPLIT_NUM_LITERAL_CLASSES : Int32 = 8
 
 ///|
 /// Total observation classes: 8 literal classes plus 2 match classes (short/long).
-const SPLIT_NUM_CLASSES : Int = 10
+const SPLIT_NUM_CLASSES : Int32 = 10
 
 ///|
 /// New observations between divergence checks (libdeflate `NUM_OBSERVATIONS_PER_BLOCK_CHECK`).
-const SPLIT_CHECK_TOKENS : Int = 512
+const SPLIT_CHECK_TOKENS : Int32 = 512
 
 ///|
 /// Floor on block output bytes (libdeflate `MIN_BLOCK_LENGTH`): per-block tree
 /// headers stop paying for themselves below this.
-const SPLIT_MIN_BLOCK_BYTES : Int = 10000
+const SPLIT_MIN_BLOCK_BYTES : Int32 = 10000
 
 ///|
 /// Unconditional cut ceiling on block output bytes (libdeflate `SOFT_MAX_BLOCK_LENGTH`).
-const SPLIT_SOFT_MAX_BLOCK_BYTES : Int = 300000
+const SPLIT_SOFT_MAX_BLOCK_BYTES : Int32 = 300000
 
 ///|
 /// Divergence threshold numerator/denominator (libdeflate's 200/512): cut when
 /// the sum of absolute probability deltas reaches ~39%.
-const SPLIT_CUTOFF_NUM : Int = 200
+const SPLIT_CUTOFF_NUM : Int32 = 200
 
 ///|
-const SPLIT_CUTOFF_DEN : Int = 512
+const SPLIT_CUTOFF_DEN : Int32 = 512
 
 ///|
 /// Length bias divisor (libdeflate's `block_length / 4096` term): longer blocks
 /// cut progressively easier, since a fresh tree amortizes better.
-const SPLIT_BIAS_BYTES : Int = 4096
+const SPLIT_BIAS_BYTES : Int32 = 4096
 
 ///|
 /// Observation class of a packed token: literals map to 0–7 by bits 7,6,0;
 /// matches map to 8 (length < 9) or 9.
 #inline
-fn split_token_class(tok : Int) -> Int {
+fn split_token_class(tok : Int32) -> Int32 {
   // Branch-free form of: literals -> bits 7,6,0 (0..7); matches -> 8 + (len>=9).
   // `is_lit = (tok - 256) >> 31` is the arithmetic-shift mask: -1 (all ones)
   // for a literal, 0 for a match. The literal class is selected by `is_lit`,
@@ -62,7 +62,7 @@ fn split_token_class(tok : Int) -> Int {
 /// Output bytes a token contributes: 1 for a literal, the match length for a
 /// reference.
 #inline
-fn split_token_bytes(tok : Int) -> Int {
+fn split_token_bytes(tok : Int32) -> Int32 {
   // Branch-free form of `if tok < 256 { 1 } else { tok >> 16 }`: the
   // `(is_lit ^ -1)` mask is 0 for a literal (yielding 1) and -1 for a match
   // (yielding `1 + (len - 1)`).
@@ -76,11 +76,11 @@ fn split_token_bytes(tok : Int) -> Int {
 /// at least ~39% probability mass (less for long blocks). Integer-only; the
 /// caller guarantees `old_tot > 0`.
 fn split_end_block_check(
-  old : FixedArray[Int],
-  old_tot : Int,
-  new : FixedArray[Int],
-  new_tot : Int,
-  block_bytes : Int,
+  old : FixedArray[Int32],
+  old_tot : Int32,
+  new : FixedArray[Int32],
+  new_tot : Int32,
+  block_bytes : Int32,
 ) -> Bool {
   let mut delta = 0
   for i in 0..<SPLIT_NUM_CLASSES {
@@ -101,7 +101,7 @@ fn split_end_block_check(
 /// next token boundary, otherwise the window merges into `old`. Blocks are
 /// force-cut at `SPLIT_SOFT_MAX_BLOCK_BYTES`. Returns token indices where the
 /// following block begins (strictly increasing, within `[1, tokens.length()]`).
-fn choose_splits(tokens : Array[Int]) -> Array[Int] {
+fn choose_splits(tokens : Array[Int32]) -> Array[Int32] {
   let total_bytes = tokens.fold(init=0, (total, tok) => {
     total + split_token_bytes(tok)
   })
@@ -111,7 +111,7 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
   let mut new_tot = 0
   let mut block_bytes = 0
   let mut done_bytes = 0
-  let cuts : Array[Int] = []
+  let cuts : Array[Int32] = []
   for i, tok in tokens {
     let c = split_token_class(tok)
     new[c] = new[c] + 1
@@ -155,13 +155,13 @@ fn choose_splits(tokens : Array[Int]) -> Array[Int] {
 /// cut at the first token whose start offset reaches each block-size
 /// multiple. Used as the baseline when comparing estimated partition costs.
 fn fixed_cadence_cuts(
-  tokens : Array[Int],
-  all_pos : FixedArray[Int],
-  pos : Int,
-  block_size : Int,
-) -> Array[Int] {
+  tokens : Array[Int32],
+  all_pos : FixedArray[Int32],
+  pos : Int32,
+  block_size : Int32,
+) -> Array[Int32] {
   let m = tokens.length()
-  let cuts : Array[Int] = []
+  let cuts : Array[Int32] = []
   let mut target = pos + block_size
   let mut k = 1
   while k < m {
@@ -179,10 +179,10 @@ fn fixed_cadence_cuts(
 /// `block_cost_bits`. Stored-block alignment and final bit padding are not
 /// tracked across the partition.
 fn partition_cost(
-  tokens : Array[Int],
-  all_pos : FixedArray[Int],
-  cuts : Array[Int],
-) -> Int {
+  tokens : Array[Int32],
+  all_pos : FixedArray[Int32],
+  cuts : Array[Int32],
+) -> Int32 {
   let m = tokens.length()
   let mut total = 0
   let mut lo = 0
@@ -209,10 +209,10 @@ fn partition_cost(
 fn emit_split_blocks(
   w : BitWriter,
   data : BytesView,
-  tokens : Array[Int],
-  all_pos : FixedArray[Int],
-  cuts : Array[Int],
-  n : Int,
+  tokens : Array[Int32],
+  all_pos : FixedArray[Int32],
+  cuts : Array[Int32],
+  n : Int32,
 ) -> Unit {
   let m = tokens.length()
   let mut lo = 0
@@ -258,8 +258,8 @@ fn emit_split_blocks(
 /// for heuristically incompressible input, trading output size for speed.
 pub fn deflate_all_split(
   input : BytesView,
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Bytes {
   let lv = clamp_level(level)
   let w = BitWriter()
@@ -285,7 +285,7 @@ pub fn deflate_all_split(
   let mut pos = 0
   for ;; {
     let target = (pos + master_size).min(n)
-    let tokens : Array[Int] = []
+    let tokens : Array[Int32] = []
     let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
     let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
     let processed = tokenize(

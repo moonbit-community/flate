@@ -9,10 +9,10 @@ fn coverage_finish_bits(w : BitWriter) -> Bytes {
 /// Write a final dynamic-block header and its code-length alphabet.
 fn coverage_dynamic_header(
   w : BitWriter,
-  hlit : Int,
-  hdist : Int,
-  nclen : Int,
-  code_lengths : Array[Int],
+  hlit : Int32,
+  hdist : Int32,
+  nclen : Int32,
+  code_lengths : Array[Int32],
 ) -> Unit {
   w.write_bit(1) // BFINAL
   w.write_bits(2, 2) // BTYPE=10 (dynamic)

@@ -22,16 +22,16 @@ priv enum EncMode {
 pub struct Encoder {
   priv def : @flate.Deflater
   priv crc : @checksum.Crc32
-  priv mut isize : UInt // total input length, mod 2^32 (gzip ISIZE)
+  priv mut isize : UInt32 // total input length, mod 2^32 (gzip ISIZE)
   priv mut mode : EncMode
   priv mut stage : FixedArray[Byte] // header or trailer bytes being drained
-  priv mut stage_pos : Int
+  priv mut stage_pos : Int32
   // The accepted control action remains sticky until the inner state machine
   // has drained it. A single enum makes finish and sync-flush mutually
   // exclusive by construction.
   priv mut pending_action : @flate.DeflateAction
-  priv mut step_consumed : Int
-  priv mut step_produced : Int
+  priv mut step_consumed : Int32
+  priv mut step_produced : Int32
 }
 
 ///|
@@ -39,8 +39,8 @@ pub struct Encoder {
 /// Opt-in `fast_store` samples each block; it may increase output size.
 /// The default is false.
 pub fn Encoder::Encoder(
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Encoder {
   {
     def: Deflater(level~, fast_store~),
@@ -64,14 +64,14 @@ pub fn Encoder::is_finished(self : Encoder) -> Bool {
 ///|
 /// Number of input bytes accepted by the most recent successful `step` call.
 /// It is zero before the first call and after a call that reports no progress.
-pub fn Encoder::last_consumed(self : Encoder) -> Int {
+pub fn Encoder::last_consumed(self : Encoder) -> Int32 {
   self.step_consumed
 }
 
 ///|
 /// Number of output bytes written by the most recent successful `step` call.
 /// It is zero before the first call and after a call that reports no progress.
-pub fn Encoder::last_produced(self : Encoder) -> Int {
+pub fn Encoder::last_produced(self : Encoder) -> Int32 {
   self.step_produced
 }
 
@@ -91,8 +91,8 @@ fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
 fn Encoder::finish_step(
   self : Encoder,
   status : @flate.Status,
-  consumed : Int,
-  produced : Int,
+  consumed : Int32,
+  produced : Int32,
 ) -> @flate.Status {
   self.step_consumed = consumed
   self.step_produced = produced
@@ -113,7 +113,7 @@ pub fn Encoder::step(
   self : Encoder,
   input : BytesView,
   output : MutArrayView[Byte],
-  action? : @flate.DeflateAction = Continue,
+  action~ : @flate.DeflateAction = Continue,
 ) -> @flate.Status {
   self.step_consumed = 0
   self.step_produced = 0

@@ -120,7 +120,7 @@ test "streaming lazy match commits lookahead beyond a one-byte token range" {
   for i in 0..<3 {
     finder.insert_window_pos(ring, i, data.length())
   }
-  let tokens : Array[Int] = []
+  let tokens : Array[Int32] = []
   let ll = FixedArray::make(286, 0)
   let dd = FixedArray::make(30, 0)
   let end = tokenize_window(

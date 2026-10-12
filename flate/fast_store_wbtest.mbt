@@ -1,5 +1,5 @@
 ///|
-fn fast_store_noise(size : Int) -> Bytes {
+fn fast_store_noise(size : Int32) -> Bytes {
   let mut state = 0x91E10DA5U
   Bytes::makei(size, _ => {
     state = state ^ (state << 13)

@@ -109,7 +109,7 @@ test "incremental ZIP validates states and allows recovery from size errors" {
 
 ///|
 suberror StreamSinkFailure {
-  StreamSinkFailure(Int)
+  StreamSinkFailure(Int32)
 }
 
 ///|

@@ -1,15 +1,15 @@
 ///|
-const HUFFMAN_CHUNK_BITS : Int = 9
+const HUFFMAN_CHUNK_BITS : Int32 = 9
 
 ///|
-const HUFFMAN_VALUE_SHIFT : Int = 4
+const HUFFMAN_VALUE_SHIFT : Int32 = 4
 
 // Huffman decode tables for the decode pipeline: per-symbol code lengths in,
 // a zlib-style chunked lookup table out. Shared by the streaming `Inflater`
 // and the in-memory `MemDecoder`.
 
 ///|
-const MAX_CODE_LEN : Int = 16
+const MAX_CODE_LEN : Int32 = 16
 
 ///|
 /// zlib-style chunked Huffman decode table. `chunk & 0xF` is the code length,
@@ -19,10 +19,10 @@ const MAX_CODE_LEN : Int = 16
 /// Keeping all link tables contiguous removes one pointer
 /// chase from the decode hot path.
 priv struct HuffmanDecoder {
-  mut min : Int
-  chunks : FixedArray[UInt]
-  mut links : FixedArray[UInt]
-  mut link_mask : UInt
+  mut min : Int32
+  chunks : FixedArray[UInt32]
+  mut links : FixedArray[UInt32]
+  mut link_mask : UInt32
 }
 
 ///|
@@ -37,9 +37,9 @@ fn HuffmanDecoder::HuffmanDecoder() -> HuffmanDecoder {
 /// Callers supplying it must mask the nine-bit symbol on terminal entries.
 fn HuffmanDecoder::initialize(
   self : HuffmanDecoder,
-  lengths : ArrayView[Int],
-  metadata? : FixedArray[UInt]? = None,
-  length_totals? : Bool = false,
+  lengths : ArrayView[Int32],
+  metadata~ : FixedArray[UInt32]? = None,
+  length_totals~ : Bool = false,
 ) -> Bool {
   if self.min != 0 {
     self.min = 0
@@ -157,7 +157,7 @@ priv enum InflateAlphabet {
 
 ///|
 #cfg(target="native")
-let native_length_metadata : FixedArray[UInt] = FixedArray::makei(288, symbol => {
+let native_length_metadata : FixedArray[UInt32] = FixedArray::makei(288, symbol => {
   if symbol >= 257 && symbol < 286 {
     length_code_info_table[symbol - 257].reinterpret_as_uint() << 13
   } else {
@@ -167,7 +167,7 @@ let native_length_metadata : FixedArray[UInt] = FixedArray::makei(288, symbol =>
 
 ///|
 #cfg(target="native")
-let native_distance_metadata : FixedArray[UInt] = FixedArray::makei(32, symbol => {
+let native_distance_metadata : FixedArray[UInt32] = FixedArray::makei(32, symbol => {
   if symbol < MAX_NUM_DIST {
     distance_code_info_table[symbol].reinterpret_as_uint() << 13
   } else {
@@ -179,7 +179,7 @@ let native_distance_metadata : FixedArray[UInt] = FixedArray::makei(32, symbol =
 #cfg(target="native")
 fn HuffmanDecoder::initialize_data(
   self : HuffmanDecoder,
-  lengths : ArrayView[Int],
+  lengths : ArrayView[Int32],
   alphabet : InflateAlphabet,
 ) -> Bool {
   let metadata = match alphabet {
@@ -199,7 +199,7 @@ fn HuffmanDecoder::initialize_data(
 #cfg(target="native")
 fn HuffmanDecoder::initialize_litlen(
   self : HuffmanDecoder,
-  lengths : ArrayView[Int],
+  lengths : ArrayView[Int32],
 ) -> Bool {
   self.initialize_data(lengths, LiteralLength)
 }
@@ -208,7 +208,7 @@ fn HuffmanDecoder::initialize_litlen(
 #cfg(target="native")
 fn HuffmanDecoder::initialize_distance(
   self : HuffmanDecoder,
-  lengths : ArrayView[Int],
+  lengths : ArrayView[Int32],
 ) -> Bool {
   self.initialize_data(lengths, Distance)
 }
@@ -217,7 +217,7 @@ fn HuffmanDecoder::initialize_distance(
 #cfg(not(target="native"))
 fn HuffmanDecoder::initialize_litlen(
   self : HuffmanDecoder,
-  lengths : ArrayView[Int],
+  lengths : ArrayView[Int32],
 ) -> Bool {
   self.initialize(lengths)
 }
@@ -226,7 +226,7 @@ fn HuffmanDecoder::initialize_litlen(
 #cfg(not(target="native"))
 fn HuffmanDecoder::initialize_distance(
   self : HuffmanDecoder,
-  lengths : ArrayView[Int],
+  lengths : ArrayView[Int32],
 ) -> Bool {
   self.initialize(lengths)
 }

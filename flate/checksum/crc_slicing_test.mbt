@@ -1,6 +1,6 @@
 ///|
 // Bitwise reference does not share lookup tables with either production path.
-fn crc_bitwise_reference(data : BytesView) -> UInt {
+fn crc_bitwise_reference(data : BytesView) -> UInt32 {
   let mut crc = 0xFFFFFFFFU
   for byte in data {
     crc = crc ^ byte.to_uint()

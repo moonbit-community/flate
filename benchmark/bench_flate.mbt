@@ -12,12 +12,12 @@
 // separate measurements.
 
 ///|
-const BENCH_INPUT_SIZE : Int = 262144
+const BENCH_INPUT_SIZE : Int32 = 262144
 
 ///|
 /// Highly compressible: a phrase repeated to fill `size` bytes.
 #coverage.skip
-pub fn bench_repetitive(size : Int) -> Bytes {
+pub fn bench_repetitive(size : Int32) -> Bytes {
   let unit = b"The quick brown fox jumps over the lazy dog. Pack my box. "
   Bytes::makei(size, i => unit[i % unit.length()])
 }
@@ -25,7 +25,7 @@ pub fn bench_repetitive(size : Int) -> Bytes {
 ///|
 /// Effectively incompressible: bytes from a deterministic LCG.
 #coverage.skip
-fn bench_random(size : Int) -> Bytes {
+fn bench_random(size : Int32) -> Bytes {
   let mut s = 0x12345678U
   Bytes::makei(size, _ => {
     s = s * 1103515245U + 12345U
@@ -36,7 +36,7 @@ fn bench_random(size : Int) -> Bytes {
 ///|
 /// The corpus set corresponding to the C parity runner's inputs.
 #coverage.skip
-fn bench_corpora(size : Int) -> FixedArray[(String, Bytes)] {
+fn bench_corpora(size : Int32) -> FixedArray[(String, Bytes)] {
   [
     ("repetitive", bench_repetitive(size)),
     ("random", bench_random(size)),
@@ -47,7 +47,7 @@ fn bench_corpora(size : Int) -> FixedArray[(String, Bytes)] {
 ///|
 /// A realistic blend: compressible text followed by incompressible bytes.
 #coverage.skip
-pub fn bench_mixed(size : Int) -> Bytes {
+pub fn bench_mixed(size : Int32) -> Bytes {
   bench_repetitive(size / 2) + bench_random(size - size / 2)
 }
 
@@ -59,7 +59,7 @@ fn bench_deflate_direct(
   compressor : @flate.Compressor,
   input : Bytes,
   output : FixedArray[Byte],
-) -> Int {
+) -> Int32 {
   guard compressor.compress_into(input, output) is Some(written) else {
     abort("benchmark output buffer was too small")
   }
@@ -75,7 +75,7 @@ fn bench_inflate_direct(
   decompressor : @flate.Decompressor,
   input : Bytes,
   output : FixedArray[Byte],
-) -> Int {
+) -> Int32 {
   decompressor.decompress_into(input, output) catch {
     _ => abort("benchmark fixture failed to inflate")
   }
@@ -257,7 +257,7 @@ test "bench deflate_all_optimal" (b : @bench.T) {
 /// Realistic English prose so the adaptive-split speed is measured on the
 /// regime where it wins ratio.
 #coverage.skip
-fn bench_prose(size : Int) -> Bytes {
+fn bench_prose(size : Int32) -> Bytes {
   let unit = b"The history of data compression is a history of finding structure in information that does not want to be found. Early codes worked letter by letter; the leap to phrase-based matching came only when programmers realized that a file is rarely a stream of independent symbols but a tapestry of repeated fragments. Consider a text file: common words appear over and over, at distances that vary with the sentence structure around them, and an encoder that treats every occurrence as new is wasting its time. Matching is not the same as deciding: a match that is one byte longer but a thousand bytes farther away may cost more in offset bits than it saves in literals."
   Bytes::makei(size, i => unit[i % unit.length()])
 }
@@ -294,7 +294,7 @@ fn bench_zlib_stream(
   encoder : @zlib.Encoder,
   input : Bytes,
   window : FixedArray[Byte],
-) -> Int {
+) -> Int32 {
   let mut produced = 0
   for pos = 0 {
     let status = encoder.step(input[pos:], window.mut_view(), action=Finish)

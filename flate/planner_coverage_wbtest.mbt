@@ -35,7 +35,7 @@ test "lazy match pending at a block boundary is committed" {
   // history match beginning at index 3 is deferred by lazy parsing; reaching
   // `end=4` commits that pending match in tokenize's boundary epilogue.
   let data = b"abcabcabc"
-  let tokens : Array[Int] = []
+  let tokens : Array[Int32] = []
   let ll_freq = FixedArray::make(286, 0)
   let d_freq = FixedArray::make(30, 0)
   let finder = MatchFinder()
@@ -76,7 +76,7 @@ test "optimal planner crosses its master-block boundary" {
 }
 
 ///|
-fn make_second_split_candidate_for_coverage(variant : Int) -> Bytes {
+fn make_second_split_candidate_for_coverage(variant : Int32) -> Bytes {
   let bytes : Array[Byte] = []
   let trap = b"abcde abcdef lazy parsing boundary trap; "
   let mut state = (0xA341316CU + variant.reinterpret_as_uint()) | 1U
@@ -118,7 +118,7 @@ test "optimal planner round-trips mixed segment distributions" {
 test "split planner cuts and resets observations across literal-class changes" {
   // Exercise planner behavior independently of a particular matchfinder's
   // token choices: three long literal regions have sharply different classes.
-  let tokens : Array[Int] = []
+  let tokens : Array[Int32] = []
   for literal in [97, 98, 97] {
     for _ in 0..<12000 {
       tokens.push(literal)
@@ -153,7 +153,7 @@ test "split planner cuts and resets observations across literal-class changes" {
 }
 
 ///|
-fn coverage_divergent_bytes(size : Int) -> Bytes {
+fn coverage_divergent_bytes(size : Int32) -> Bytes {
   let mut state = 0x12345678U
   Bytes::makei(size, i => {
     state = state * 1103515245U + 12345U

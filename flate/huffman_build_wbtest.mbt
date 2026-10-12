@@ -2,7 +2,7 @@
 test "canonical Huffman codes retain symbol order across frequency groups" {
   // The classic six-symbol tree, with unused symbols interspersed. The
   // optimal lengths are 4,4,3,3,3,1; DEFLATE transmits reversed codewords.
-  let frequencies : FixedArray[Int] = [5, 0, 9, 12, 0, 13, 16, 45]
+  let frequencies : FixedArray[Int32] = [5, 0, 9, 12, 0, 13, 16, 45]
   let lengths = FixedArray::make(8, 0)
   let values = FixedArray::make(8, 0U)
   gen_huffman(frequencies, 8, 15, lengths, code_val=values)
@@ -22,7 +22,7 @@ test "canonical Huffman codes retain symbol order across frequency groups" {
 
 ///|
 test "canonical Huffman assigns values for two symbols" {
-  let frequencies : FixedArray[Int] = [3, 0, 2]
+  let frequencies : FixedArray[Int32] = [3, 0, 2]
   let lengths = FixedArray::make(3, 0)
   let values = FixedArray::make(3, 0U)
   gen_huffman(frequencies, 3, 15, lengths, code_val=values)

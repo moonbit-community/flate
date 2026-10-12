@@ -1,5 +1,5 @@
 ///|
-const DECODER_INPUT_LIMIT : Int = 65536
+const DECODER_INPUT_LIMIT : Int32 = 65536
 
 ///|
 priv enum DecMode {
@@ -15,7 +15,7 @@ pub struct Decoder {
   priv inf : @flate.Inflater
   priv adler : @checksum.Adler32 // of the decompressed output
   priv mut pending : BytesView
-  priv mut pending_pos : Int
+  priv mut pending_pos : Int32
   priv mut borrowed_input : Bool
   priv mut unused : Bytes // cached read-ahead suffix after successful completion
   priv mut ending : Bool // `end=true` is sticky across output suspension
@@ -23,8 +23,8 @@ pub struct Decoder {
   priv dict : BytesView? // preset dictionary, if the caller has one
   priv mut failure_kind : ZlibErrorKind? // stable first terminal error
   priv mut failure_message : String
-  priv mut step_consumed : Int
-  priv mut step_produced : Int
+  priv mut step_consumed : Int32
+  priv mut step_produced : Int32
 }
 
 ///|
@@ -58,14 +58,14 @@ pub fn Decoder::is_finished(self : Decoder) -> Bool {
 ///|
 /// Number of input bytes accepted by the most recent successful `step` call.
 /// It is reset to zero when a call raises `ZlibError`.
-pub fn Decoder::last_consumed(self : Decoder) -> Int {
+pub fn Decoder::last_consumed(self : Decoder) -> Int32 {
   self.step_consumed
 }
 
 ///|
 /// Number of output bytes written by the most recent successful `step` call.
 /// It is reset to zero when a call raises `ZlibError`.
-pub fn Decoder::last_produced(self : Decoder) -> Int {
+pub fn Decoder::last_produced(self : Decoder) -> Int32 {
   self.step_produced
 }
 
@@ -83,7 +83,7 @@ pub fn Decoder::unused_input(self : Decoder) -> Bytes {
 
 ///|
 /// Number of bytes not yet consumed from `pending`.
-fn Decoder::pending_length(self : Decoder) -> Int {
+fn Decoder::pending_length(self : Decoder) -> Int32 {
   self.pending.length() - self.pending_pos
 }
 
@@ -130,7 +130,7 @@ fn Decoder::compact_for_input(self : Decoder) -> Unit {
 }
 
 ///|
-fn Decoder::advance(self : Decoder, k : Int) -> Unit {
+fn Decoder::advance(self : Decoder, k : Int32) -> Unit {
   guard k > 0 else { return }
   self.pending_pos = self.pending_pos + k
   guard self.pending_pos < self.pending.length() else {
@@ -152,7 +152,7 @@ fn Decoder::pending_view(self : Decoder) -> BytesView {
 
 ///|
 /// Read a big-endian u32 from `pending` at `off`.
-fn Decoder::u32_be(self : Decoder, off : Int) -> UInt {
+fn Decoder::u32_be(self : Decoder, off : Int32) -> UInt32 {
   let pos = self.pending_pos + off
   (self.pending[pos].to_uint() << 24) |
   (self.pending[pos + 1].to_uint() << 16) |
@@ -267,7 +267,7 @@ pub fn Decoder::step(
   self : Decoder,
   input : BytesView,
   output : MutArrayView[Byte],
-  end? : Bool = false,
+  end~ : Bool = false,
 ) -> @flate.Status raise ZlibError {
   self.step_output(input, output, None, end~)
 }
@@ -280,7 +280,7 @@ pub fn Decoder::step_into(
   self : Decoder,
   input : BytesView,
   output : FixedArray[Byte],
-  end? : Bool = false,
+  end~ : Bool = false,
 ) -> @flate.Status raise ZlibError {
   self.step_output(input, output.mut_view(), Some(output), end~)
 }
@@ -314,8 +314,8 @@ fn Decoder::step_output(
 fn Decoder::finish_step(
   self : Decoder,
   status : @flate.Status,
-  consumed : Int,
-  produced : Int,
+  consumed : Int32,
+  produced : Int32,
 ) -> @flate.Status {
   self.step_consumed = consumed
   self.step_produced = produced

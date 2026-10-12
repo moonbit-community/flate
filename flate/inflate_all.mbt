@@ -4,12 +4,12 @@
 /// overlapping back-reference copies.
 priv struct DecodeOutput {
   mut storage : FixedArray[Byte]
-  mut length : Int
+  mut length : Int32
   fixed_capacity : Bool
 }
 
 ///|
-fn DecodeOutput::DecodeOutput(size_hint : Int) -> DecodeOutput {
+fn DecodeOutput::DecodeOutput(size_hint : Int32) -> DecodeOutput {
   {
     storage: FixedArray::make(size_hint.max(1), b'\x00'),
     length: 0,
@@ -26,15 +26,15 @@ fn DecodeOutput::into(storage : FixedArray[Byte]) -> DecodeOutput {
 
 ///|
 /// Byte counts use signed 32-bit Int on every backend.
-const MAX_DECODE_OUTPUT_SIZE : Int = 0x7FFFFFFF
+const MAX_DECODE_OUTPUT_SIZE : Int32 = 0x7FFFFFFF
 
 ///|
 /// Both counts are non-negative. Check the remaining range before adding so
 /// overflow cannot bypass the capacity check or reach an array write.
 fn checked_decode_output_length(
-  length : Int,
-  additional : Int,
-) -> Int raise InflateError {
+  length : Int32,
+  additional : Int32,
+) -> Int32 raise InflateError {
   guard additional <= MAX_DECODE_OUTPUT_SIZE - length else {
     raise InflateError(OutputLimitExceeded, "DEFLATE output size overflow")
   }
@@ -45,7 +45,7 @@ fn checked_decode_output_length(
 /// Retain geometric growth when doubling fits; otherwise allocate only the
 /// required size. Keeping this arithmetic separate permits allocation-free
 /// tests at the integer limit.
-fn grown_decode_output_capacity(current : Int, required : Int) -> Int {
+fn grown_decode_output_capacity(current : Int32, required : Int32) -> Int32 {
   if current <= MAX_DECODE_OUTPUT_SIZE / 2 {
     (current * 2).max(required)
   } else {
@@ -56,7 +56,7 @@ fn grown_decode_output_capacity(current : Int, required : Int) -> Int {
 ///|
 fn DecodeOutput::ensure_capacity(
   self : DecodeOutput,
-  additional : Int,
+  additional : Int32,
 ) -> Unit raise InflateError {
   let required = checked_decode_output_length(self.length, additional)
   guard required > self.storage.length() else { return }
@@ -89,8 +89,8 @@ fn DecodeOutput::append_byte(
 fn DecodeOutput::append_bytes(
   self : DecodeOutput,
   source : BytesView,
-  source_offset : Int,
-  length : Int,
+  source_offset : Int32,
+  length : Int32,
 ) -> Unit raise InflateError {
   guard length > 0 else { return }
   self.ensure_capacity(length)
@@ -108,8 +108,8 @@ fn DecodeOutput::append_bytes(
 /// The one-shot driver splits matches at cancellation boundaries.
 fn DecodeOutput::append_repeated_suffix(
   self : DecodeOutput,
-  distance : Int,
-  length : Int,
+  distance : Int32,
+  length : Int32,
 ) -> Unit raise InflateError {
   guard length > 0 else { return }
   self.ensure_capacity(length)
@@ -136,9 +136,9 @@ fn DecodeOutput::append_repeated_suffix(
 #cfg(any(target="native", target="wasm"))
 fn copy_match_bytes(
   storage : FixedArray[Byte],
-  start : Int,
-  distance : Int,
-  length : Int,
+  start : Int32,
+  distance : Int32,
+  length : Int32,
 ) -> Unit {
   if distance >= 16 && length >= 16 {
     for offset = 0; offset + 16 <= length; offset = offset + 16 {
@@ -165,9 +165,9 @@ fn copy_match_bytes(
 #cfg(not(any(target="native", target="wasm")))
 fn copy_match_bytes(
   storage : FixedArray[Byte],
-  start : Int,
-  distance : Int,
-  length : Int,
+  start : Int32,
+  distance : Int32,
+  length : Int32,
 ) -> Unit {
   copy_match_bytes_scalar(storage, start, distance, length)
 }
@@ -177,9 +177,9 @@ fn copy_match_bytes(
 /// the fallback on targets without native SIMD; the caller handles short matches.
 fn copy_match_bytes_scalar(
   storage : FixedArray[Byte],
-  start : Int,
-  distance : Int,
-  length : Int,
+  start : Int32,
+  distance : Int32,
+  length : Int32,
 ) -> Unit {
   let first = distance.min(length)
   FixedArray::unsafe_blit(storage, start, storage, start - distance, first)
@@ -200,21 +200,21 @@ fn DecodeOutput::to_bytes(self : DecodeOutput) -> Bytes {
 /// In-memory DEFLATE decoder. Reads from a `Bytes` and appends to `out`.
 priv struct MemDecoder {
   mut input : BytesView
-  mut pos : Int // next input byte
-  mut bitbuf : UInt // LSB-first bit accumulator
-  mut bit_count : Int // valid bits in `bitbuf`
+  mut pos : Int32 // next input byte
+  mut bitbuf : UInt32 // LSB-first bit accumulator
+  mut bit_count : Int32 // valid bits in `bitbuf`
   mut out : DecodeOutput
   mut cancelled : () -> Bool // polled every `CANCEL_GRANULARITY` produced bytes
   mut poll_cancel : Bool
-  mut next_cancel : Int // poll `cancelled` once `out` reaches this length
+  mut next_cancel : Int32 // poll `cancelled` once `out` reaches this length
   dyn_litlen : HuffmanDecoder // literal/length (also reused for the code-length tree)
   dyn_dist : HuffmanDecoder // distance
-  clbits : FixedArray[Int] // decoded literal+distance code lengths
-  codebits : FixedArray[Int] // code-length code lengths
+  clbits : FixedArray[Int32] // decoded literal+distance code lengths
+  codebits : FixedArray[Int32] // code-length code lengths
 }
 
 ///|
-const CANCEL_GRANULARITY : Int = 4096
+const CANCEL_GRANULARITY : Int32 = 4096
 
 ///|
 fn no_cancellation() -> Bool {
@@ -225,15 +225,15 @@ fn no_cancellation() -> Bool {
 /// A DEFLATE Huffman code is at most 15 bits. The one-shot decoder can keep a
 /// 24-bit reservoir because it is allowed to consume trailing bytes after the
 /// final block, as documented by `inflate_all`'s prefix semantics.
-const HUFFMAN_FAST_BITS : Int = 15
+const HUFFMAN_FAST_BITS : Int32 = 15
 
 ///|
-const HUFFMAN_FAST_REFILL_BITS : Int = 24
+const HUFFMAN_FAST_REFILL_BITS : Int32 = 24
 
 ///|
 /// Output chunk size for the streaming one-shot drivers: each `step` call
 /// writes into this scratch, so cancellation is polled at this granularity.
-const INFLATE_SCRATCH_SIZE : Int = 8192
+const INFLATE_SCRATCH_SIZE : Int32 = 8192
 
 ///|
 fn MemDecoder::MemDecoder(
@@ -332,7 +332,7 @@ fn MemDecoder::pull_byte(self : MemDecoder) -> Bool {
 }
 
 ///|
-fn MemDecoder::need(self : MemDecoder, n : Int) -> Unit raise InflateError {
+fn MemDecoder::need(self : MemDecoder, n : Int32) -> Unit raise InflateError {
   while self.bit_count < n {
     if !self.pull_byte() {
       raise InflateError(Truncated, "unexpected end of input")
@@ -341,7 +341,10 @@ fn MemDecoder::need(self : MemDecoder, n : Int) -> Unit raise InflateError {
 }
 
 ///|
-fn MemDecoder::read_bits(self : MemDecoder, n : Int) -> Int raise InflateError {
+fn MemDecoder::read_bits(
+  self : MemDecoder,
+  n : Int32,
+) -> Int32 raise InflateError {
   self.need(n)
   let v = (self.bitbuf & ((1U << n) - 1)).reinterpret_as_int()
   self.bitbuf = self.bitbuf >> n
@@ -353,7 +356,7 @@ fn MemDecoder::read_bits(self : MemDecoder, n : Int) -> Int raise InflateError {
 fn MemDecoder::huff_sym(
   self : MemDecoder,
   h : HuffmanDecoder,
-) -> Int raise InflateError {
+) -> Int32 raise InflateError {
   let mut n = h.min
   for ;; {
     while self.bit_count < n {
@@ -410,7 +413,7 @@ fn MemDecoder::refill_huffman_fast(self : MemDecoder) -> Unit {
 fn MemDecoder::huff_sym_data(
   self : MemDecoder,
   h : HuffmanDecoder,
-) -> Int raise InflateError {
+) -> Int32 raise InflateError {
   // Fifteen buffered bits cover any DEFLATE code. Avoid topping up the
   // reservoir on every symbol when the next lookup can already complete.
   if self.bit_count < HUFFMAN_FAST_BITS {
@@ -438,7 +441,7 @@ fn MemDecoder::huff_sym_data(
 #inline
 fn MemDecoder::decode_match(
   self : MemDecoder,
-  code : Int,
+  code : Int32,
   hd : HuffmanDecoder?,
 ) -> Unit raise InflateError {
   guard code < 286 else {
@@ -494,7 +497,7 @@ fn MemDecoder::decode_match(
 // Lookup only: the batch caller has at least 15 bits and checks invalid entries.
 #cfg(target="native")
 #inline
-fn batch_huffman_entry(h : HuffmanDecoder, bits : UInt64) -> UInt {
+fn batch_huffman_entry(h : HuffmanDecoder, bits : UInt64) -> UInt32 {
   // HuffmanDecoder always owns 512 primary entries, including empty trees.
   // Masking to nine bits proves this load's range independently of input.
   let chunk = h.chunks.unsafe_get((bits & 0x1FFUL).to_int())
@@ -838,8 +841,8 @@ fn MemDecoder::decode_fixed_block(self : MemDecoder) -> Unit raise InflateError 
 ///|
 fn MemDecoder::copy_match(
   self : MemDecoder,
-  distance : Int,
-  length : Int,
+  distance : Int32,
+  length : Int32,
 ) -> Unit raise InflateError {
   let mut remaining = length
   while remaining > 0 {
@@ -859,7 +862,7 @@ fn MemDecoder::copy_match(
 ///|
 fn MemDecoder::copy_stored(
   self : MemDecoder,
-  length : Int,
+  length : Int32,
 ) -> Unit raise InflateError {
   let mut remaining = length
   while remaining > 0 {
@@ -951,7 +954,7 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
 /// (8192 with `max_output`); returning `true` raises `InflateError(Cancelled, _)`.
 pub fn inflate_all(
   input : BytesView,
-  max_output? : Int,
+  max_output? : Int32,
   cancelled? : () -> Bool,
 ) -> Bytes raise InflateError {
   if max_output is Some(limit) {
@@ -996,7 +999,7 @@ pub fn Decompressor::decompress_into(
   input : BytesView,
   output : FixedArray[Byte],
   cancelled? : () -> Bool,
-) -> Int raise InflateError {
+) -> Int32 raise InflateError {
   self.decoder.reset_into(input, output, cancelled)
   errdefer self.decoder.release_buffers()
   self.decoder.run()
@@ -1012,7 +1015,7 @@ pub fn inflate_into(
   input : BytesView,
   output : FixedArray[Byte],
   cancelled? : () -> Bool,
-) -> Int raise InflateError {
+) -> Int32 raise InflateError {
   let decoder = Decompressor()
   if cancelled is Some(callback) {
     decoder.decompress_into(input, output, cancelled=callback)
@@ -1030,7 +1033,7 @@ pub fn inflate_into(
 /// `InflateError(Cancelled, _)`.
 fn inflate_streaming_all(
   input : BytesView,
-  max_output : Int?,
+  max_output : Int32?,
   exact : Bool,
   cancelled : () -> Bool,
 ) -> Bytes raise InflateError {
@@ -1086,9 +1089,9 @@ fn inflate_streaming_all(
 ///    in a single pass, trading transient memory for one decode pass.
 pub fn inflate_exact(
   input : BytesView,
-  max_output? : Int,
-  cancelled? : () -> Bool = () => false,
-  preallocated? : Bool = false,
+  max_output? : Int32,
+  cancelled~ : () -> Bool = () => false,
+  preallocated~ : Bool = false,
 ) -> Bytes raise InflateError {
   if max_output is Some(limit) {
     guard limit >= 0 else {
@@ -1111,11 +1114,11 @@ pub fn inflate_exact(
 fn inflate_drive(
   inflater : Inflater,
   input : BytesView,
-  max_output : Int?,
+  max_output : Int32?,
   exact : Bool,
   cancelled : () -> Bool,
-  emit : (FixedArray[Byte], Int) -> Unit,
-) -> Int raise InflateError {
+  emit : (FixedArray[Byte], Int32) -> Unit,
+) -> Int32 raise InflateError {
   let scratch = FixedArray::make(INFLATE_SCRATCH_SIZE, b'\x00')
   let mut total = 0
   let mut input_pos = 0
@@ -1150,8 +1153,8 @@ fn inflate_drive(
 /// A mismatch indicates an internal decoder invariant failure rather than bad
 /// caller input.
 fn validate_preallocation_size(
-  size : Int,
-  filled : Int,
+  size : Int32,
+  filled : Int32,
 ) -> Unit raise InflateError {
   guard filled == size else {
     raise InflateError(Corrupt, "corrupt: preallocation size mismatch")
@@ -1164,7 +1167,7 @@ fn validate_preallocation_size(
 /// allocation (the same `Inflater` is reused via `reset`).
 fn inflate_preallocated(
   input : BytesView,
-  max_output : Int?,
+  max_output : Int32?,
   cancelled : () -> Bool,
 ) -> Bytes raise InflateError {
   guard !cancelled() else {

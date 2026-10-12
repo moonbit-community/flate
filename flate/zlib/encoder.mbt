@@ -25,12 +25,12 @@ pub struct Encoder {
   priv mut adler : @checksum.Adler32
   priv mut mode : EncMode
   priv mut stage : FixedArray[Byte]
-  priv mut stage_pos : Int
+  priv mut stage_pos : Int32
   // Accepted stream control, latched until the inner deflater drains it.
   // Finish and sync-flush cannot both be pending.
   priv mut pending_action : @flate.DeflateAction
-  priv mut step_consumed : Int
-  priv mut step_produced : Int
+  priv mut step_consumed : Int32
+  priv mut step_produced : Int32
 }
 
 ///|
@@ -41,9 +41,9 @@ pub struct Encoder {
 /// Opt-in `fast_store` samples each block; it may increase output size.
 /// The default is false.
 pub fn Encoder::Encoder(
-  level? : Int = 6,
+  level~ : Int32 = 6,
   dictionary? : BytesView,
-  fast_store? : Bool = false,
+  fast_store~ : Bool = false,
 ) -> Encoder {
   let def = if dictionary is Some(dict) {
     @flate.Deflater(level~, dictionary=dict, fast_store~)
@@ -108,14 +108,14 @@ pub fn Encoder::is_finished(self : Encoder) -> Bool {
 ///|
 /// Number of input bytes accepted by the most recent successful `step` call.
 /// It is zero before the first call and after a call that reports no progress.
-pub fn Encoder::last_consumed(self : Encoder) -> Int {
+pub fn Encoder::last_consumed(self : Encoder) -> Int32 {
   self.step_consumed
 }
 
 ///|
 /// Number of output bytes written by the most recent successful `step` call.
 /// It is zero before the first call and after a call that reports no progress.
-pub fn Encoder::last_produced(self : Encoder) -> Int {
+pub fn Encoder::last_produced(self : Encoder) -> Int32 {
   self.step_produced
 }
 
@@ -133,8 +133,8 @@ fn Encoder::build_trailer(self : Encoder) -> FixedArray[Byte] {
 fn Encoder::finish_step(
   self : Encoder,
   status : @flate.Status,
-  consumed : Int,
-  produced : Int,
+  consumed : Int32,
+  produced : Int32,
 ) -> @flate.Status {
   self.step_consumed = consumed
   self.step_produced = produced
@@ -153,7 +153,7 @@ pub fn Encoder::step(
   self : Encoder,
   input : BytesView,
   output : MutArrayView[Byte],
-  action? : @flate.DeflateAction = Continue,
+  action~ : @flate.DeflateAction = Continue,
 ) -> @flate.Status {
   self.step_consumed = 0
   self.step_produced = 0

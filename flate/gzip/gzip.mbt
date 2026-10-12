@@ -32,7 +32,7 @@ fn wrap_inflate_error(err : @flate.InflateError) -> GzipError {
 }
 
 ///|
-fn u32_le(data : BytesView, off : Int) -> UInt {
+fn u32_le(data : BytesView, off : Int32) -> UInt32 {
   data[off].to_uint() |
   (data[off + 1].to_uint() << 8) |
   (data[off + 2].to_uint() << 16) |
@@ -58,8 +58,8 @@ fn gzip_frame(input : BytesView, deflated : Bytes) -> Bytes {
 /// DEFLATE blocks, sacrificing compression ratio for speed.
 pub fn compress(
   input : BytesView,
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Bytes {
   gzip_frame(input, @flate.deflate_all(input, level~, fast_store~))
 }
@@ -72,8 +72,8 @@ pub fn compress(
 /// DEFLATE blocks, sacrificing compression ratio for speed.
 pub fn compress_optimal(
   input : BytesView,
-  iterations? : Int = 15,
-  fast_store? : Bool = false,
+  iterations~ : Int32 = 15,
+  fast_store~ : Bool = false,
 ) -> Bytes {
   gzip_frame(input, @flate.deflate_all_optimal(input, iterations~, fast_store~))
 }
@@ -86,8 +86,8 @@ pub fn compress_optimal(
 /// byte-aligned end of the member's final block.
 fn inflate_member(
   input : BytesView,
-  q : Int,
-  consumed : FixedArray[Int],
+  q : Int32,
+  consumed : FixedArray[Int32],
 ) -> Bytes raise GzipError {
   let inf = @flate.Inflater()
   let out : Array[Byte] = []
@@ -118,7 +118,7 @@ fn inflate_member(
 /// Whether the bytes at `p` begin a gzip member: the magic pair, with a
 /// truncated second byte treated as a (still-to-be-validated) member start so
 /// the caller reports `Truncated` rather than ending the stream.
-fn gunzip_member_magic(input : BytesView, p : Int, n : Int) -> Bool {
+fn gunzip_member_magic(input : BytesView, p : Int32, n : Int32) -> Bool {
   input[p].to_int() == 0x1F && (p + 1 >= n || input[p + 1].to_int() == 0x8B)
 }
 
@@ -126,7 +126,7 @@ fn gunzip_member_magic(input : BytesView, p : Int, n : Int) -> Bool {
 /// Skip a NUL-terminated header field, returning the offset one past the NUL.
 /// An unterminated field (bounded by the input end) still consumes its bytes;
 /// the caller's truncated-input check rejects it.
-fn gunzip_skip_nul_terminated(input : BytesView, q : Int) -> Int {
+fn gunzip_skip_nul_terminated(input : BytesView, q : Int32) -> Int32 {
   let mut q = q
   while q < input.length() && input[q].to_int() != 0 {
     q = q + 1
@@ -139,9 +139,9 @@ fn gunzip_skip_nul_terminated(input : BytesView, q : Int) -> Int {
 /// gated by the FLG bits.
 fn gunzip_optional_fields_end(
   input : BytesView,
-  q : Int,
-  flg : Int,
-) -> Int raise GzipError {
+  q : Int32,
+  flg : Int32,
+) -> Int32 raise GzipError {
   let header_start = q - 10
   let mut q = q
   if (flg & 4) != 0 { // FEXTRA
@@ -173,10 +173,10 @@ fn gunzip_optional_fields_end(
 /// member (one past the trailer).
 fn gunzip_decode_member(
   input : BytesView,
-  p : Int,
-  n : Int,
-  member_consumed : FixedArray[Int],
-) -> (Bytes, Int) raise GzipError {
+  p : Int32,
+  n : Int32,
+  member_consumed : FixedArray[Int32],
+) -> (Bytes, Int32) raise GzipError {
   guard n - p >= 18 else { raise GzipError(Truncated, "gzip: truncated") }
   guard input[p + 2].to_int() == 0x08 else {
     raise GzipError(InvalidHeader, "gzip: unsupported compression method")

@@ -3,14 +3,14 @@
 // empty input, large multi-chunk inputs).
 
 ///|
-fn bench_repetitive(size : Int) -> Bytes {
+fn bench_repetitive(size : Int32) -> Bytes {
   let unit = b"The quick brown fox jumps over the lazy dog. Pack my box. "
   Bytes::makei(size, i => unit[i % unit.length()])
 }
 
 ///|
 /// Effectively incompressible: bytes from a deterministic LCG.
-fn bench_random(size : Int) -> Bytes {
+fn bench_random(size : Int32) -> Bytes {
   let mut s = 0x12345678U
   Bytes::makei(size, _ => {
     s = s * 1103515245U + 12345U
@@ -19,12 +19,12 @@ fn bench_random(size : Int) -> Bytes {
 }
 
 ///|
-fn bench_mixed(size : Int) -> Bytes {
+fn bench_mixed(size : Int32) -> Bytes {
   bench_repetitive(size / 2) + bench_random(size - size / 2)
 }
 
 ///|
-fn split_prose(size : Int) -> Bytes {
+fn split_prose(size : Int32) -> Bytes {
   let ps : ReadOnlyArray[_] = [
     b"The history of data compression is a history of finding structure in information that does not want to be found. Early codes worked letter by letter; the leap to phrase-based matching came only when programmers realized that a file is rarely a stream of independent symbols but a tapestry of repeated fragments.",
     b"Consider a text file. Common words appear over and over, at distances that vary with the sentence structure around them. A word like the or and may sit three characters from its twin in one sentence and three thousand in the next.",
@@ -51,7 +51,7 @@ fn split_prose(size : Int) -> Bytes {
 }
 
 ///|
-fn split_code(size : Int) -> Bytes {
+fn split_code(size : Int32) -> Bytes {
   let src = b"pub fn Deflater::step(self : Deflater, input : BytesView, output : MutArrayView[Byte], action? : DeflateAction = Continue) -> Status { self.step_consumed = 0; self.step_produced = 0; if self.done { return self.finish_step(Done, 0, 0) }; let out_end = output.length(); let input_end = input.length(); let input_limit = DEFLATE_BLOCK_SIZE + MIN_LOOKAHEAD; let mut consumed = 0; for ;; { while self.out_pos < self.w.out.length() && write_pos < out_end { output.set(write_pos, self.w.out[self.out_pos]); write_pos = write_pos + 1 }; if consumed < input_end { let take = input_end - consumed; for i in consumed..<(consumed + take) { self.pending.push(input[i]) }; consumed = consumed + take; continue }; return self.finish_step(NeedMoreInput, consumed, write_pos) } };"
   let unit = src
   let arr : Array[Byte] = []
@@ -64,7 +64,7 @@ fn split_code(size : Int) -> Bytes {
 }
 
 ///|
-fn split_drift(size : Int) -> Bytes {
+fn split_drift(size : Int32) -> Bytes {
   // Statistics drift: compressible prose alternating with pseudo-random bytes,
   // the regime where a too-large adaptive block can lag a fixed cadence.
   let arr : Array[Byte] = []
@@ -83,7 +83,7 @@ fn split_drift(size : Int) -> Bytes {
 }
 
 ///|
-fn split_midmix(size : Int) -> Bytes {
+fn split_midmix(size : Int32) -> Bytes {
   // Prose and pseudo-random bytes alternate every 32 KB, so the drift boundary
   // falls *inside* each 64 KB master chunk and forces a mid-chunk divergence
   // cut (non-empty `choose_splits` and the arbitration branch).

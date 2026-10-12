@@ -1,5 +1,5 @@
 ///|
-fn roundtrip_input(size : Int, seed : UInt, alphabet : Int) -> Bytes {
+fn roundtrip_input(size : Int32, seed : UInt32, alphabet : Int32) -> Bytes {
   let mut state = seed
   Bytes::makei(size, _ => {
     state = state * 1103515245U + 12345U
@@ -16,7 +16,11 @@ fn roundtrip_input(size : Int, seed : UInt, alphabet : Int) -> Bytes {
 ///|
 /// The PDF-writer driving pattern: one `Finish` step per call with a fixed
 /// 32 KiB output window, re-presenting the unconsumed suffix.
-fn roundtrip_zlib_stream(input : Bytes, level : Int, out_chunk : Int) -> Bytes {
+fn roundtrip_zlib_stream(
+  input : Bytes,
+  level : Int32,
+  out_chunk : Int32,
+) -> Bytes {
   roundtrip_zlib_drive(Encoder(level~), input, out_chunk)
 }
 
@@ -24,7 +28,7 @@ fn roundtrip_zlib_stream(input : Bytes, level : Int, out_chunk : Int) -> Bytes {
 fn roundtrip_zlib_drive(
   encoder : @zlib.Encoder,
   input : Bytes,
-  out_chunk : Int,
+  out_chunk : Int32,
 ) -> Bytes {
   let out = FixedArray::make(out_chunk, b'\x00')
   let result = Buffer()

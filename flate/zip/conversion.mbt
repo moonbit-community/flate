@@ -6,8 +6,8 @@
 
 ///|
 /// Converts a `UInt` to `Int`, raising when the value exceeds the signed range.
-fn UInt::to_int_checked(self : UInt) -> Int raise ZipError {
-  guard self <= (0x7FFFFFFF : UInt) else {
+fn UInt32::to_int_checked(self : UInt32) -> Int32 raise ZipError {
+  guard self <= (0x7FFFFFFF : UInt32) else {
     raise ZipError(UnsupportedFeature, "zip: u32 exceeds the Int range")
   }
   self.reinterpret_as_int()
@@ -16,7 +16,7 @@ fn UInt::to_int_checked(self : UInt) -> Int raise ZipError {
 ///|
 /// Converts a `UInt64` to `Int`, raising when the value exceeds the signed
 /// range.
-fn UInt64::to_int_checked(self : UInt64) -> Int raise ZipError {
+fn UInt64::to_int_checked(self : UInt64) -> Int32 raise ZipError {
   guard self <= (0x7FFFFFFF : UInt64) else {
     raise ZipError(UnsupportedFeature, "zip: u64 exceeds the Int range")
   }
@@ -25,7 +25,7 @@ fn UInt64::to_int_checked(self : UInt64) -> Int raise ZipError {
 
 ///|
 /// Converts an `Int` to `UInt`, raising when the value is negative.
-fn Int::to_uint_checked(self : Int) -> UInt raise ZipError {
+fn Int32::to_uint_checked(self : Int32) -> UInt32 raise ZipError {
   guard self >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: negative u32 value")
   }
@@ -34,7 +34,7 @@ fn Int::to_uint_checked(self : Int) -> UInt raise ZipError {
 
 ///|
 /// Converts an `Int` to `UInt64`, raising when the value is negative.
-fn Int::to_uint64_checked(self : Int) -> UInt64 raise ZipError {
+fn Int32::to_uint64_checked(self : Int32) -> UInt64 raise ZipError {
   guard self >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: negative u64 value")
   }
