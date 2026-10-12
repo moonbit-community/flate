@@ -636,6 +636,154 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
 }
 
 ///|
+/// Decode whole literal and match units with the bit reservoir, the input
+/// cursor and the output cursor in locals, as `MemDecoder::decode_batch` does
+/// for one-shot input, while the step's input view holds eight more bytes and
+/// its output 258 more bytes of room: a unit needs at most 48 bits
+/// (15 + 5 + 15 + 13) and writes at most 258 bytes, so neither can run out
+/// inside one.
+///
+/// What this leaves behind is what `decode_unit` leaves after the same units:
+/// the reservoir is refilled from the current view only (the caller checks
+/// that the staged tail is drained and fewer than eight bits are buffered),
+/// and the whole bytes it read ahead are given back before returning, so
+/// `in_pos` is again the first byte no decoded unit has touched: a container's
+/// trailer is never consumed. A unit that is invalid, or that this loop does
+/// not want to judge (a bad code, a reserved symbol, a distance beyond the
+/// history), is left undecoded for `decode_unit`, which raises its error.
+///
+/// The streaming tables are plain (`chunk >> 4` is the symbol);
+/// `batch_huffman_entry` only looks an entry up, with at least 15 valid bits
+/// in hand, and a zero length is rejected here.
+#cfg(target="native")
+fn Inflater::decode_fast(self : Inflater) -> Unit {
+  guard self.hl is Some(hl) else { return }
+  let input = self.view
+  let input_length = input.length()
+  let output = self.out
+  let out_end = self.out_end
+  let window = self.window
+  let fixed_distance = self.hd_fixed
+  let hd = match self.hd {
+    Some(tree) => tree
+    None => hl // never consulted: fixed blocks read five distance bits
+  }
+  guard fixed_distance || self.hd is Some(_) else { return }
+  let mut bits = self.bitbuf.reinterpret_as_uint().to_uint64()
+  let mut count = self.bit_count
+  let mut pos = self.in_pos
+  let first_out_pos = self.out_pos
+  let mut out_pos = first_out_pos
+  let mut wpos = self.wpos
+  for ;; {
+    guard pos >= 0 &&
+      pos <= input_length - 8 &&
+      out_pos >= 0 &&
+      out_pos <= out_end - 258 else {
+      break
+    }
+    if count < 48 {
+      // SAFETY: the guard above holds `0 <= pos <= input_length - 8`: the
+      // eight bytes lie inside the view. Advance only by the complete bytes
+      // that fit below bit 63; afterwards 56..63 bits are valid. The bits
+      // loaded above them are the same input the next refill ORs in again.
+      let loaded = input.unsafe_read_uint64_le(pos)
+      let bytes = (63 - count) >> 3
+      bits = bits | (loaded << count)
+      count = count + (bytes << 3)
+      pos = pos + bytes
+    }
+    let entry = batch_huffman_entry(hl, bits)
+    let used = (entry & 15).reinterpret_as_int()
+    guard used != 0 else { break }
+    let symbol = (entry >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
+    if symbol < 256 {
+      bits = bits >> used
+      count = count - used
+      // SAFETY: `out_pos <= out_end - 258` and `out_end` is the length of
+      // the output view; the window index is masked to the window's size.
+      output.unsafe_set(out_pos, symbol.to_byte())
+      window.unsafe_set(wpos & (WINDOW_SIZE - 1), symbol.to_byte())
+      out_pos = out_pos + 1
+      wpos = wpos + 1
+      continue
+    }
+    if symbol == 256 {
+      bits = bits >> used
+      count = count - used
+      self.mode = if self.final_block { Done } else { AtBlock }
+      break
+    }
+    guard symbol < 286 else { break }
+    let length_info = length_code_info_table[symbol - 257]
+    let length_extra = length_info & 7
+    let length = (length_info >> 3) +
+      ((bits >> used).to_int() & ((1 << length_extra) - 1))
+    let mut word = bits >> (used + length_extra)
+    let mut remaining = count - used - length_extra
+    let distance_symbol = if fixed_distance {
+      let code = fixed_distance_symbol(word.to_int() & 31)
+      word = word >> 5
+      remaining = remaining - 5
+      code
+    } else {
+      let distance_entry = batch_huffman_entry(hd, word)
+      let distance_used = (distance_entry & 15).reinterpret_as_int()
+      guard distance_used != 0 else { break }
+      word = word >> distance_used
+      remaining = remaining - distance_used
+      (distance_entry >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
+    }
+    guard distance_symbol.reinterpret_as_uint() <
+      MAX_NUM_DIST.reinterpret_as_uint() else {
+      break
+    }
+    let distance_info = distance_code_info_table[distance_symbol]
+    let distance_extra = distance_info & 15
+    let distance = (distance_info >> 4) +
+      (word.to_int() & ((1 << distance_extra) - 1))
+    guard self.filled ||
+      wpos >= WINDOW_SIZE ||
+      back_reference_distance_is_valid(distance, wpos) else {
+      break
+    }
+    bits = word >> distance_extra
+    count = remaining - distance_extra
+    // The unit is valid and complete: copy it with the suspendable copier,
+    // which finishes here because 258 bytes of output room were reserved.
+    self.out_pos = out_pos
+    self.wpos = wpos
+    self.copy_remaining = length
+    self.copy_dist = distance
+    self.drain_match()
+    out_pos = self.out_pos
+    wpos = self.wpos
+  }
+  // Give the unread whole bytes back before narrowing to the step's
+  // reservoir: every one of them was loaded from this view by this call.
+  self.in_pos = pos - (count >> 3)
+  self.bit_count = count & 7
+  self.bitbuf = (bits.to_uint() & ((1U << (count & 7)) - 1)).reinterpret_as_int()
+  self.out_pos = out_pos
+  self.wpos = wpos
+  // `wpos` counts every byte ever written and may wrap; a call that wrote a
+  // window's worth has filled the window wherever the counter stands.
+  if !self.filled &&
+    (wpos >= WINDOW_SIZE || out_pos - first_out_pos >= WINDOW_SIZE) {
+    self.filled = true
+  }
+}
+
+///|
+/// The wide-reservoir loop is measured on native only, like the one-shot
+/// decoder's batch; other backends decode every unit with `decode_unit`.
+#cfg(not(target="native"))
+#inline
+fn Inflater::decode_fast(_self : Inflater) -> Unit {
+
+}
+
+///|
 /// Snapshot of the input cursor taken before one atomic unit. Rewinding to a
 /// mark lets a `NeedInput`-suspended unit re-run verbatim once more input
 /// arrives, instead of resuming mid-unit.
@@ -734,6 +882,17 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
         // A unit needs room for at least its first byte; the rest of a match
         // suspends via `copy_remaining` rather than requiring 258 bytes upfront.
         guard self.out_pos < self.out_end else { return NeedMoreOutput }
+        // With eight bytes of this step's input and 258 bytes of output room
+        // in hand, whole units are decoded with local state; what is left
+        // near either end, and every invalid unit, takes the careful path.
+        if self.bit_count < 8 &&
+          self.staged_pos == self.staged_input.length() &&
+          self.view.length() - self.in_pos >= 8 &&
+          self.out_end - self.out_pos >= 258 {
+          self.decode_fast()
+          guard self.mode is InHuffman else { continue }
+          guard self.out_pos < self.out_end else { return NeedMoreOutput }
+        }
         let mark = self.mark_cursor()
         let eob = self.decode_unit() catch {
           err => return self.retry_or_raise(mark, err)
