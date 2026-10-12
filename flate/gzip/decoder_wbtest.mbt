@@ -198,3 +198,41 @@ test "gzip step_into equals step for every input and output split" {
     }
   }
 }
+
+///|
+test "gzip view checksum batches equal bytewise updates" {
+  let storage = FixedArray::makei(3 * CHECKSUM_VIEW_CHUNK + 40, i => {
+    (i * 131 + i / 7).to_byte()
+  })
+  for view_start in [0, 3] {
+    let view = storage.mut_view(start=view_start)
+    for start in [0, 1, 17] {
+      for
+        length in [
+          0,
+          1,
+          15,
+          16,
+          17,
+          CHECKSUM_VIEW_CHUNK - 1,
+          CHECKSUM_VIEW_CHUNK,
+          CHECKSUM_VIEW_CHUNK + 1,
+          2 * CHECKSUM_VIEW_CHUNK + 5,
+          view.length() - start,
+        ] {
+        let batched = Decoder()
+        let bytewise = Decoder()
+        batched.checksum_view(view, start, length)
+        for i in 0..<length {
+          bytewise.crc.update_byte(view[start + i])
+        }
+        @test.assert_eq(batched.crc.finish(), bytewise.crc.finish())
+      }
+    }
+    // A range that is not inside the view folds nothing.
+    let outside = Decoder()
+    outside.checksum_view(view, view.length() - 1, 2)
+    outside.checksum_view(view, -1, 1)
+    @test.assert_eq(outside.crc.finish(), Decoder().crc.finish())
+  }
+}

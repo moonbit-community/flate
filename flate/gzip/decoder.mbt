@@ -534,9 +534,7 @@ fn Decoder::step_active(
             let bytes = unsafe_bytes_of_array(fixed)
             self.crc.update(bytes[op_before:op_before + produced])
           } else {
-            for i in 0..<produced {
-              self.crc.update_byte(output.at(op_before + i))
-            }
+            self.checksum_view(output, op_before, produced)
           }
           self.osize = self.osize + produced.reinterpret_as_uint()
         }
@@ -569,6 +567,39 @@ fn Decoder::advance_header(self : Decoder, count : Int32) -> Unit {
     }
   }
   self.advance(count)
+}
+
+///|
+/// Bytes of a mutable view that are checksummed per batch.
+const CHECKSUM_VIEW_CHUNK : Int32 = 4096
+
+///|
+/// Fold `output[start:start + length)` into the CRC-32. Core has no bulk
+/// read of a mutable view, so the bytes are gathered into a scratch chunk and
+/// folded a chunk at a time instead of one `update_byte` (two divisions for
+/// Adler-32, a table step for CRC-32) per byte.
+fn Decoder::checksum_view(
+  self : Decoder,
+  output : MutArrayView[Byte],
+  start : Int32,
+  length : Int32,
+) -> Unit {
+  guard start >= 0 && length > 0 && length <= output.length() - start else {
+    return
+  }
+  let chunk = FixedArray::make(length.min(CHECKSUM_VIEW_CHUNK), b'\x00')
+  let bytes = unsafe_bytes_of_array(chunk)
+  let mut done = 0
+  while done < length {
+    let count = (length - done).min(chunk.length())
+    // SAFETY: `done + count <= length` and the guard above keeps
+    // `start + length` within the view; `count <= chunk.length()`.
+    for i in 0..<count {
+      chunk.unsafe_set(i, output.unsafe_get(start + done + i))
+    }
+    self.crc.update(bytes[:count])
+    done = done + count
+  }
 }
 
 ///|
