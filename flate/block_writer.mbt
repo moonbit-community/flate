@@ -291,7 +291,10 @@ fn BitWriter::write_huffman_block(
 /// before each field and no field exceeds 15 bits, so the 31-bit positive
 /// range of `Int` is never exceeded. Bytes are emitted exactly as by
 /// `write_bits`, which this inlines.
-fn BitWriter::write_tokens(
+///
+/// This is the reference for the 64-bit `write_tokens` of native and linear
+/// wasm, and the implementation on the other backends.
+fn BitWriter::write_tokens_bytewise(
   writer : BitWriter,
   tokens : ArrayView[Int32],
   ll_val : FixedArray[UInt32],
@@ -341,6 +344,125 @@ fn BitWriter::write_tokens(
   }
   writer.bitbuf = bitbuf
   writer.bit_count = bit_count
+}
+
+///|
+/// Tokens encoded between two hand-overs of `write_tokens`' scratch chunk.
+#cfg(any(target="native", target="wasm"))
+const TOKEN_CHUNK_TOKENS : Int32 = 1024
+
+///|
+/// One token is at most 48 bits (a 15-bit length code, 5 extra bits, a 15-bit
+/// distance code, 13 extra bits), and at most 7 bits are pending when a chunk
+/// starts: `TOKEN_CHUNK_TOKENS` tokens advance the write position by at most
+/// `(7 + 48 * TOKEN_CHUNK_TOKENS) / 8 < 6 * TOKEN_CHUNK_TOKENS + 1` bytes, and
+/// the last eight-byte store reaches seven bytes further.
+#cfg(any(target="native", target="wasm"))
+const TOKEN_CHUNK_BYTES : Int32 = 6 * TOKEN_CHUNK_TOKENS + 8
+
+///|
+/// `write_tokens_bytewise` with a 64-bit accumulator, as zlib-ng and
+/// libdeflate write their tokens: every token is shifted in whole, then the
+/// accumulator is stored as eight little-endian bytes and the write position
+/// advances by the complete bytes only, so the incomplete byte is stored again
+/// (completed) by the next token. Bytes go to a scratch chunk that is handed
+/// to the writer in bulk. The emitted bytes and the bits left pending are
+/// exactly those of `write_tokens_bytewise`.
+#cfg(any(target="native", target="wasm"))
+fn BitWriter::write_tokens_wide(
+  writer : BitWriter,
+  tokens : ArrayView[Int32],
+  ll_val : FixedArray[UInt32],
+  ll_len : FixedArray[Int32],
+  dd_val : FixedArray[UInt32],
+  dd_len : FixedArray[Int32],
+) -> Unit {
+  let chunk = FixedArray::make(TOKEN_CHUNK_BYTES, b'\x00')
+  // At most 7 bits are pending between fields (see `write_bits`).
+  let mut bitbuf = writer.bitbuf.reinterpret_as_uint().to_uint64()
+  let mut bit_count = writer.bit_count
+  let count = tokens.length()
+  let mut start = 0
+  while start < count {
+    let end = start + (count - start).min(TOKEN_CHUNK_TOKENS)
+    let mut pos = 0
+    for k in start..<end {
+      let tok = tokens[k]
+      // With at most 7 bits pending, a literal (<= 15 bits) or a whole match
+      // (<= 48 bits) keeps `bit_count` at 55 or less: nothing is shifted out
+      // of the 64-bit accumulator. Codes are below `1 << length` and extra
+      // values below `1 << extra`, so no field needs a mask.
+      if tok < 256 {
+        bitbuf = bitbuf | (ll_val[tok].to_uint64() << bit_count)
+        bit_count = bit_count + ll_len[tok]
+      } else {
+        let length = tok >> 16
+        let dist = tok & 0xFFFF
+        let lidx = len_to_idx[length]
+        let lsym = 257 + lidx
+        bitbuf = bitbuf | (ll_val[lsym].to_uint64() << bit_count)
+        bit_count = bit_count + ll_len[lsym]
+        bitbuf = bitbuf |
+          (
+            (length - len_base[lidx]).reinterpret_as_uint().to_uint64() <<
+            bit_count
+          )
+        bit_count = bit_count + len_extra[lidx]
+        let didx = dist_index(dist)
+        bitbuf = bitbuf | (dd_val[didx].to_uint64() << bit_count)
+        bit_count = bit_count + dd_len[didx]
+        bitbuf = bitbuf |
+          (
+            (dist - dist_base[didx]).reinterpret_as_uint().to_uint64() <<
+            bit_count
+          )
+        bit_count = bit_count + dist_extra[didx]
+      }
+      // SAFETY: before token `k` of this chunk `pos` is at most
+      // `(7 + 48 * (k - start)) / 8 <= 6 * (k - start)`, and
+      // `k - start < TOKEN_CHUNK_TOKENS`, so the eight bytes at `pos` end at
+      // or before `6 * TOKEN_CHUNK_TOKENS + 2 <= TOKEN_CHUNK_BYTES`.
+      chunk.unsafe_write_uint64_le(pos, bitbuf)
+      pos = pos + (bit_count >> 3)
+      bitbuf = bitbuf >> (bit_count & 0x38)
+      bit_count = bit_count & 7
+    }
+    writer.write_array(chunk, pos)
+    start = end
+  }
+  writer.bitbuf = bitbuf.to_int()
+  writer.bit_count = bit_count
+}
+
+///|
+/// A run too short to pay for the scratch chunk is written bytewise.
+#cfg(any(target="native", target="wasm"))
+fn BitWriter::write_tokens(
+  writer : BitWriter,
+  tokens : ArrayView[Int32],
+  ll_val : FixedArray[UInt32],
+  ll_len : FixedArray[Int32],
+  dd_val : FixedArray[UInt32],
+  dd_len : FixedArray[Int32],
+) -> Unit {
+  if tokens.length() < 64 {
+    writer.write_tokens_bytewise(tokens, ll_val, ll_len, dd_val, dd_len)
+  } else {
+    writer.write_tokens_wide(tokens, ll_val, ll_len, dd_val, dd_len)
+  }
+}
+
+///|
+#cfg(not(any(target="native", target="wasm")))
+fn BitWriter::write_tokens(
+  writer : BitWriter,
+  tokens : ArrayView[Int32],
+  ll_val : FixedArray[UInt32],
+  ll_len : FixedArray[Int32],
+  dd_val : FixedArray[UInt32],
+  dd_len : FixedArray[Int32],
+) -> Unit {
+  writer.write_tokens_bytewise(tokens, ll_val, ll_len, dd_val, dd_len)
 }
 
 ///|
