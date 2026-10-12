@@ -6,12 +6,12 @@
 // Sizes/levels are kept small: the goal is suspension coverage, not throughput.
 
 ///|
-fn lcg(state : UInt) -> UInt {
+fn lcg(state : UInt32) -> UInt32 {
   state * 1664525 + 1013904223
 }
 
 ///|
-fn make_bytes(seed : UInt, len : Int, alpha : Int) -> Bytes {
+fn make_bytes(seed : UInt32, len : Int32, alpha : Int32) -> Bytes {
   let a = Array::make(len, b'\x00')
   let mut s = seed
   for i in 0..<len {
@@ -23,7 +23,7 @@ fn make_bytes(seed : UInt, len : Int, alpha : Int) -> Bytes {
 
 ///|
 /// Compress `data` feeding one input byte per `step` into a one-byte output.
-fn deflate_1b(data : Bytes, level : Int) -> Bytes {
+fn deflate_1b(data : Bytes, level : Int32) -> Bytes {
   let def = @flate.Deflater(level~)
   let comp = @buffer.Buffer()
   let ob = FixedArray::make(1, b'\x00')

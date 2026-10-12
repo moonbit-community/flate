@@ -1,6 +1,6 @@
 ///|
 // Independent bytewise reference: every intermediate sum stays reduced.
-fn adler_reference(data : BytesView) -> UInt {
+fn adler_reference(data : BytesView) -> UInt32 {
   let mut a = 1
   let mut b = 0
   for byte in data {

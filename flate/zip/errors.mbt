@@ -24,7 +24,7 @@ pub(all) enum ZipErrorKind {
   MissingEndOfCentral
   /// The entry uses a compression method this package cannot decode. Carries
   /// the method code from the central directory.
-  UnsupportedCompression(Int)
+  UnsupportedCompression(Int32)
   /// An entry or archive name is not valid UTF-8.
   InvalidUtf8
   /// The archive uses a ZIP feature this package does not support (encryption,
@@ -35,7 +35,7 @@ pub(all) enum ZipErrorKind {
   /// The entry payload does not match its stored CRC-32.
   ChecksumMismatch
   /// A caller-supplied resource limit was exceeded.
-  LimitExceeded(LimitKind, Int, Int)
+  LimitExceeded(LimitKind, Int32, Int32)
   /// The caller's cancellation callback returned `true` during a bounded read.
   Cancelled
 } derive(Eq, @debug.Debug)

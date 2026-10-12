@@ -3,11 +3,11 @@
 fn scalar_find_match_reference(
   data : Bytes,
   finder : MatchFinder,
-  position : Int,
-  end : Int,
-  base : Int,
+  position : Int32,
+  end : Int32,
+  base : Int32,
   cfg : LevelConfig,
-) -> Int {
+) -> Int32 {
   let limit = (end - position).min(258)
   let budget = if base >= cfg.good_length {
     cfg.max_chain >> 2
@@ -263,8 +263,8 @@ test "lazy parsers keep hash chains strictly backward across block boundaries" {
     for block_size in [4, input.length()] {
       let direct = MatchFinder()
       let streaming = MatchFinder()
-      let direct_tokens : Array[Int] = []
-      let streaming_tokens : Array[Int] = []
+      let direct_tokens : Array[Int32] = []
+      let streaming_tokens : Array[Int32] = []
       let direct_ll = FixedArray::make(MAX_NUM_LIT, 0)
       let direct_dist = FixedArray::make(MAX_NUM_DIST, 0)
       let streaming_ll = FixedArray::make(MAX_NUM_LIT, 0)
@@ -314,7 +314,7 @@ test "lazy parsers keep hash chains strictly backward across block boundaries" {
 }
 
 ///|
-fn match_len_fixture(mismatch? : Int) -> Bytes {
+fn match_len_fixture(mismatch? : Int32) -> Bytes {
   let data = Array::make(516, b'\x00')
   for i in 0..<258 {
     let byte = ((i * 37 + i / 7) & 0xFF).to_byte()
@@ -330,10 +330,10 @@ fn match_len_fixture(mismatch? : Int) -> Bytes {
 ///|
 fn scalar_match_len_up_to_reference(
   data : Bytes,
-  src : Int,
-  pos : Int,
-  limit : Int,
-) -> Int {
+  src : Int32,
+  pos : Int32,
+  limit : Int32,
+) -> Int32 {
   let mut k = 0
   while k < limit && data[src + k] == data[pos + k] {
     k = k + 1
@@ -343,18 +343,18 @@ fn scalar_match_len_up_to_reference(
 
 ///|
 priv struct MatchLenDifferentialRng {
-  mut state : UInt
+  mut state : UInt32
 }
 
 ///|
 fn MatchLenDifferentialRng::MatchLenDifferentialRng(
-  seed : UInt,
+  seed : UInt32,
 ) -> MatchLenDifferentialRng {
   { state: seed, }
 }
 
 ///|
-fn MatchLenDifferentialRng::next(self : MatchLenDifferentialRng) -> UInt {
+fn MatchLenDifferentialRng::next(self : MatchLenDifferentialRng) -> UInt32 {
   self.state = self.state * 1664525U + 1013904223U
   self.state
 }
@@ -362,19 +362,19 @@ fn MatchLenDifferentialRng::next(self : MatchLenDifferentialRng) -> UInt {
 ///|
 fn MatchLenDifferentialRng::below(
   self : MatchLenDifferentialRng,
-  maximum : Int,
-) -> Int {
+  maximum : Int32,
+) -> Int32 {
   (self.next() >> 1).reinterpret_as_int() % maximum
 }
 
 ///|
 fn assert_match_len_differential_case(
   rng : MatchLenDifferentialRng,
-  case_index : Int,
-  src : Int,
-  pos : Int,
-  limit : Int,
-  mismatch : Int,
+  case_index : Int32,
+  src : Int32,
+  pos : Int32,
+  limit : Int32,
+  mismatch : Int32,
 ) -> Unit {
   let bytes = Array::make(768, b'\x00')
   for i in 0..<bytes.length() {

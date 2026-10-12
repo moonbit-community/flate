@@ -1,5 +1,5 @@
 ///|
-const DEFLATE_BLOCK_SIZE : Int = 16384
+const DEFLATE_BLOCK_SIZE : Int32 = 16384
 
 // Streaming DEFLATE compressor (RFC 1951), the push-based counterpart to
 // `Inflater`. Unlike a one-shot `deflate_all`, it emits the stream as a
@@ -23,7 +23,7 @@ const DEFLATE_BLOCK_SIZE : Int = 16384
 
 ///|
 /// Clamp a compression level to 0-9.
-fn clamp_level(level : Int) -> Int {
+fn clamp_level(level : Int32) -> Int32 {
   level.clamp(min=0, max=9)
 }
 
@@ -32,25 +32,25 @@ fn clamp_level(level : Int) -> Int {
 /// machine. It emits the stream block-by-block as input arrives, and chooses fixed- or dynamic-Huffman per block.
 pub struct Deflater {
   priv pending : FixedArray[Byte] // mirrored 64 KiB input ring
-  priv mut parse_pos : Int // first un-emitted absolute byte position
-  priv mut pending_end : Int // one past the last accepted absolute position
-  priv mut hashed_through : Int // first historical position not yet chained
+  priv mut parse_pos : Int32 // first un-emitted absolute byte position
+  priv mut pending_end : Int32 // one past the last accepted absolute position
+  priv mut hashed_through : Int32 // first historical position not yet chained
   priv finder : MatchFinder // persistent 32 KiB hash-chain matchfinder
   priv w : BitWriter // persistent bit sink spanning all blocks
-  priv mut out_pos : Int // next `w.out` index to hand to the caller
+  priv mut out_pos : Int32 // next `w.out` index to hand to the caller
   priv mut emitted_final : Bool // the final block has been written into `w`
   priv mut done : Bool // the final block has been fully drained
   priv mut flush_done : Bool // the current buffered content has been sync-flushed
   priv mut flush_requested : Bool // sticky until the requested flush is emitted
   priv mut end_requested : Bool // sticky until reset; no later input is accepted
-  priv mut step_consumed : Int // input accepted by the latest successful step
-  priv mut step_produced : Int // output written by the latest successful step
+  priv mut step_consumed : Int32 // input accepted by the latest successful step
+  priv mut step_produced : Int32 // output written by the latest successful step
   priv fast_store : Bool
-  priv level : Int // compression level 0-9 (0 = stored only)
+  priv level : Int32 // compression level 0-9 (0 = stored only)
   priv cfg : LevelConfig // match-search tuning for `level`
-  priv tokens : Array[Int]
-  priv ll_freq : FixedArray[Int]
-  priv d_freq : FixedArray[Int]
+  priv tokens : Array[Int32]
+  priv ll_freq : FixedArray[Int32]
+  priv d_freq : FixedArray[Int32]
 }
 
 ///|
@@ -61,9 +61,9 @@ pub struct Deflater {
 /// samples each block and may skip compression; it is off by default and
 /// may increase output size, including when a dictionary could help.
 pub fn Deflater::Deflater(
-  level? : Int = 6,
+  level~ : Int32 = 6,
   dictionary? : BytesView,
-  fast_store? : Bool = false,
+  fast_store~ : Bool = false,
 ) -> Deflater {
   let lv = clamp_level(level)
   let deflater = {
@@ -146,14 +146,14 @@ pub fn Deflater::is_finished(self : Deflater) -> Bool {
 ///|
 /// Number of input bytes accepted by the latest `step` call. This is zero
 /// initially, after `reset`, and for the stable `Done` state.
-pub fn Deflater::last_consumed(self : Deflater) -> Int {
+pub fn Deflater::last_consumed(self : Deflater) -> Int32 {
   self.step_consumed
 }
 
 ///|
 /// Number of output bytes written by the latest `step` call. This is zero
 /// initially, after `reset`, and for the stable `Done` state.
-pub fn Deflater::last_produced(self : Deflater) -> Int {
+pub fn Deflater::last_produced(self : Deflater) -> Int32 {
   self.step_produced
 }
 
@@ -162,8 +162,8 @@ pub fn Deflater::last_produced(self : Deflater) -> Int {
 fn Deflater::finish_step(
   self : Deflater,
   status : Status,
-  consumed : Int,
-  produced : Int,
+  consumed : Int32,
+  produced : Int32,
 ) -> Status {
   self.step_consumed = consumed
   self.step_produced = produced
@@ -191,9 +191,9 @@ fn Deflater::latch_action(self : Deflater, action : DeflateAction) -> Unit {
 fn Deflater::drain_output(
   self : Deflater,
   output : MutArrayView[Byte],
-  write_pos : Int,
-  out_end : Int,
-) -> Int {
+  write_pos : Int32,
+  out_end : Int32,
+) -> Int32 {
   let mut write_pos = write_pos
   while self.out_pos < self.w.out.length() && write_pos < out_end {
     output.set(write_pos, self.w.out[self.out_pos])
@@ -210,11 +210,11 @@ fn Deflater::drain_output(
 fn Deflater::accept_input(
   self : Deflater,
   input : BytesView,
-  consumed : Int,
-  input_end : Int,
-  capacity : Int,
+  consumed : Int32,
+  input_end : Int32,
+  capacity : Int32,
   action : DeflateAction,
-) -> Int {
+) -> Int32 {
   let take = (input_end - consumed).min(capacity)
   self.push_pending(input[consumed:consumed + take])
   let consumed = consumed + take
@@ -254,7 +254,7 @@ pub fn Deflater::step(
   self : Deflater,
   input : BytesView,
   output : MutArrayView[Byte],
-  action? : DeflateAction = Continue,
+  action~ : DeflateAction = Continue,
 ) -> Status {
   self.step_consumed = 0
   self.step_produced = 0

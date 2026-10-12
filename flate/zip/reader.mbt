@@ -6,15 +6,15 @@
 ///|
 priv struct EntryMeta {
   name : String
-  name_len : Int
-  flags : Int
-  method_id : Int
-  crc : UInt
-  compressed_size : Int
-  uncompressed_size : Int
-  local_offset : Int
+  name_len : Int32
+  flags : Int32
+  method_id : Int32
+  crc : UInt32
+  compressed_size : Int32
+  uncompressed_size : Int32
+  local_offset : Int32
   central_record : BytesView
-  central_zip64_offset_position : Int?
+  central_zip64_offset_position : Int32?
   data_descriptor : Bool
 }
 
@@ -23,14 +23,14 @@ priv struct EntryMeta {
 /// payload plus its (optional) data descriptor.
 priv struct LocalRecord {
   compressed : BytesView
-  end : Int
+  end : Int32
 }
 
 ///|
 fn read_local_record(
   bytes : BytesView,
   meta : EntryMeta,
-  central_offset : Int,
+  central_offset : Int32,
 ) -> LocalRecord raise ZipError {
   guard meta.local_offset >= 0 && meta.local_offset < central_offset else {
     raise ZipError(Truncated, "zip: local header offset out of bounds")
@@ -110,10 +110,10 @@ fn read_local_record(
 
 ///|
 fn check_sizes(
-  uncompressed_size : Int,
-  entry_limit : Int,
-  total_limit : Int,
-  used_total : Int,
+  uncompressed_size : Int32,
+  entry_limit : Int32,
+  total_limit : Int32,
+  used_total : Int32,
 ) -> Unit raise ZipError {
   guard uncompressed_size <= entry_limit else {
     raise ZipError(
@@ -136,9 +136,9 @@ fn check_sizes(
 ///|
 fn inflate_entry(
   compressed : BytesView,
-  max_output : Int,
+  max_output : Int32,
   limit_kind : LimitKind,
-  reported_limit : Int,
+  reported_limit : Int32,
   cancelled : () -> Bool,
 ) -> Bytes raise ZipError {
   @flate.inflate_exact(compressed, max_output~, cancelled~, preallocated=true) catch {
@@ -156,12 +156,12 @@ fn inflate_entry(
 /// the classic EOCD position, the optional ZIP64 EOCD position, and the archive
 /// comment.
 priv struct EndOfCentral {
-  eocd_offset : Int
-  entry_count : Int
-  central_size : Int
-  central_offset : Int
-  central_boundary : Int
-  zip64_eocd_offset : Int?
+  eocd_offset : Int32
+  entry_count : Int32
+  central_size : Int32
+  central_offset : Int32
+  central_boundary : Int32
+  zip64_eocd_offset : Int32?
   comment : Bytes
 }
 
@@ -171,12 +171,12 @@ priv struct EndOfCentral {
 /// Returns (entry_count, central_size, central_offset, zip64_eocd_offset).
 fn zip64_central_bounds(
   bytes : BytesView,
-  eocd_offset : Int,
-  disk_entries : Int,
-  total_entries : Int,
-  central_size_raw : UInt,
-  central_offset_raw : UInt,
-) -> (Int, Int, Int, Int) raise ZipError {
+  eocd_offset : Int32,
+  disk_entries : Int32,
+  total_entries : Int32,
+  central_size_raw : UInt32,
+  central_offset_raw : UInt32,
+) -> (Int32, Int32, Int32, Int32) raise ZipError {
   let (zip_entries, zip_size, zip_offset, zip64_offset) = read_zip64_eocd(
     bytes, eocd_offset,
   )
@@ -230,12 +230,12 @@ fn zip64_central_bounds(
 fn validate_central_bounds(
   bytes : BytesView,
   limits : ReadLimits,
-  eocd_offset : Int,
-  entry_count : Int,
-  central_size : Int,
-  central_offset : Int,
-  central_boundary : Int,
-  zip64_eocd_offset : Int?,
+  eocd_offset : Int32,
+  entry_count : Int32,
+  central_size : Int32,
+  central_offset : Int32,
+  central_boundary : Int32,
+  zip64_eocd_offset : Int32?,
   comment : Bytes,
 ) -> EndOfCentral raise ZipError {
   guard entry_count <= limits.max_entries else {
@@ -345,8 +345,8 @@ fn parse_end_of_central(
 fn resolve_zip64_field(
   need : Bool,
   zip64_value : UInt64?,
-  classic_raw : UInt,
-) -> Int raise ZipError {
+  classic_raw : UInt32,
+) -> Int32 raise ZipError {
   guard need else { return classic_raw.to_int_checked() }
   zip64_value.unwrap().to_int_checked()
 }
@@ -482,9 +482,9 @@ fn build_trailer(bytes : BytesView, eocd : EndOfCentral) -> TrailerTemplate {
 fn decode_entry(
   bytes : BytesView,
   meta : EntryMeta,
-  central_offset : Int,
+  central_offset : Int32,
   limits : ReadLimits,
-  actual_total : Int,
+  actual_total : Int32,
   cancelled : () -> Bool,
 ) -> Entry raise ZipError {
   check_cancelled(cancelled)
@@ -616,8 +616,8 @@ fn read_impl(
 /// plus a diagnostic.
 pub fn read(
   bytes : BytesView,
-  limits? : ReadLimits = ReadLimits(),
-  cancelled? : () -> Bool = () => false,
+  limits~ : ReadLimits = ReadLimits(),
+  cancelled~ : () -> Bool = () => false,
 ) -> Archive raise ZipError {
   read_impl(bytes, limits, cancelled)
 }

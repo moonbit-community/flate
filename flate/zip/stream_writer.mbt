@@ -27,7 +27,7 @@ priv struct PendingEntry {
 /// the writer and is propagated unchanged; no further output can be emitted.
 pub struct Writer {
   priv sink : (BytesView) -> Unit raise
-  priv level : Int
+  priv level : Int32
   priv fast_store : Bool
   priv mut mode : WriterMode
   priv mut offset : UInt64
@@ -46,8 +46,8 @@ pub struct Writer {
 /// increase output size. ZIP entry methods are unchanged.
 pub fn Writer::Writer(
   sink : (BytesView) -> Unit raise,
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Writer {
   {
     sink,
@@ -144,7 +144,7 @@ fn stream_name(name : String) -> Bytes raise ZipError {
 fn stream_local_header(
   name : Bytes,
   compression : Compression,
-  crc : UInt,
+  crc : UInt32,
   size : UInt64,
   compressed_size : UInt64,
   zip64 : Bool,
@@ -179,7 +179,7 @@ fn stream_local_header(
 fn stream_central_record(
   name : Bytes,
   compression : Compression,
-  crc : UInt,
+  crc : UInt32,
   size : UInt64,
   compressed_size : UInt64,
   offset : UInt64,
@@ -237,7 +237,7 @@ pub fn Writer::add(
   self : Writer,
   name : String,
   data : BytesView,
-  compression? : Compression = Deflate,
+  compression~ : Compression = Deflate,
 ) -> Unit raise {
   self.require_ready()
   let name = stream_name(name)
@@ -279,7 +279,7 @@ pub fn Writer::add(
 pub fn Writer::begin_entry(
   self : Writer,
   name : String,
-  compression? : Compression = Deflate,
+  compression~ : Compression = Deflate,
   size? : UInt64,
 ) -> Unit raise {
   self.require_ready()
@@ -411,7 +411,7 @@ pub fn Writer::end_entry(self : Writer) -> Unit raise {
 ///|
 /// Write the central directory and close the ZIP. Further writes are rejected.
 /// The optional archive comment must fit the ZIP 16-bit comment length.
-pub fn Writer::finish(self : Writer, comment? : BytesView = b"") -> Unit raise {
+pub fn Writer::finish(self : Writer, comment~ : BytesView = b"") -> Unit raise {
   self.require_ready()
   guard comment.length() <= 0xffff else {
     raise ZipError(UnsupportedFeature, "zip: archive comment too long")

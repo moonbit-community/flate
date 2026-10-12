@@ -30,7 +30,7 @@ test "direct stored blocks preserve boundaries and handle partial output" {
 }
 
 ///|
-fn direct_bytes(buffer : FixedArray[Byte], length : Int) -> Bytes {
+fn direct_bytes(buffer : FixedArray[Byte], length : Int32) -> Bytes {
   Bytes::from_array(buffer[:length])
 }
 

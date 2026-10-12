@@ -1,38 +1,38 @@
 ///|
-const LOCAL_HEADER_SIG : UInt = 0x04034b50
+const LOCAL_HEADER_SIG : UInt32 = 0x04034b50
 
 ///|
-const CENTRAL_HEADER_SIG : UInt = 0x02014b50
+const CENTRAL_HEADER_SIG : UInt32 = 0x02014b50
 
 ///|
-const END_OF_CENTRAL_SIG : UInt = 0x06054b50
+const END_OF_CENTRAL_SIG : UInt32 = 0x06054b50
 
 ///|
-const DATA_DESCRIPTOR_SIG : UInt = 0x08074b50
+const DATA_DESCRIPTOR_SIG : UInt32 = 0x08074b50
 
 ///|
-const ZIP64_EOCD_SIG : UInt = 0x06064b50
+const ZIP64_EOCD_SIG : UInt32 = 0x06064b50
 
 ///|
-const ZIP64_LOCATOR_SIG : UInt = 0x07064b50
+const ZIP64_LOCATOR_SIG : UInt32 = 0x07064b50
 
 ///|
-const FLAG_DATA_DESCRIPTOR : Int = 0x0008
+const FLAG_DATA_DESCRIPTOR : Int32 = 0x0008
 
 ///|
-const FLAG_UTF8 : Int = 0x0800
+const FLAG_UTF8 : Int32 = 0x0800
 
 ///|
-const FLAG_ENCRYPTED : Int = 0x0001
+const FLAG_ENCRYPTED : Int32 = 0x0001
 
 ///|
-const FLAG_DEFLATE_STRENGTH : Int = 0x0006
+const FLAG_DEFLATE_STRENGTH : Int32 = 0x0006
 
 ///|
-const ZIP64_EXTRA_ID : Int = 0x0001
+const ZIP64_EXTRA_ID : Int32 = 0x0001
 
 ///|
-const MAX_U32 : UInt = 0xFFFFFFFF
+const MAX_U32 : UInt32 = 0xFFFFFFFF
 
 ///|
 /// Byte-level primitives and shared ZIP format constants: the little-endian
@@ -42,16 +42,16 @@ const MAX_U32 : UInt = 0xFFFFFFFF
 ///|
 priv struct Cursor {
   bytes : BytesView
-  mut pos : Int
+  mut pos : Int32
 }
 
 ///|
-fn Cursor::Cursor(bytes : BytesView, pos : Int) -> Cursor {
+fn Cursor::Cursor(bytes : BytesView, pos : Int32) -> Cursor {
   { bytes, pos, }
 }
 
 ///|
-fn Cursor::read_u8(self : Cursor) -> Int raise ZipError {
+fn Cursor::read_u8(self : Cursor) -> Int32 raise ZipError {
   if self.pos < 0 || self.pos >= self.bytes.length() {
     raise ZipError(Truncated, "zip: truncated header")
   }
@@ -61,14 +61,14 @@ fn Cursor::read_u8(self : Cursor) -> Int raise ZipError {
 }
 
 ///|
-fn Cursor::read_u16(self : Cursor) -> Int raise ZipError {
+fn Cursor::read_u16(self : Cursor) -> Int32 raise ZipError {
   let b0 = self.read_u8()
   let b1 = self.read_u8()
   b0 | (b1 << 8)
 }
 
 ///|
-fn Cursor::read_u32_raw(self : Cursor) -> UInt raise ZipError {
+fn Cursor::read_u32_raw(self : Cursor) -> UInt32 raise ZipError {
   let b0 = self.read_u8()
   let b1 = self.read_u8()
   let b2 = self.read_u8()
@@ -87,7 +87,7 @@ fn Cursor::read_u64_raw(self : Cursor) -> UInt64 raise ZipError {
 }
 
 ///|
-fn Cursor::read_bytes(self : Cursor, len : Int) -> BytesView raise ZipError {
+fn Cursor::read_bytes(self : Cursor, len : Int32) -> BytesView raise ZipError {
   if len < 0 || self.pos < 0 || len > self.bytes.length() - self.pos {
     raise ZipError(Truncated, "zip: truncated field")
   }
@@ -97,12 +97,12 @@ fn Cursor::read_bytes(self : Cursor, len : Int) -> BytesView raise ZipError {
 }
 
 ///|
-fn Cursor::skip(self : Cursor, len : Int) -> Unit raise ZipError {
+fn Cursor::skip(self : Cursor, len : Int32) -> Unit raise ZipError {
   ignore(self.read_bytes(len))
 }
 
 ///|
-fn read_u16_le_at(bytes : BytesView, offset : Int) -> Int raise ZipError {
+fn read_u16_le_at(bytes : BytesView, offset : Int32) -> Int32 raise ZipError {
   if offset < 0 || 2 > bytes.length() - offset {
     raise ZipError(Truncated, "zip: truncated field")
   }
@@ -112,7 +112,10 @@ fn read_u16_le_at(bytes : BytesView, offset : Int) -> Int raise ZipError {
 }
 
 ///|
-fn read_u32_le_at_raw(bytes : BytesView, offset : Int) -> UInt raise ZipError {
+fn read_u32_le_at_raw(
+  bytes : BytesView,
+  offset : Int32,
+) -> UInt32 raise ZipError {
   if offset < 0 || 4 > bytes.length() - offset {
     raise ZipError(Truncated, "zip: truncated field")
   }
@@ -123,7 +126,7 @@ fn read_u32_le_at_raw(bytes : BytesView, offset : Int) -> UInt raise ZipError {
 }
 
 ///|
-fn read_u64_le_at(bytes : BytesView, offset : Int) -> UInt64 raise ZipError {
+fn read_u64_le_at(bytes : BytesView, offset : Int32) -> UInt64 raise ZipError {
   if offset < 0 || 8 > bytes.length() - offset {
     raise ZipError(Truncated, "zip: truncated field")
   }
@@ -139,7 +142,7 @@ fn read_u64_le_at(bytes : BytesView, offset : Int) -> UInt64 raise ZipError {
 /// Locate the end-of-central-directory record by scanning the conventional
 /// last (65535 + 22) bytes for the signature whose comment length reaches the
 /// end of the input. Returns its offset, or `None`.
-fn find_end_of_central(bytes : BytesView) -> Int? raise ZipError {
+fn find_end_of_central(bytes : BytesView) -> Int32? raise ZipError {
   let len = bytes.length()
   if len < 22 {
     return None
@@ -164,7 +167,7 @@ fn decode_name(bytes : BytesView) -> String raise ZipError {
 }
 
 ///|
-fn ensure_flags_supported(flags : Int) -> Unit raise ZipError {
+fn ensure_flags_supported(flags : Int32) -> Unit raise ZipError {
   if (flags & FLAG_ENCRYPTED) != 0 {
     raise ZipError(
       UnsupportedFeature,
@@ -182,7 +185,7 @@ fn ensure_flags_supported(flags : Int) -> Unit raise ZipError {
 }
 
 ///|
-fn method_from_code(method_id : Int) -> Compression raise ZipError {
+fn method_from_code(method_id : Int32) -> Compression raise ZipError {
   match method_id {
     0 => Store
     8 => Deflate

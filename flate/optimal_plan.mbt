@@ -1,5 +1,5 @@
 ///|
-const OPTIMAL_MASTER_BLOCK : Int = 262144
+const OPTIMAL_MASTER_BLOCK : Int32 = 262144
 
 // Optimal block planning (zopfli-style block splitting). A greedy/lazy
 // parse of each master chunk provides reference tokens; split points are
@@ -12,7 +12,7 @@ const OPTIMAL_MASTER_BLOCK : Int = 262144
 
 ///|
 /// Most blocks the splitter may cut one master chunk into (zopfli's default).
-const OPTIMAL_MAX_BLOCKS : Int = 15
+const OPTIMAL_MAX_BLOCKS : Int32 = 15
 
 ///|
 /// Estimated cost in bits of one block: the cheapest of
@@ -20,10 +20,10 @@ const OPTIMAL_MAX_BLOCKS : Int = 15
 /// split candidates and squeeze iterations. Delegates the accounting to the
 /// shared dynamic-length builder and `estimate_block_cost`.
 fn block_cost_bits(
-  byte_len : Int,
-  ll_freq_in : FixedArray[Int],
-  d_freq : FixedArray[Int],
-) -> Int {
+  byte_len : Int32,
+  ll_freq_in : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+) -> Int32 {
   let ll_freq = FixedArray::make(286, 0)
   ll_freq_in.blit_to(ll_freq, len=286)
   ll_freq[256] += 1
@@ -35,11 +35,11 @@ fn block_cost_bits(
 ///|
 /// Symbol frequencies of `tokens[lo:hi)`.
 fn range_freqs(
-  tokens : Array[Int],
-  lo : Int,
-  hi : Int,
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
+  tokens : Array[Int32],
+  lo : Int32,
+  hi : Int32,
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
 ) -> Unit {
   ll_freq.fill(0, end=286)
   d_freq.fill(0, end=30)
@@ -59,27 +59,27 @@ fn range_freqs(
 ///|
 /// Estimated block cost of `tokens[lo:hi)` covering `byte_len` input bytes.
 fn split_range_cost(
-  tokens : Array[Int],
-  lo : Int,
-  hi : Int,
-  byte_len : Int,
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
-) -> Int {
+  tokens : Array[Int32],
+  lo : Int32,
+  hi : Int32,
+  byte_len : Int32,
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+) -> Int32 {
   range_freqs(tokens, lo, hi, ll_freq, d_freq)
   block_cost_bits(byte_len, ll_freq, d_freq)
 }
 
 ///|
 fn split_candidate_cost(
-  tokens : Array[Int],
-  tok_pos : FixedArray[Int],
-  lo : Int,
-  hi : Int,
-  k : Int,
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
-) -> Int {
+  tokens : Array[Int32],
+  tok_pos : FixedArray[Int32],
+  lo : Int32,
+  hi : Int32,
+  k : Int32,
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+) -> Int32 {
   split_range_cost(tokens, lo, k, tok_pos[k] - tok_pos[lo], ll_freq, d_freq) +
   split_range_cost(tokens, k, hi, tok_pos[hi] - tok_pos[k], ll_freq, d_freq)
 }
@@ -92,13 +92,13 @@ fn split_candidate_cost(
 /// index -1 means the interval admits no interior point. The caller reuses the
 /// pair so each candidate search does not allocate a return tuple.
 fn find_best_split(
-  tokens : Array[Int],
-  tok_pos : FixedArray[Int],
-  lo : Int,
-  hi : Int,
-  result : FixedArray[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
+  tokens : Array[Int32],
+  tok_pos : FixedArray[Int32],
+  lo : Int32,
+  hi : Int32,
+  result : FixedArray[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
 ) -> Unit {
   let sample = 9
   let mut plo = lo + 1
@@ -144,10 +144,10 @@ fn find_best_split(
 /// the estimated total cost, up to `OPTIMAL_MAX_BLOCKS` blocks. `tok_pos[k]` is
 /// the byte offset where token k starts (with `tok_pos[m]` = chunk end).
 fn plan_split_points(
-  tokens : Array[Int],
-  tok_pos : FixedArray[Int],
-) -> Array[Int] {
-  let bounds : Array[Int] = [0, tokens.length()]
+  tokens : Array[Int32],
+  tok_pos : FixedArray[Int32],
+) -> Array[Int32] {
+  let bounds : Array[Int32] = [0, tokens.length()]
   let split_result = FixedArray::make(2, 0)
   let ll_freq = FixedArray::make(286, 0)
   let d_freq = FixedArray::make(30, 0)
@@ -189,10 +189,10 @@ fn plan_split_points(
 ///|
 /// Total estimated cost of a grouping (consecutive bounds over `tokens`).
 fn grouping_cost(
-  tokens : Array[Int],
-  tok_pos : FixedArray[Int],
-  bounds : Array[Int],
-) -> Int {
+  tokens : Array[Int32],
+  tok_pos : FixedArray[Int32],
+  bounds : Array[Int32],
+) -> Int32 {
   let mut total = 0
   let ll_freq = FixedArray::make(286, 0)
   let d_freq = FixedArray::make(30, 0)
@@ -216,10 +216,10 @@ fn grouping_cost(
 /// Byte offset where each token starts, with `positions[tokens.length()]`
 /// pinned to `end`. A literal advances one byte; a match advances its length.
 fn token_positions(
-  tokens : Array[Int],
-  start : Int,
-  end : Int,
-) -> FixedArray[Int] {
+  tokens : Array[Int32],
+  start : Int32,
+  end : Int32,
+) -> FixedArray[Int32] {
   let positions = FixedArray::make(tokens.length() + 1, 0)
   let mut p = start
   for k in 0..<tokens.length() {
@@ -238,20 +238,20 @@ fn token_positions(
 /// token indices. `chunk_end` may overhang `target` when a boundary match
 /// straddled it.
 priv struct OptimalChunk {
-  tokens : Array[Int]
-  joins : Array[Int]
-  chunk_end : Int
+  tokens : Array[Int32]
+  joins : Array[Int32]
+  chunk_end : Int32
 }
 
 ///|
 fn optimal_parse_chunk(
   input : BytesView,
   finder : MatchFinder,
-  pos : Int,
-  target : Int,
-  iterations : Int,
+  pos : Int32,
+  target : Int32,
+  iterations : Int32,
 ) -> OptimalChunk {
-  let gtoks : Array[Int] = []
+  let gtoks : Array[Int32] = []
   let greedy_ll_freq = FixedArray::make(286, 0)
   let greedy_d_freq = FixedArray::make(30, 0)
   let processed = tokenize(
@@ -267,8 +267,8 @@ fn optimal_parse_chunk(
   let chunk_end = processed // a boundary match may overhang `target`
   let gtok_pos = token_positions(gtoks, pos, chunk_end)
   let bounds1 = plan_split_points(gtoks, gtok_pos)
-  let tokens : Array[Int] = []
-  let joins : Array[Int] = [0] // phase-1 boundaries, as optimal-token indices
+  let tokens : Array[Int32] = []
+  let joins : Array[Int32] = [0] // phase-1 boundaries, as optimal-token indices
   for s in 0..<(bounds1.length() - 1) {
     let a = gtok_pos[bounds1[s]]
     let b = gtok_pos[bounds1[s + 1]]
@@ -287,8 +287,8 @@ fn emit_optimal_chunk(
   w : BitWriter,
   input : BytesView,
   chunk : OptimalChunk,
-  pos : Int,
-  n : Int,
+  pos : Int32,
+  n : Int32,
 ) -> Unit {
   let all = chunk.tokens
   let all_pos = token_positions(all, pos, chunk.chunk_end)
@@ -326,8 +326,8 @@ fn emit_optimal_chunk(
 /// for heuristically incompressible input, trading output size for speed.
 pub fn deflate_all_optimal(
   input : BytesView,
-  iterations? : Int = 15,
-  fast_store? : Bool = false,
+  iterations~ : Int32 = 15,
+  fast_store~ : Bool = false,
 ) -> Bytes {
   guard !fast_store || !should_fast_store(input) else {
     return deflate_all(input, level=0)

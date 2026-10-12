@@ -6,7 +6,7 @@ pub(all) enum Compression {
 } derive(Eq, @debug.Debug)
 
 ///|
-fn Compression::code(compression : Compression) -> Int {
+fn Compression::code(compression : Compression) -> Int32 {
   match compression {
     Store => 0
     Deflate => 8
@@ -20,11 +20,11 @@ fn Compression::code(compression : Compression) -> Int {
 /// retained for byte-preserving rewrites, including prefixes and gaps.
 #valtype
 pub struct ReadLimits {
-  max_package_bytes : Int
-  max_entries : Int
-  max_entry_uncompressed_bytes : Int
-  max_total_uncompressed_bytes : Int
-  max_preserved_source_bytes : Int
+  max_package_bytes : Int32
+  max_entries : Int32
+  max_entry_uncompressed_bytes : Int32
+  max_total_uncompressed_bytes : Int32
+  max_preserved_source_bytes : Int32
 }
 
 ///|
@@ -32,11 +32,11 @@ pub struct ReadLimits {
 /// Each supplied ceiling must be non-negative; `read` rejects an exceeded
 /// ceiling before accepting the corresponding resource.
 pub fn ReadLimits::ReadLimits(
-  max_package_bytes? : Int = 0x7fff_ffff,
-  max_entries? : Int = 0x7fff_ffff,
-  max_entry_uncompressed_bytes? : Int = 0x7fff_ffff,
-  max_total_uncompressed_bytes? : Int = 0x7fff_ffff,
-  max_preserved_source_bytes? : Int = 0x7fff_ffff,
+  max_package_bytes~ : Int32 = 0x7fff_ffff,
+  max_entries~ : Int32 = 0x7fff_ffff,
+  max_entry_uncompressed_bytes~ : Int32 = 0x7fff_ffff,
+  max_total_uncompressed_bytes~ : Int32 = 0x7fff_ffff,
+  max_preserved_source_bytes~ : Int32 = 0x7fff_ffff,
 ) -> ReadLimits {
   {
     max_package_bytes,
@@ -53,7 +53,7 @@ pub fn ReadLimits::ReadLimits(
 priv struct SourceRecord {
   local_record : BytesView
   central_record : BytesView
-  central_zip64_offset_position : Int?
+  central_zip64_offset_position : Int32?
 }
 
 ///|
@@ -64,11 +64,11 @@ pub struct Entry {
   priv name : String
   priv data : Bytes
   priv compression : Compression
-  priv crc32 : UInt
+  priv crc32 : UInt32
   priv data_descriptor : Bool
-  priv compressed_size : Int
+  priv compressed_size : Int32
   priv source : SourceRecord?
-  priv origin_local_offset : Int?
+  priv origin_local_offset : Int32?
 }
 
 ///|
@@ -92,7 +92,7 @@ pub fn Entry::compression(self : Entry) -> Compression {
 ///|
 /// The entry's stored CRC-32: the central-directory value for entries read from
 /// an archive, or computed at `add` time for entries created in memory.
-pub fn Entry::crc32(self : Entry) -> UInt {
+pub fn Entry::crc32(self : Entry) -> UInt32 {
   self.crc32
 }
 
@@ -137,8 +137,8 @@ pub fn Archive::add(
   self : Archive,
   name : String,
   data : BytesView,
-  compression? : Compression = Deflate,
-  data_descriptor? : Bool = false,
+  compression~ : Compression = Deflate,
+  data_descriptor~ : Bool = false,
 ) -> Unit {
   let data = data.to_owned()
   self.original = None

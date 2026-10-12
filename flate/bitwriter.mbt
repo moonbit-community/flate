@@ -4,11 +4,11 @@
 ///|
 priv struct BitWriter {
   out : Array[Byte]
-  mut bitbuf : Int
-  mut bit_count : Int // bits currently held in `bitbuf`, not yet flushed to a byte
+  mut bitbuf : Int32
+  mut bit_count : Int32 // bits currently held in `bitbuf`, not yet flushed to a byte
   mut direct_output : FixedArray[Byte]?
   growable : Bool
-  mut direct_pos : Int
+  mut direct_pos : Int32
   mut overflowed : Bool
 }
 
@@ -50,7 +50,7 @@ fn BitWriter::growing(output : FixedArray[Byte]) -> BitWriter {
 ///|
 /// Keep capacity arithmetic separate so Int-boundary growth can be checked
 /// without allocating gigabyte-sized buffers.
-fn bitwriter_growth_capacity(current : Int, required : Int) -> Int {
+fn bitwriter_growth_capacity(current : Int32, required : Int32) -> Int32 {
   let doubled = if current <= 0x3fff_ffff { current * 2 } else { required }
   required.max(doubled).max(64)
 }
@@ -59,7 +59,7 @@ fn bitwriter_growth_capacity(current : Int, required : Int) -> Int {
 fn BitWriter::grow(
   self : BitWriter,
   output : FixedArray[Byte],
-  required : Int,
+  required : Int32,
 ) -> FixedArray[Byte] {
   let grown = FixedArray::make_and_blit(
     output,
@@ -98,8 +98,8 @@ fn BitWriter::write_byte(self : BitWriter, byte : Byte) -> Unit {
 fn BitWriter::write_bytes(
   self : BitWriter,
   input : BytesView,
-  offset : Int,
-  length : Int,
+  offset : Int32,
+  length : Int32,
 ) -> Unit {
   if self.direct_output is Some(output) {
     let output = if self.growable && length > output.length() - self.direct_pos {
@@ -126,7 +126,7 @@ fn BitWriter::write_bytes(
 }
 
 ///|
-fn BitWriter::write_bit(self : BitWriter, bit : Int) -> Unit {
+fn BitWriter::write_bit(self : BitWriter, bit : Int32) -> Unit {
   self.bitbuf = self.bitbuf | (bit << self.bit_count)
   self.bit_count = self.bit_count + 1
   if self.bit_count == 8 {
@@ -140,7 +140,7 @@ fn BitWriter::write_bit(self : BitWriter, bit : Int) -> Unit {
 /// Write the low `n` bits of `value`, LSB-first. Batched: the bits are shifted
 /// into the accumulator in one step and complete bytes flushed whole, instead
 /// of looping one bit at a time.
-fn BitWriter::write_bits(self : BitWriter, value : Int, n : Int) -> Unit {
+fn BitWriter::write_bits(self : BitWriter, value : Int32, n : Int32) -> Unit {
   self.bitbuf = self.bitbuf | ((value & ((1 << n) - 1)) << self.bit_count)
   self.bit_count = self.bit_count + n
   while self.bit_count >= 8 {
@@ -152,7 +152,7 @@ fn BitWriter::write_bits(self : BitWriter, value : Int, n : Int) -> Unit {
 
 ///|
 /// Write an already-bit-reversed Huffman code, LSB-first.
-fn BitWriter::write_rcode(self : BitWriter, code : UInt, n : Int) -> Unit {
+fn BitWriter::write_rcode(self : BitWriter, code : UInt32, n : Int32) -> Unit {
   self.write_bits(code.reinterpret_as_int(), n)
 }
 

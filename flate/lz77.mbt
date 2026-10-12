@@ -1,5 +1,5 @@
 ///|
-const HASH_BITS : Int = 15
+const HASH_BITS : Int32 = 15
 
 // LZ77 parsing stage of the encode pipeline: bytes in, tokens (literals and
 // length/distance matches) plus symbol frequencies out. In modern terms,
@@ -12,19 +12,19 @@ const HASH_BITS : Int = 15
 // the same (tokens, frequencies) shape can replace `tokenize` wholesale.
 
 ///|
-const WINDOW_MASK : Int = WINDOW_SIZE - 1
+const WINDOW_MASK : Int32 = WINDOW_SIZE - 1
 
 ///|
 // The streaming input ring holds the 32 KiB match window plus one accepted
 // block and its lookahead. It is mirrored so a 16-byte SIMD load at its end
 // can continue into the duplicate half without a wrap branch.
-const STREAM_RING_SIZE : Int = 65536
+const STREAM_RING_SIZE : Int32 = 65536
 
 ///|
-const STREAM_RING_MASK : Int = STREAM_RING_SIZE - 1
+const STREAM_RING_MASK : Int32 = STREAM_RING_SIZE - 1
 
 ///|
-const STREAM_RING_STORAGE_SIZE : Int = STREAM_RING_SIZE * 2
+const STREAM_RING_STORAGE_SIZE : Int32 = STREAM_RING_SIZE * 2
 
 ///|
 /// Per-level baseline search tuning, adopted from zlib's configuration table.
@@ -34,10 +34,10 @@ const STREAM_RING_STORAGE_SIZE : Int = STREAM_RING_SIZE * 2
 /// planner and never searches.
 #valtype
 priv struct LevelConfig {
-  good_length : Int // shrink the chain budget once a match this long is held
-  max_lazy : Int // 0 = greedy (commit immediately); else defer while best < this
-  nice_length : Int // stop searching outright at this match length
-  max_chain : Int // candidate positions examined per search
+  good_length : Int32 // shrink the chain budget once a match this long is held
+  max_lazy : Int32 // 0 = greedy (commit immediately); else defer while best < this
+  nice_length : Int32 // stop searching outright at this match length
+  max_chain : Int32 // candidate positions examined per search
 } derive(Eq)
 
 ///|
@@ -55,7 +55,7 @@ let level_configs : FixedArray[LevelConfig] = [
 ]
 
 ///|
-fn hash3(data : BytesView, i : Int) -> Int {
+fn hash3(data : BytesView, i : Int32) -> Int32 {
   let a = data[i].to_int()
   let b = data[i + 1].to_int()
   let c = data[i + 2].to_int()
@@ -63,7 +63,11 @@ fn hash3(data : BytesView, i : Int) -> Int {
 }
 
 ///|
-fn hash3_window(data : FixedArray[Byte], i : Int, shift? : Int = 9) -> Int {
+fn hash3_window(
+  data : FixedArray[Byte],
+  i : Int32,
+  shift~ : Int32 = 9,
+) -> Int32 {
   let offset = i & STREAM_RING_MASK
   let triple = (data[offset].to_int() |
   (data[offset + 1].to_int() << 8) |
@@ -75,12 +79,12 @@ fn hash3_window(data : FixedArray[Byte], i : Int, shift? : Int = 9) -> Int {
 // The fourth input byte contributes only above bit 23 of the wrapping
 // product. Its lower 24 bits therefore hash the three-byte prefix too.
 #inline
-fn short_hash_product(product : UInt, shift? : Int = 9) -> Int {
+fn short_hash_product(product : UInt32, shift~ : Int32 = 9) -> Int32 {
   ((product & 0xFFFFFF) >> shift).reinterpret_as_int()
 }
 
 ///|
-fn short_hash3(data : BytesView, position : Int, shift? : Int = 9) -> Int {
+fn short_hash3(data : BytesView, position : Int32, shift~ : Int32 = 9) -> Int32 {
   let triple = (data[position].to_int() |
   (data[position + 1].to_int() << 8) |
   (data[position + 2].to_int() << 16)).reinterpret_as_uint()
@@ -91,13 +95,13 @@ fn short_hash3(data : BytesView, position : Int, shift? : Int = 9) -> Int {
 // Wider tables are useful for high-entropy input, where a narrow table turns
 // most probes into collision walks. Keep ordinary data at 16 bits and reserve
 // the larger tables for whole-buffer inputs selected by a cheap sample.
-const NARROW_LONG_HASH_BITS : Int = 16
+const NARROW_LONG_HASH_BITS : Int32 = 16
 
 ///|
-const MID_LONG_HASH_BITS : Int = 17
+const MID_LONG_HASH_BITS : Int32 = 17
 
 ///|
-const LONG_HASH_BITS : Int = 18
+const LONG_HASH_BITS : Int32 = 18
 
 ///|
 /// Decide whether a complete input benefits from the wide long-match table.
@@ -105,7 +109,7 @@ const LONG_HASH_BITS : Int = 18
 /// its prefix alone. The threshold keeps structured/textual inputs on the
 /// cache-friendly narrow table while selecting the wide table for binary and
 /// high-diversity source data.
-fn long_hash_bits_for_input(data : BytesView) -> Int {
+fn long_hash_bits_for_input(data : BytesView) -> Int32 {
   let n = data.length()
   guard n >= 32768 else { return NARROW_LONG_HASH_BITS }
   let sample = n.min(1024)
@@ -152,13 +156,13 @@ fn long_hash_bits_for_input(data : BytesView) -> Int {
 
 ///|
 #inline
-fn long_hash_product(product : UInt, shift? : Int = 16) -> Int {
+fn long_hash_product(product : UInt32, shift~ : Int32 = 16) -> Int32 {
   (product >> shift).reinterpret_as_int()
 }
 
 ///|
 #inline
-fn read_match_word(data : BytesView, position : Int) -> UInt {
+fn read_match_word(data : BytesView, position : Int32) -> UInt32 {
   // SAFETY: insertion proves four bytes remain. Search clamps probe below
   // limit <= n - i and only visits earlier candidates, so prefix and suffix
   // words both stay inside the input, including its final four-byte tail.
@@ -168,7 +172,7 @@ fn read_match_word(data : BytesView, position : Int) -> UInt {
 ///|
 #cfg(not(any(target="native", target="wasm")))
 #inline
-fn read_window_match_word(data : FixedArray[Byte], position : Int) -> UInt {
+fn read_window_match_word(data : FixedArray[Byte], position : Int32) -> UInt32 {
   let offset = position & STREAM_RING_MASK
   (data[offset].to_int() |
   (data[offset + 1].to_int() << 8) |
@@ -185,7 +189,7 @@ fn match_window_as_bytes(data : FixedArray[Byte]) -> Bytes = "%identity"
 ///|
 #cfg(any(target="native", target="wasm"))
 #inline
-fn read_window_match_word(data : FixedArray[Byte], position : Int) -> UInt {
+fn read_window_match_word(data : FixedArray[Byte], position : Int32) -> UInt32 {
   // SAFETY: masking selects the first half of the mirrored ring, leaving
   // at least four bytes of storage even when the read crosses the wrap.
   match_window_as_bytes(data).unsafe_read_uint32_le(position & STREAM_RING_MASK)
@@ -198,20 +202,20 @@ fn read_window_match_word(data : FixedArray[Byte], position : Int) -> UInt {
 // The predecessor ring stores saturated 16-bit backward distances across the
 // full 32 KiB window. Distances survive stream rebasing without adjustment.
 priv struct MatchFinder {
-  mut min_match_length : Int
-  mut position_base : Int
-  mut next_base : Int
-  mut short_shift : Int
-  mut long_shift : Int
-  mut short_head : FixedArray[Int]
-  mut head : FixedArray[Int]
+  mut min_match_length : Int32
+  mut position_base : Int32
+  mut next_base : Int32
+  mut short_shift : Int32
+  mut long_shift : Int32
+  mut short_head : FixedArray[Int32]
+  mut head : FixedArray[Int32]
   prev : FixedArray[Byte]
 }
 
 ///|
 fn MatchFinder::MatchFinder(
-  input_size? : Int = WINDOW_SIZE,
-  long_hash_bits? : Int = NARROW_LONG_HASH_BITS,
+  input_size~ : Int32 = WINDOW_SIZE,
+  long_hash_bits~ : Int32 = NARROW_LONG_HASH_BITS,
 ) -> MatchFinder {
   let short_size = match_table_capacity(
     input_size.min(16384) * 2,
@@ -231,7 +235,7 @@ fn MatchFinder::MatchFinder(
 }
 
 ///|
-fn match_table_capacity(requested : Int, maximum : Int) -> Int {
+fn match_table_capacity(requested : Int32, maximum : Int32) -> Int32 {
   for capacity = 256 {
     guard capacity < requested && capacity < maximum else { break capacity }
     continue capacity * 2
@@ -241,7 +245,10 @@ fn match_table_capacity(requested : Int, maximum : Int) -> Int {
 ///|
 // Keep compact tables for small inputs; sampled inputs use the selected width
 // in full. Construction and reset must use the same logical capacity.
-fn long_match_table_capacity(input_size : Int, long_hash_bits : Int) -> Int {
+fn long_match_table_capacity(
+  input_size : Int32,
+  long_hash_bits : Int32,
+) -> Int32 {
   guard input_size < 32768 else { return 1 << long_hash_bits }
   match_table_capacity(input_size.min(16384) * 4, 1 << long_hash_bits)
 }
@@ -252,8 +259,8 @@ fn long_match_table_capacity(input_size : Int, long_hash_bits : Int) -> Int {
 // candidates; allocations grow only when a larger input first needs them.
 fn MatchFinder::size_for_input(
   self : MatchFinder,
-  input_size : Int,
-  long_hash_bits : Int,
+  input_size : Int32,
+  long_hash_bits : Int32,
 ) -> Unit {
   let short_size = match_table_capacity(
     input_size.min(16384) * 2,
@@ -284,7 +291,7 @@ fn MatchFinder::reset(self : MatchFinder) -> Unit {
 // A streaming encoder knows the previous stream's accepted span at reset.
 // Keep a half-GiB base ceiling: the encoder rebases its relative positions
 // after one GiB, leaving ample Int headroom for a pending ring and lookahead.
-fn MatchFinder::reset_stream(self : MatchFinder, previous_size : Int) -> Unit {
+fn MatchFinder::reset_stream(self : MatchFinder, previous_size : Int32) -> Unit {
   self.min_match_length = 0
   let next = self.position_base + previous_size
   guard next < 1 << 29 else {
@@ -303,7 +310,7 @@ fn MatchFinder::reset_stream(self : MatchFinder, previous_size : Int) -> Unit {
 fn MatchFinder::reset_for_input(
   self : MatchFinder,
   input : BytesView,
-  long_hash_bits? : Int = -1,
+  long_hash_bits~ : Int32 = -1,
 ) -> Unit {
   self.min_match_length = 0
   let bits = if long_hash_bits >= 0 {
@@ -322,7 +329,7 @@ fn MatchFinder::reset_for_input(
 }
 
 ///|
-fn MatchFinder::rebase(self : MatchFinder, offset : Int) -> Unit {
+fn MatchFinder::rebase(self : MatchFinder, offset : Int32) -> Unit {
   for table in [self.short_head, self.head] {
     for i in 0..<table.length() {
       if table[i] >= 0 {
@@ -341,7 +348,12 @@ fn bytes_as_fixedarray(data : Bytes) -> FixedArray[Byte] = "%identity"
 
 ///|
 #cfg(any(target="native", target="wasm"))
-fn match_len_up_to(data : BytesView, src : Int, pos : Int, limit : Int) -> Int {
+fn match_len_up_to(
+  data : BytesView,
+  src : Int32,
+  pos : Int32,
+  limit : Int32,
+) -> Int32 {
   // Every wide-loop iteration proves both offsets have 16 available bytes.
   // Hoist the zero-copy representation bridge and call v128_load directly;
   // an otherwise tiny wrapper survives native optimization as two calls per
@@ -371,10 +383,10 @@ fn match_len_up_to(data : BytesView, src : Int, pos : Int, limit : Int) -> Int {
 #cfg(any(target="native", target="wasm"))
 fn match_len_in_window(
   data : FixedArray[Byte],
-  src : Int,
-  pos : Int,
-  limit : Int,
-) -> Int {
+  src : Int32,
+  pos : Int32,
+  limit : Int32,
+) -> Int32 {
   let src = src & STREAM_RING_MASK
   let pos = pos & STREAM_RING_MASK
   let mut k = 0
@@ -402,7 +414,12 @@ fn match_len_in_window(
 /// real SIMD lowering; the native and linear-wasm implementation above remains
 /// the semantic reference.
 #cfg(not(any(target="native", target="wasm")))
-fn match_len_up_to(data : BytesView, src : Int, pos : Int, limit : Int) -> Int {
+fn match_len_up_to(
+  data : BytesView,
+  src : Int32,
+  pos : Int32,
+  limit : Int32,
+) -> Int32 {
   let mut k = 0
   while k < limit && data[src + k] == data[pos + k] {
     k = k + 1
@@ -414,10 +431,10 @@ fn match_len_up_to(data : BytesView, src : Int, pos : Int, limit : Int) -> Int {
 #cfg(not(any(target="native", target="wasm")))
 fn match_len_in_window(
   data : FixedArray[Byte],
-  src : Int,
-  pos : Int,
-  limit : Int,
-) -> Int {
+  src : Int32,
+  pos : Int32,
+  limit : Int32,
+) -> Int32 {
   let mut k = 0
   while k < limit &&
         data[(src + k) & STREAM_RING_MASK] == data[(pos + k) & STREAM_RING_MASK] {
@@ -432,10 +449,10 @@ fn match_len_in_window(
 #inline
 fn match_candidate_can_beat(
   data : BytesView,
-  candidate : Int,
-  position : Int,
-  best_len : Int,
-  limit : Int,
+  candidate : Int32,
+  position : Int32,
+  best_len : Int32,
+  limit : Int32,
 ) -> Bool {
   guard best_len < limit else { return false }
   if best_len < 3 {
@@ -456,13 +473,13 @@ fn match_candidate_can_beat(
 fn MatchFinder::find_match_hashed(
   finder : MatchFinder,
   data : BytesView,
-  i : Int,
-  n : Int,
-  base : Int,
+  i : Int32,
+  n : Int32,
+  base : Int32,
   cfg : LevelConfig,
-  prefix : UInt,
-  product : UInt,
-) -> Int {
+  prefix : UInt32,
+  product : UInt32,
+) -> Int32 {
   let limit = (n - i).min(258)
   guard base < limit else { return base << 16 }
   let mut budget = if base >= cfg.good_length {
@@ -527,11 +544,11 @@ fn MatchFinder::find_match_hashed(
 fn MatchFinder::find_match(
   finder : MatchFinder,
   data : BytesView,
-  i : Int,
-  n : Int,
-  base : Int,
+  i : Int32,
+  n : Int32,
+  base : Int32,
   cfg : LevelConfig,
-) -> Int {
+) -> Int32 {
   let limit = (n - i).min(258)
   if limit < 4 {
     let budget = if base >= cfg.good_length {
@@ -565,13 +582,13 @@ fn MatchFinder::find_match(
 fn MatchFinder::find_window_match_hashed(
   finder : MatchFinder,
   data : FixedArray[Byte],
-  i : Int,
-  end : Int,
-  base : Int,
+  i : Int32,
+  end : Int32,
+  base : Int32,
   cfg : LevelConfig,
-  prefix : UInt,
-  product : UInt,
-) -> Int {
+  prefix : UInt32,
+  product : UInt32,
+) -> Int32 {
   let limit = (end - i).min(258)
   guard base < limit else { return base << 16 }
   let mut budget = if base >= cfg.good_length {
@@ -637,11 +654,11 @@ fn MatchFinder::find_window_match_hashed(
 fn MatchFinder::find_window_match(
   finder : MatchFinder,
   data : FixedArray[Byte],
-  i : Int,
-  end : Int,
-  base : Int,
+  i : Int32,
+  end : Int32,
+  base : Int32,
   cfg : LevelConfig,
-) -> Int {
+) -> Int32 {
   let limit = (end - i).min(258)
   if limit < 4 {
     let budget = if base >= cfg.good_length {
@@ -674,8 +691,8 @@ fn MatchFinder::find_window_match(
 ///|
 fn MatchFinder::insert_pos_hashed(
   finder : MatchFinder,
-  i : Int,
-  product : UInt,
+  i : Int32,
+  product : UInt32,
 ) -> Unit {
   let h = long_hash_product(product, shift=finder.long_shift)
   let stamped = i + finder.position_base
@@ -695,8 +712,8 @@ fn MatchFinder::insert_pos_hashed(
 fn MatchFinder::insert_pos(
   finder : MatchFinder,
   data : BytesView,
-  i : Int,
-  n : Int,
+  i : Int32,
+  n : Int32,
 ) -> Unit {
   if n - i >= 4 {
     finder.insert_pos_hashed(i, read_match_word(data, i) * 0x1E35A7BDU)
@@ -714,9 +731,9 @@ fn MatchFinder::insert_pos(
 fn MatchFinder::insert_positions(
   finder : MatchFinder,
   data : BytesView,
-  start : Int,
-  end : Int,
-  available_end : Int,
+  start : Int32,
+  end : Int32,
+  available_end : Int32,
 ) -> Unit {
   let end = end.min(available_end - 2)
   guard start < end else { return }
@@ -746,8 +763,8 @@ fn MatchFinder::insert_positions(
 ///|
 fn MatchFinder::insert_window_pos_hashed(
   finder : MatchFinder,
-  i : Int,
-  product : UInt,
+  i : Int32,
+  product : UInt32,
 ) -> Unit {
   let h = long_hash_product(product, shift=finder.long_shift)
   let stamped = i + finder.position_base
@@ -767,8 +784,8 @@ fn MatchFinder::insert_window_pos_hashed(
 fn MatchFinder::insert_window_pos(
   finder : MatchFinder,
   data : FixedArray[Byte],
-  i : Int,
-  n : Int,
+  i : Int32,
+  n : Int32,
 ) -> Unit {
   if n - i >= 4 {
     finder.insert_window_pos_hashed(
@@ -789,9 +806,9 @@ fn MatchFinder::insert_window_pos(
 fn MatchFinder::insert_window_positions(
   finder : MatchFinder,
   data : FixedArray[Byte],
-  start : Int,
-  end : Int,
-  available_end : Int,
+  start : Int32,
+  end : Int32,
+  available_end : Int32,
 ) -> Unit {
   let end = end.min(available_end - 2)
   guard start < end else { return }
@@ -825,7 +842,7 @@ fn MatchFinder::insert_window_positions(
 /// non-negative Int below 2^25 on every backend. Unlike enum payloads, this
 /// scalar representation does not allocate once per input token.
 #inline
-fn pack_match_token(length : Int, distance : Int) -> Int {
+fn pack_match_token(length : Int32, distance : Int32) -> Int32 {
   (length << 16) | distance
 }
 
@@ -838,14 +855,14 @@ fn pack_match_token(length : Int, distance : Int) -> Int {
 fn commit_match(
   data : BytesView,
   finder : MatchFinder,
-  n : Int,
-  start : Int,
-  length : Int,
-  dist : Int,
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
-) -> Int {
+  n : Int32,
+  start : Int32,
+  length : Int32,
+  dist : Int32,
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+) -> Int32 {
   tokens.push(pack_match_token(length, dist))
   ll_freq[257 + len_to_idx[length]] += 1
   d_freq[dist_index(dist)] += 1
@@ -863,14 +880,14 @@ fn commit_match(
 fn commit_window_match(
   data : FixedArray[Byte],
   finder : MatchFinder,
-  end : Int,
-  start : Int,
-  length : Int,
-  dist : Int,
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
-) -> Int {
+  end : Int32,
+  start : Int32,
+  length : Int32,
+  dist : Int32,
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+) -> Int32 {
   tokens.push(pack_match_token(length, dist))
   ll_freq[257 + len_to_idx[length]] += 1
   d_freq[dist_index(dist)] += 1
@@ -887,9 +904,9 @@ fn commit_window_match(
 /// Record one literal token: push its byte value and tally its symbol.
 #inline
 fn emit_literal(
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  b : Int,
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  b : Int32,
 ) -> Unit {
   tokens.push(b)
   ll_freq[b] += 1
@@ -908,13 +925,13 @@ fn emit_literal(
 fn tokenize(
   data : BytesView,
   finder : MatchFinder,
-  start : Int,
-  end : Int,
+  start : Int32,
+  end : Int32,
   cfg : LevelConfig,
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
-) -> Int {
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+) -> Int32 {
   let n = data.length()
   // The default level uses a distance-aware lazy decision. Other levels
   // retain their existing search policy and budgets.
@@ -1092,14 +1109,14 @@ fn tokenize(
 fn tokenize_window(
   data : FixedArray[Byte],
   finder : MatchFinder,
-  start : Int,
-  token_end : Int,
-  available_end : Int,
+  start : Int32,
+  token_end : Int32,
+  available_end : Int32,
   cfg : LevelConfig,
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
-) -> Int {
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
+) -> Int32 {
   // The default level uses a distance-aware lazy decision. Other levels
   // retain their existing search policy and budgets.
   let cost_model = cfg == level_configs[6] &&
@@ -1260,8 +1277,8 @@ fn tokenize_window(
 #inline
 fn set_chain_previous(
   chain : FixedArray[Byte],
-  position : Int,
-  previous : Int,
+  position : Int32,
+  previous : Int32,
 ) -> Unit {
   // Every reachable predecessor is older. Saturate expired links to a
   // distance beyond the window, which also fits in an unsigned 16-bit slot.
@@ -1274,7 +1291,7 @@ fn set_chain_previous(
 ///|
 #cfg(any(target="native", target="wasm"))
 #inline
-fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
+fn chain_previous(chain : FixedArray[Byte], position : Int32) -> Int32 {
   let index = (position & WINDOW_MASK) * 2
   // The ring has two padding bytes for the final unaligned four-byte load;
   // only the low halfword belongs to this link.
@@ -1285,7 +1302,7 @@ fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
 ///|
 #cfg(not(any(target="native", target="wasm")))
 #inline
-fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
+fn chain_previous(chain : FixedArray[Byte], position : Int32) -> Int32 {
   let index = (position & WINDOW_MASK) * 2
   let delta = chain.unsafe_get(index).to_int() |
     (chain.unsafe_get(index + 1).to_int() << 8)
@@ -1300,9 +1317,9 @@ fn chain_previous(chain : FixedArray[Byte], position : Int) -> Int {
 fn MatchFinder::insert_matched_positions(
   finder : MatchFinder,
   data : BytesView,
-  start : Int,
-  end : Int,
-  available_end : Int,
+  start : Int32,
+  end : Int32,
+  available_end : Int32,
 ) -> Unit {
   let end = end.min(available_end - 2)
   let long_end = (end - 3).min(available_end - 3)
@@ -1333,9 +1350,9 @@ fn MatchFinder::insert_matched_positions(
 fn MatchFinder::insert_matched_window_positions(
   finder : MatchFinder,
   data : FixedArray[Byte],
-  start : Int,
-  end : Int,
-  available_end : Int,
+  start : Int32,
+  end : Int32,
+  available_end : Int32,
 ) -> Unit {
   let end = end.min(available_end - 2)
   let long_end = (end - 3).min(available_end - 3)
@@ -1365,7 +1382,7 @@ fn MatchFinder::insert_matched_window_positions(
 ///|
 // Fewer distinct literals mean cheaper literal codes, making short matches
 // less attractive. Sample once after at least 512 input bytes are available.
-fn minimum_match_length(distinct : Int) -> Int {
+fn minimum_match_length(distinct : Int32) -> Int32 {
   match () {
     _ if distinct >= 80 => 3
     _ if distinct >= 45 => 4

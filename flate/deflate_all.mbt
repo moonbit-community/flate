@@ -7,14 +7,14 @@
 /// `Deflater`, it reads the input directly and writes one complete stream into
 /// either a caller-provided buffer or reusable growable output storage.
 pub struct Compressor {
-  priv level : Int
+  priv level : Int32
   priv fast_store : Bool
   priv cfg : LevelConfig
   priv finder : MatchFinder
-  priv tokens : Array[Int]
+  priv tokens : Array[Int32]
   priv mut output : FixedArray[Byte]
-  priv ll_freq : FixedArray[Int]
-  priv d_freq : FixedArray[Int]
+  priv ll_freq : FixedArray[Int32]
+  priv d_freq : FixedArray[Int32]
 }
 
 ///|
@@ -23,8 +23,8 @@ pub struct Compressor {
 /// enabled, sampled high-diversity inputs may bypass compression and use stored
 /// blocks. It trades compression ratio for speed without changing the data.
 pub fn Compressor::Compressor(
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Compressor {
   let level = clamp_level(level)
   {
@@ -44,7 +44,7 @@ pub fn Compressor::Compressor(
 /// `Compressor::compress_into`. The returned value covers the fixed 16 KiB
 /// minimum block cadence and final bit padding for a non-negative input length.
 /// Panics if the input length is negative or the bound cannot fit in `Int`.
-pub fn deflate_bound(input_size : Int) -> Int {
+pub fn deflate_bound(input_size : Int32) -> Int32 {
   guard input_size >= 0 else { abort("negative DEFLATE input size") }
   let block_count = if input_size == 0 {
     1
@@ -67,7 +67,7 @@ pub fn Compressor::compress_into(
   self : Compressor,
   input : BytesView,
   output : FixedArray[Byte],
-) -> Int? {
+) -> Int32? {
   self.encode(input, BitWriter::into(output))
 }
 
@@ -88,7 +88,7 @@ fn Compressor::encode(
   self : Compressor,
   input : BytesView,
   w : BitWriter,
-) -> Int? {
+) -> Int32? {
   let n = input.length()
   // Level 0 or an explicit heuristic decision bypasses parsing entirely.
   guard self.level != 0 && !(self.fast_store && should_fast_store(input)) else {
@@ -126,8 +126,8 @@ fn Compressor::encode(
 /// check; false (the default) preserves normal compression behavior.
 pub fn deflate_all(
   input : BytesView,
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Bytes {
   let lv = clamp_level(level)
   let w = BitWriter()
@@ -144,7 +144,7 @@ pub fn deflate_all(
   // Reuse token and frequency storage across blocks. A whole-buffer stream
   // can span several legal blocks; reallocating these fixed workspaces for
   // every block only adds GC pressure and does not improve the parse.
-  let tokens : Array[Int] = []
+  let tokens : Array[Int32] = []
   let ll_freq = FixedArray::make(MAX_NUM_LIT, 0)
   let d_freq = FixedArray::make(MAX_NUM_DIST, 0)
   finder.reset_for_input(input, long_hash_bits~)
@@ -160,9 +160,9 @@ pub fn deflate_all(
 pub fn deflate_into(
   input : BytesView,
   output : FixedArray[Byte],
-  level? : Int = 6,
-  fast_store? : Bool = false,
-) -> Int? {
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
+) -> Int32? {
   Compressor(level~, fast_store~).compress_into(input, output)
 }
 
@@ -173,9 +173,9 @@ fn encode_blocks(
   input : BytesView,
   finder : MatchFinder,
   cfg : LevelConfig,
-  tokens : Array[Int],
-  ll_freq : FixedArray[Int],
-  d_freq : FixedArray[Int],
+  tokens : Array[Int32],
+  ll_freq : FixedArray[Int32],
+  d_freq : FixedArray[Int32],
   w : BitWriter,
 ) -> Unit {
   let n = input.length()

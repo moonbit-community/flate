@@ -8,8 +8,8 @@
 /// the id, the data size, and the offset of the field data.
 fn extra_field_at(
   extra : BytesView,
-  pos : Int,
-) -> (Int, Int, Int) raise ZipError {
+  pos : Int32,
+) -> (Int32, Int32, Int32) raise ZipError {
   if pos < 0 || 4 > extra.length() - pos {
     raise ZipError(UnsupportedFeature, "zip: truncated extra field header")
   }
@@ -32,7 +32,7 @@ fn read_zip64_extra(
   need_uncomp : Bool,
   need_comp : Bool,
   need_offset : Bool,
-) -> (UInt64?, UInt64?, UInt64?, Int?) raise ZipError {
+) -> (UInt64?, UInt64?, UInt64?, Int32?) raise ZipError {
   let mut pos = 0
   while pos < extra.length() {
     let (header_id, data_size, data_offset) = extra_field_at(extra, pos)
@@ -75,8 +75,8 @@ fn read_zip64_extra(
 ///|
 fn read_zip64_eocd(
   bytes : BytesView,
-  eocd_offset : Int,
-) -> (UInt64, UInt64, UInt64, Int) raise ZipError {
+  eocd_offset : Int32,
+) -> (UInt64, UInt64, UInt64, Int32) raise ZipError {
   let locator_offset = eocd_offset - 20
   if locator_offset < 0 ||
     read_u32_le_at_raw(bytes, locator_offset) != ZIP64_LOCATOR_SIG {
@@ -125,10 +125,10 @@ fn read_zip64_eocd(
 ///|
 fn data_descriptor_matches(
   bytes : BytesView,
-  offset : Int,
-  crc : UInt,
-  comp_size : Int,
-  uncomp_size : Int,
+  offset : Int32,
+  crc : UInt32,
+  comp_size : Int32,
+  uncomp_size : Int32,
   zip64 : Bool,
   signed : Bool,
 ) -> Bool {
@@ -158,10 +158,10 @@ fn data_descriptor_matches(
 /// authoritative central-directory metadata.
 fn data_descriptor_size(
   bytes : BytesView,
-  offset : Int,
+  offset : Int32,
   meta : EntryMeta,
   zip64 : Bool,
-) -> Int raise ZipError {
+) -> Int32 raise ZipError {
   let signed = data_descriptor_matches(
     bytes,
     offset,
@@ -194,9 +194,9 @@ fn data_descriptor_size(
 
 ///|
 fn local_size_matches(
-  raw : UInt,
+  raw : UInt32,
   zip64 : UInt64?,
-  expected : Int,
+  expected : Int32,
   allow_placeholder : Bool,
 ) -> Bool {
   let expected64 = expected.to_uint64()

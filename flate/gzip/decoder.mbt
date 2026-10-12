@@ -1,5 +1,5 @@
 ///|
-const DECODER_INPUT_LIMIT : Int = 65536
+const DECODER_INPUT_LIMIT : Int32 = 65536
 
 // Streaming gzip (RFC 1952) decompressor: a push-based, suspendable state
 // machine wrapping the `@flate.Inflater`. The variable-length header is parsed
@@ -14,7 +14,7 @@ const DECODER_INPUT_LIMIT : Int = 65536
 priv enum DecMode {
   GzHeader // the fixed 10-byte header (magic, method, FLG, MTIME, XFL, OS)
   GzExtraLen // the 2-byte XLEN of FEXTRA
-  GzExtra(Int) // discarding the FEXTRA payload; bytes still to skip
+  GzExtra(Int32) // discarding the FEXTRA payload; bytes still to skip
   GzName // discarding the NUL-terminated FNAME
   GzComment // discarding the NUL-terminated FCOMMENT
   GzHcrc // verify the low sixteen bits of the header CRC-32
@@ -31,20 +31,20 @@ pub struct Decoder {
   priv inf : @flate.Inflater
   priv mut crc : @checksum.Crc32 // of the current member's decompressed output
   priv mut header_crc : @checksum.Crc32
-  priv mut osize : UInt // current member's decompressed length, mod 2^32
+  priv mut osize : UInt32 // current member's decompressed length, mod 2^32
   priv mut pending : BytesView // unconsumed compressed input
-  priv mut pending_pos : Int // first unread byte in `pending`
+  priv mut pending_pos : Int32 // first unread byte in `pending`
   priv mut borrowed_input : Bool // only borrowed during the active step
   priv mut unused : Bytes // cached read-ahead suffix after successful completion
-  priv mut flg : Int // header FLG byte, gates the optional-field states
-  priv mut members : Int // fully verified members
+  priv mut flg : Int32 // header FLG byte, gates the optional-field states
+  priv mut members : Int32 // fully verified members
   priv mut ending : Bool // `end=true` is sticky across output suspension
   priv multistream : Bool // decode RFC 1952 concatenated members when true
   priv mut mode : DecMode
   priv mut failure_kind : GzipErrorKind? // stable first terminal error
   priv mut failure_message : String
-  priv mut step_consumed : Int
-  priv mut step_produced : Int
+  priv mut step_consumed : Int32
+  priv mut step_produced : Int32
 }
 
 ///|
@@ -53,7 +53,7 @@ pub struct Decoder {
 /// false for a framed transport that must stop after the first member and
 /// recover accepted read-ahead through `unused_input()`. Unaccepted bytes
 /// remain with the caller, as reported by `last_consumed()`.
-pub fn Decoder::Decoder(multistream? : Bool = true) -> Decoder {
+pub fn Decoder::Decoder(multistream~ : Bool = true) -> Decoder {
   {
     inf: Inflater(),
     crc: Crc32(),
@@ -84,14 +84,14 @@ pub fn Decoder::is_finished(self : Decoder) -> Bool {
 ///|
 /// Number of input bytes accepted by the most recent successful `step` call.
 /// It is reset to zero when a call raises `GzipError`.
-pub fn Decoder::last_consumed(self : Decoder) -> Int {
+pub fn Decoder::last_consumed(self : Decoder) -> Int32 {
   self.step_consumed
 }
 
 ///|
 /// Number of output bytes written by the most recent successful `step` call.
 /// It is reset to zero when a call raises `GzipError`.
-pub fn Decoder::last_produced(self : Decoder) -> Int {
+pub fn Decoder::last_produced(self : Decoder) -> Int32 {
   self.step_produced
 }
 
@@ -109,7 +109,7 @@ pub fn Decoder::unused_input(self : Decoder) -> Bytes {
 
 ///|
 /// Number of unread buffered bytes.
-fn Decoder::available(self : Decoder) -> Int {
+fn Decoder::available(self : Decoder) -> Int32 {
   self.pending.length() - self.pending_pos
 }
 
@@ -125,7 +125,7 @@ fn Decoder::finish_stream(self : Decoder) -> Unit {
 
 ///|
 /// Read an unread buffered byte at a relative offset.
-fn Decoder::pending_at(self : Decoder, off : Int) -> Byte {
+fn Decoder::pending_at(self : Decoder, off : Int32) -> Byte {
   self.pending[self.pending_pos + off]
 }
 
@@ -161,7 +161,7 @@ fn Decoder::compact_for_input(self : Decoder) -> Unit {
 }
 
 ///|
-fn Decoder::advance(self : Decoder, k : Int) -> Unit {
+fn Decoder::advance(self : Decoder, k : Int32) -> Unit {
   guard k > 0 else { return }
   self.pending_pos = self.pending_pos + k
   guard self.pending_pos < self.pending.length() else {
@@ -184,7 +184,7 @@ fn Decoder::pending_view(self : Decoder) -> BytesView {
 ///|
 /// The header state that follows field group `done` (0 = fixed header,
 /// 1 = FEXTRA, 2 = FNAME, 3 = FCOMMENT), gated by the FLG bits.
-fn Decoder::next_header_mode(self : Decoder, done : Int) -> DecMode {
+fn Decoder::next_header_mode(self : Decoder, done : Int32) -> DecMode {
   if done < 1 && (self.flg & 4) != 0 {
     GzExtraLen
   } else if done < 2 && (self.flg & 8) != 0 {
@@ -251,7 +251,10 @@ fn Decoder::read_gzheader(self : Decoder) -> Bool raise GzipError {
 /// Discard the NUL-terminated field at the head of `pending`, advancing to the
 /// next header mode on completion. Returns true when the step must suspend for
 /// more input.
-fn Decoder::skip_nul_field(self : Decoder, done : Int) -> Bool raise GzipError {
+fn Decoder::skip_nul_field(
+  self : Decoder,
+  done : Int32,
+) -> Bool raise GzipError {
   guard self.skip_nul_terminated() else {
     guard !self.ending else { raise GzipError(Truncated, "gzip: truncated") }
     return true
@@ -344,7 +347,7 @@ fn Decoder::skip_nul_terminated(self : Decoder) -> Bool {
 
 ///|
 /// Read a little-endian u32 from `pending` at `off`.
-fn Decoder::u32_le(self : Decoder, off : Int) -> UInt {
+fn Decoder::u32_le(self : Decoder, off : Int32) -> UInt32 {
   self.pending_at(off).to_uint() |
   (self.pending_at(off + 1).to_uint() << 8) |
   (self.pending_at(off + 2).to_uint() << 16) |
@@ -373,7 +376,7 @@ pub fn Decoder::step(
   self : Decoder,
   input : BytesView,
   output : MutArrayView[Byte],
-  end? : Bool = false,
+  end~ : Bool = false,
 ) -> @flate.Status raise GzipError {
   self.step_output(input, output, None, end~)
 }
@@ -386,7 +389,7 @@ pub fn Decoder::step_into(
   self : Decoder,
   input : BytesView,
   output : FixedArray[Byte],
-  end? : Bool = false,
+  end~ : Bool = false,
 ) -> @flate.Status raise GzipError {
   self.step_output(input, output.mut_view(), Some(output), end~)
 }
@@ -420,8 +423,8 @@ fn Decoder::step_output(
 fn Decoder::finish_step(
   self : Decoder,
   status : @flate.Status,
-  consumed : Int,
-  produced : Int,
+  consumed : Int32,
+  produced : Int32,
 ) -> @flate.Status {
   self.step_consumed = consumed
   self.step_produced = produced
@@ -559,7 +562,7 @@ fn Decoder::step_active(
 
 ///|
 /// Consume header bytes while keeping FHCRC independent of the body checksum.
-fn Decoder::advance_header(self : Decoder, count : Int) -> Unit {
+fn Decoder::advance_header(self : Decoder, count : Int32) -> Unit {
   if (self.flg & 2) != 0 {
     for i in 0..<count {
       self.header_crc.update_byte(self.pending_at(i))

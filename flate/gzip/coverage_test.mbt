@@ -11,7 +11,7 @@ fn cov_join(parts : Array[Bytes]) -> Bytes {
 }
 
 ///|
-fn cov_prefix(input : Bytes, length : Int) -> Bytes {
+fn cov_prefix(input : Bytes, length : Int32) -> Bytes {
   let out = @buffer.Buffer()
   for i in 0..<length {
     out.write_byte(input[i])
@@ -20,7 +20,7 @@ fn cov_prefix(input : Bytes, length : Int) -> Bytes {
 }
 
 ///|
-fn cov_suffix(input : Bytes, start : Int) -> Bytes {
+fn cov_suffix(input : Bytes, start : Int32) -> Bytes {
   let out = @buffer.Buffer()
   for i in start..<input.length() {
     out.write_byte(input[i])
@@ -30,7 +30,7 @@ fn cov_suffix(input : Bytes, start : Int) -> Bytes {
 
 ///|
 /// Build a fixed gzip header followed by arbitrary bytes.
-fn cov_header(compression_method : Int, flags : Int, rest : Bytes) -> Bytes {
+fn cov_header(compression_method : Int32, flags : Int32, rest : Bytes) -> Bytes {
   let out = @buffer.Buffer()
   for
     value in [
@@ -46,12 +46,12 @@ fn cov_header(compression_method : Int, flags : Int, rest : Bytes) -> Bytes {
 
 ///|
 /// Replace the canonical ten-byte header while retaining a valid body/trailer.
-fn cov_reheader(base : Bytes, flags : Int, fields : Bytes) -> Bytes {
+fn cov_reheader(base : Bytes, flags : Int32, fields : Bytes) -> Bytes {
   cov_header(8, flags, cov_join([fields, cov_suffix(base, 10)]))
 }
 
 ///|
-fn cov_xor_at(input : Bytes, index : Int) -> Bytes {
+fn cov_xor_at(input : Bytes, index : Int32) -> Bytes {
   let bytes : Array[Byte] = []
   for byte in input {
     bytes.push(byte)

@@ -72,43 +72,43 @@ priv enum Mode {
 /// pieces across calls.
 pub struct Inflater {
   priv mut mode : Mode
-  priv mut bitbuf : Int // LSB-first bit accumulator
-  priv mut bit_count : Int
+  priv mut bitbuf : Int32 // LSB-first bit accumulator
+  priv mut bit_count : Int32
   priv mut final_block : Bool
-  priv mut stored_remaining : Int
+  priv mut stored_remaining : Int32
   priv mut hl : HuffmanDecoder? // literal/length table (None until a block sets it)
   priv mut hd : HuffmanDecoder? // distance table (None => fixed 5-bit distances)
   priv mut hd_fixed : Bool
   priv window : FixedArray[Byte] // 32 KB circular history
-  priv mut wpos : Int // total bytes ever written; window index = wpos & 32767
+  priv mut wpos : Int32 // total bytes ever written; window index = wpos & 32767
   priv mut filled : Bool // window has held >= 32 KB, so any distance <= 32768 is valid
   priv dyn_litlen : HuffmanDecoder // dynamic literal/length (and code-length) table
   priv dyn_dist : HuffmanDecoder // dynamic distance table
-  priv clbits : FixedArray[Int]
-  priv codebits : FixedArray[Int]
+  priv clbits : FixedArray[Int32]
+  priv codebits : FixedArray[Int32]
   // A match copy in progress, suspended because the output filled mid-copy.
   // `copy_remaining` bytes are still owed at back-distance `copy_dist`; the
   // next `step` drains them before decoding any new unit. This is what lets
   // the decoder make progress into an output buffer as small as one byte.
-  priv mut copy_remaining : Int
-  priv mut copy_dist : Int
+  priv mut copy_remaining : Int32
+  priv mut copy_dist : Int32
   // Bytes belonging to one incomplete atomic unit. Owning this bounded tail
   // lets callers drop every byte reported as consumed instead of re-presenting
   // a growing view on NeedMoreInput.
   priv mut staged_input : Array[Byte]
-  priv mut staged_pos : Int
+  priv mut staged_pos : Int32
   priv mut ending : Bool // physical EOF has been declared by the caller
   priv mut failure_kind : InflateErrorKind? // stable terminal error
   priv mut failure_message : String
-  priv mut step_consumed : Int // input accepted by the latest successful step
-  priv mut step_produced : Int // output written by the latest successful step
+  priv mut step_consumed : Int32 // input accepted by the latest successful step
+  priv mut step_produced : Int32 // output written by the latest successful step
   // Step-local cursors (reset on each `step`).
   priv mut view : BytesView
-  priv mut in_pos : Int
-  priv mut out_pos : Int
+  priv mut in_pos : Int32
+  priv mut out_pos : Int32
   priv mut out : MutArrayView[Byte]
   priv mut fixed_out : FixedArray[Byte]?
-  priv mut out_end : Int // one past the last writable index in `out`
+  priv mut out_end : Int32 // one past the last writable index in `out`
   priv empty_out : FixedArray[Byte]
 }
 
@@ -166,7 +166,7 @@ pub fn Inflater::is_finished(self : Inflater) -> Bool {
 /// Number of input bytes accepted by the latest `step` call. This is zero
 /// initially, after `reset`, after a call raises, and in the stable `Done`
 /// state.
-pub fn Inflater::last_consumed(self : Inflater) -> Int {
+pub fn Inflater::last_consumed(self : Inflater) -> Int32 {
   self.step_consumed
 }
 
@@ -174,7 +174,7 @@ pub fn Inflater::last_consumed(self : Inflater) -> Int {
 /// Number of output bytes written by the latest `step` call. This is zero
 /// initially, after `reset`, after a call raises, and in the stable `Done`
 /// state.
-pub fn Inflater::last_produced(self : Inflater) -> Int {
+pub fn Inflater::last_produced(self : Inflater) -> Int32 {
   self.step_produced
 }
 
@@ -244,7 +244,7 @@ fn Inflater::next_fill_byte(self : Inflater) -> Byte? {
 }
 
 ///|
-fn Inflater::fill(self : Inflater, n : Int) -> Unit raise NeedInput {
+fn Inflater::fill(self : Inflater, n : Int32) -> Unit raise NeedInput {
   while self.bit_count < n {
     guard self.next_fill_byte() is Some(b) else { raise NeedInput }
     self.bitbuf = self.bitbuf | (b.to_int() << self.bit_count)
@@ -253,7 +253,7 @@ fn Inflater::fill(self : Inflater, n : Int) -> Unit raise NeedInput {
 }
 
 ///|
-fn Inflater::read_bits(self : Inflater, n : Int) -> Int raise NeedInput {
+fn Inflater::read_bits(self : Inflater, n : Int32) -> Int32 raise NeedInput {
   self.fill(n)
   let v = self.bitbuf & ((1 << n) - 1)
   self.bitbuf = self.bitbuf >> n
@@ -262,7 +262,7 @@ fn Inflater::read_bits(self : Inflater, n : Int) -> Int raise NeedInput {
 }
 
 ///|
-fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int raise {
+fn Inflater::huff_sym(self : Inflater, h : HuffmanDecoder) -> Int32 raise {
   let mut n = h.min
   for ;; {
     self.fill(n)
@@ -444,7 +444,7 @@ fn Inflater::release_step_views(self : Inflater) -> Unit {
 ///|
 /// Advance the absolute window cursor after a bounded batch write.
 #inline
-fn Inflater::advance_window(self : Inflater, count : Int) -> Unit {
+fn Inflater::advance_window(self : Inflater, count : Int32) -> Unit {
   self.wpos = self.wpos + count
   if !self.filled && self.wpos >= WINDOW_SIZE {
     self.filled = true
@@ -458,8 +458,8 @@ fn Inflater::advance_window(self : Inflater, count : Int) -> Unit {
 #inline
 fn Inflater::write_window_to_output(
   self : Inflater,
-  start : Int,
-  length : Int,
+  start : Int32,
+  length : Int32,
 ) -> Unit {
   if self.fixed_out is Some(output) {
     FixedArray::unsafe_blit(output, self.out_pos, self.window, start, length)
@@ -480,8 +480,8 @@ fn Inflater::write_window_to_output(
 #inline
 fn Inflater::copy_window_segment(
   self : Inflater,
-  source : Int,
-  length : Int,
+  source : Int32,
+  length : Int32,
 ) -> Unit {
   let mut source = source
   let mut remaining = length
@@ -536,8 +536,8 @@ fn Inflater::drain_match(self : Inflater) -> Unit {
 /// Staged input and bit-buffer bytes are handled by the caller's scalar fallback.
 fn Inflater::copy_stored_view(
   self : Inflater,
-  source : Int,
-  length : Int,
+  source : Int32,
+  length : Int32,
 ) -> Unit {
   let mut source = source
   let mut remaining = length
@@ -599,10 +599,10 @@ fn Inflater::decode_unit(self : Inflater) -> Bool raise {
 /// arrives, instead of resuming mid-unit.
 #valtype
 priv struct CursorMark {
-  bitbuf : Int
-  bit_count : Int
-  staged_pos : Int
-  in_pos : Int
+  bitbuf : Int32
+  bit_count : Int32
+  staged_pos : Int32
+  in_pos : Int32
 }
 
 ///|
@@ -709,8 +709,8 @@ fn Inflater::run_step(self : Inflater) -> Status raise InflateError {
 fn Inflater::finish_step(
   self : Inflater,
   status : Status,
-  consumed : Int,
-  produced : Int,
+  consumed : Int32,
+  produced : Int32,
 ) -> Status {
   self.step_consumed = consumed
   self.step_produced = produced
@@ -738,7 +738,7 @@ pub fn Inflater::step(
   self : Inflater,
   input : BytesView,
   output : MutArrayView[Byte],
-  end? : Bool = false,
+  end~ : Bool = false,
 ) -> Status raise InflateError {
   self.step_output(input, output, None, end~)
 }
@@ -752,7 +752,7 @@ pub fn Inflater::step_into(
   self : Inflater,
   input : BytesView,
   output : FixedArray[Byte],
-  end? : Bool = false,
+  end~ : Bool = false,
 ) -> Status raise InflateError {
   self.step_output(input, output.mut_view(), Some(output), end~)
 }

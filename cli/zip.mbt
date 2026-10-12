@@ -46,7 +46,7 @@ priv struct ArchiveInput {
 async fn zip_entries(
   output : String,
   paths : Array[String],
-  level~ : Int,
+  level~ : Int32,
 ) -> Unit {
   let inputs : Array[ArchiveInput] = []
   for path in paths {

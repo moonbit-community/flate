@@ -1,7 +1,7 @@
 ///|
 /// CRC-32 (IEEE 802.3 / ISO 3309, polynomial 0xEDB88320 reflected) as used by
 /// gzip and ZIP. Shared primitive: `@checksum.crc32`.
-fn build_crc32_table() -> FixedArray[UInt] {
+fn build_crc32_table() -> FixedArray[UInt32] {
   let t = FixedArray::make(16 * 256, 0U)
   for n in 0..<256 {
     let mut c = n.reinterpret_as_uint()
@@ -24,14 +24,14 @@ fn build_crc32_table() -> FixedArray[UInt] {
 }
 
 ///|
-let crc32_table : FixedArray[UInt] = build_crc32_table()
+let crc32_table : FixedArray[UInt32] = build_crc32_table()
 
 ///|
 /// Incremental CRC-32 accumulator. Feed bytes with `update` across as many
 /// calls as you like, then read the result with `finish`; this is what a
 /// streaming gzip/ZIP container uses so it never has to hold the whole input.
 pub struct Crc32 {
-  priv mut state : UInt // running CRC, before the final one's-complement
+  priv mut state : UInt32 // running CRC, before the final one's-complement
 }
 
 ///|
@@ -43,7 +43,7 @@ pub fn Crc32::Crc32() -> Crc32 {
 ///|
 /// Keep the larger kernel separate so short updates do not pay its register
 /// save/restore cost. Called only when at least one full block is available.
-fn crc32_blocks16(initial : UInt, data : BytesView) -> UInt {
+fn crc32_blocks16(initial : UInt32, data : BytesView) -> UInt32 {
   let mut crc = initial
   let mut position = 0
   let bytes = data.data()
@@ -135,13 +135,13 @@ pub fn Crc32::update_byte(self : Crc32, b : Byte) -> Unit {
 ///|
 /// The CRC-32 of everything fed so far. Non-destructive: more `update`s may
 /// follow.
-pub fn Crc32::finish(self : Crc32) -> UInt {
+pub fn Crc32::finish(self : Crc32) -> UInt32 {
   self.state ^ 0xFFFFFFFF
 }
 
 ///|
 /// Compute the CRC-32 checksum of `data` in one shot.
-pub fn crc32(data : BytesView) -> UInt {
+pub fn crc32(data : BytesView) -> UInt32 {
   let d = Crc32()
   d.update(data)
   d.finish()

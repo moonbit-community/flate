@@ -10,7 +10,7 @@ fn read_input(path : String) -> Bytes {
 
 ///|
 #coverage.skip
-fn parse_number(value : String) -> Int {
+fn parse_number(value : String) -> Int32 {
   @string.parse_int(value) catch {
     _ => abort("invalid integer argument")
   }
@@ -18,7 +18,7 @@ fn parse_number(value : String) -> Int {
 
 ///|
 #coverage.skip
-fn compress(input : Bytes, format : String, level : Int) -> Bytes {
+fn compress(input : Bytes, format : String, level : Int32) -> Bytes {
   match format {
     "raw" => @flate.deflate_all(input, level~)
     "zlib" => @zlib.compress(input, level~)
@@ -53,7 +53,7 @@ fn compress_direct(
   codec : @flate.Compressor,
   input : Bytes,
   output : FixedArray[Byte],
-) -> Int {
+) -> Int32 {
   codec
   .compress_into(input, output)
   .unwrap_or_else(() => abort("compression output exhausted"))
@@ -65,7 +65,7 @@ fn decompress_direct(
   codec : @flate.Decompressor,
   input : Bytes,
   output : FixedArray[Byte],
-) -> Int {
+) -> Int32 {
   let written = codec.decompress_into(input, output) catch {
     _ => abort("direct decompression failed")
   }
@@ -82,7 +82,7 @@ fn verify(expected : Bytes, actual : Bytes) -> Unit {
 ///|
 // The result dies before returning, so allocation and reclamation are timed.
 #coverage.skip
-fn consume_result(bytes : Bytes, expected_size : Int) -> Int {
+fn consume_result(bytes : Bytes, expected_size : Int32) -> Int32 {
   guard bytes.length() == expected_size else { abort("output length changed") }
   let last = if bytes.length() == 0 {
     0
@@ -95,9 +95,9 @@ fn consume_result(bytes : Bytes, expected_size : Int) -> Int {
 ///|
 #coverage.skip
 fn measure(
-  operation : () -> Int,
-  milliseconds : Int,
-  output_size : Int,
+  operation : () -> Int32,
+  milliseconds : Int32,
+  output_size : Int32,
 ) -> Unit {
   // Zero duration validates once without warmup, calibration, or timing.
   if milliseconds == 0 {

@@ -2,18 +2,18 @@
 /// Counts prepared records or emits them into an exactly sized buffer. The
 /// preparation pass enforces the output ceiling before allocating that buffer.
 priv struct Output {
-  limit : Int?
+  limit : Int32?
   mut buf : FixedArray[Byte]?
-  mut size : Int
+  mut size : Int32
 }
 
 ///|
-fn Output::counting(limit : Int?) -> Output {
+fn Output::counting(limit : Int32?) -> Output {
   { limit, buf: None, size: 0, }
 }
 
 ///|
-fn Output::writing(limit : Int?, size_hint? : Int = 0) -> Output {
+fn Output::writing(limit : Int32?, size_hint~ : Int32 = 0) -> Output {
   { limit, buf: Some(FixedArray::make(size_hint, b'\x00')), size: 0, }
 }
 
@@ -23,7 +23,7 @@ fn Output::is_counting(self : Output) -> Bool {
 }
 
 ///|
-fn Output::grow(self : Output, additional : Int) -> Unit raise ZipError {
+fn Output::grow(self : Output, additional : Int32) -> Unit raise ZipError {
   guard additional >= 0 else {
     raise ZipError(UnsupportedFeature, "zip: negative output size")
   }
@@ -64,13 +64,13 @@ fn Output::write_bytes(self : Output, bytes : BytesView) -> Unit raise ZipError 
 
 ///|
 /// Advance the sizing pass without copying payload bytes.
-fn Output::count(self : Output, n : Int) -> Unit raise ZipError {
+fn Output::count(self : Output, n : Int32) -> Unit raise ZipError {
   self.grow(n)
 }
 
 ///|
 // grow checks both the output limit and capacity before unchecked field writes.
-fn Output::write_u16(self : Output, value : Int) -> Unit raise ZipError {
+fn Output::write_u16(self : Output, value : Int32) -> Unit raise ZipError {
   if value < 0 || value > 0xffff {
     raise ZipError(UnsupportedFeature, "zip: u16 overflow")
   }
@@ -81,7 +81,7 @@ fn Output::write_u16(self : Output, value : Int) -> Unit raise ZipError {
 }
 
 ///|
-fn Output::write_u32(self : Output, value : UInt) -> Unit raise ZipError {
+fn Output::write_u32(self : Output, value : UInt32) -> Unit raise ZipError {
   self.grow(4)
   if self.buf is Some(buf) {
     buf.unsafe_write_uint32_le(self.size - 4, value)
@@ -114,16 +114,16 @@ fn Output::finish(self : Output) -> Bytes {
 }
 
 ///|
-fn write_u16_buf(buf : @buffer.Buffer, value : Int) -> Unit raise ZipError {
+fn write_u16_buf(buf : @buffer.Buffer, value : Int32) -> Unit raise ZipError {
   let raw = value.to_uint_checked()
   buf.write_uint16_le(raw.to_uint16())
 }
 
 ///|
 fn build_zip64_extra(
-  uncomp~ : Int?,
-  comp~ : Int?,
-  offset~ : Int?,
+  uncomp~ : Int32?,
+  comp~ : Int32?,
+  offset~ : Int32?,
 ) -> Bytes raise ZipError {
   let mut count = 0
   if uncomp is Some(_) {
@@ -156,7 +156,7 @@ fn build_zip64_extra(
 ///|
 /// A prepared payload; stored data remains owned by its entry.
 priv struct PreparedPayload {
-  compressed_size : Int
+  compressed_size : Int32
   compressed : Bytes?
 }
 
@@ -280,8 +280,8 @@ fn Output::write_central_record(
   output : Output,
   entry : Entry,
   name_bytes : Bytes,
-  local_offset : Int,
-  compressed_size : Int,
+  local_offset : Int32,
+  compressed_size : Int32,
   use_descriptor : Bool,
   force_zip64 : Bool,
 ) -> Unit raise ZipError {
@@ -357,7 +357,7 @@ fn Output::write_central_record(
 fn Output::write_preserved_central_record(
   output : Output,
   source : SourceRecord,
-  local_offset : Int,
+  local_offset : Int32,
 ) -> Unit raise ZipError {
   let template = source.central_record
   guard template.length() >= 46 &&
@@ -382,9 +382,9 @@ fn Output::write_preserved_central_record(
 fn Output::write_generated_classic_end_record(
   output : Output,
   zip64 : Bool,
-  total_entries : Int,
-  central_size : Int,
-  central_offset : Int,
+  total_entries : Int32,
+  central_size : Int32,
+  central_offset : Int32,
   comment : Bytes,
 ) -> Unit raise ZipError {
   output.write_u32(END_OF_CENTRAL_SIG)
@@ -417,9 +417,9 @@ fn Output::write_generated_classic_end_record(
 ///|
 fn Output::write_generated_zip64_trailer(
   output : Output,
-  total_entries : Int,
-  central_size : Int,
-  central_offset : Int,
+  total_entries : Int32,
+  central_size : Int32,
+  central_offset : Int32,
   comment : Bytes,
 ) -> Unit raise ZipError {
   let zip64_offset = output.size
@@ -447,9 +447,9 @@ fn Output::write_generated_zip64_trailer(
 fn Output::write_preserved_trailer(
   output : Output,
   trailer : TrailerTemplate,
-  total_entries : Int,
-  central_size : Int,
-  central_offset : Int,
+  total_entries : Int32,
+  central_size : Int32,
+  central_offset : Int32,
 ) -> Unit raise ZipError {
   let classic = trailer.classic_end_record
   guard classic.length() >= 22 &&
@@ -506,9 +506,9 @@ fn Output::write_preserved_trailer(
 fn Output::write_preserved_classic_end_record(
   output : Output,
   classic : BytesView,
-  total_entries : Int,
-  central_size : Int,
-  central_offset : Int,
+  total_entries : Int32,
+  central_size : Int32,
+  central_offset : Int32,
 ) -> Unit raise ZipError {
   if classic.length() < 22 ||
     read_u32_le_at_raw(classic, 0) != END_OF_CENTRAL_SIG {
@@ -547,8 +547,8 @@ fn Output::write_preserved_classic_end_record(
 /// Each fresh entry is encoded once during preparation. Emission consumes the
 /// retained payload so it can be released as soon as it has been copied.
 priv struct EntryPlan {
-  local_offset : Int
-  compressed_size : Int
+  local_offset : Int32
+  compressed_size : Int32
   name_bytes : Bytes
   mut payload : PreparedPayload
 }
@@ -560,7 +560,7 @@ priv struct EntryPlan {
 /// (its source records are dropped for re-encoding, but its ordering hint
 /// survives), so a byte-preserving rewrite never silently moves an edited part
 /// to the end of the archive.
-fn Archive::local_order(archive : Archive) -> FixedArray[Int] {
+fn Archive::local_order(archive : Archive) -> FixedArray[Int32] {
   let order = FixedArray::makei(archive.entries.length(), index => index)
   // Most archives are already in local-record order, including all newly built
   // archives. Avoid sorting (and its comparisons) on this common path.
@@ -602,9 +602,9 @@ fn Archive::local_order(archive : Archive) -> FixedArray[Int] {
 fn prepare_archive(
   out : Output,
   archive : Archive,
-  order : FixedArray[Int],
+  order : FixedArray[Int32],
   preserve : Bool,
-  level : Int,
+  level : Int32,
   fast_store : Bool,
 ) -> Array[EntryPlan] raise ZipError {
   let plans : Array[EntryPlan] = []
@@ -664,7 +664,7 @@ fn prepare_archive(
 fn write_directory(
   out : Output,
   archive : Archive,
-  positions : FixedArray[Int],
+  positions : FixedArray[Int32],
   plans : Array[EntryPlan],
   preserve : Bool,
 ) -> Unit raise ZipError {
@@ -690,9 +690,9 @@ fn write_directory(
 fn write_trailer(
   out : Output,
   archive : Archive,
-  total_entries : Int,
-  central_size : Int,
-  central_offset : Int,
+  total_entries : Int32,
+  central_size : Int32,
+  central_offset : Int32,
   preserve : Bool,
   force_zip64 : Bool,
 ) -> Unit raise ZipError {
@@ -731,8 +731,8 @@ fn write_trailer(
 fn write_impl(
   archive : Archive,
   preserve : Bool,
-  level : Int,
-  max_output : Int?,
+  level : Int32,
+  max_output : Int32?,
   fast_store : Bool,
 ) -> Bytes raise ZipError {
   if preserve && archive.original is Some(bytes) {
@@ -812,10 +812,10 @@ fn write_impl(
 /// Negative limits are rejected.
 pub fn write(
   archive : Archive,
-  preserve? : Bool = false,
-  max_output_bytes? : Int,
-  level? : Int = 6,
-  fast_store? : Bool = false,
+  preserve~ : Bool = false,
+  max_output_bytes? : Int32,
+  level~ : Int32 = 6,
+  fast_store~ : Bool = false,
 ) -> Bytes raise ZipError {
   if max_output_bytes is Some(limit) {
     guard limit >= 0 else {

@@ -4,7 +4,7 @@
 fn crc32_cancellable(
   bytes : BytesView,
   cancelled~ : () -> Bool,
-) -> UInt raise ZipError {
+) -> UInt32 raise ZipError {
   check_cancelled(cancelled)
   let crc = @checksum.Crc32()
   let mut start = 0

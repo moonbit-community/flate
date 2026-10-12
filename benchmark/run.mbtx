@@ -19,13 +19,13 @@ import {
 ///|
 suberror BenchmarkError {
   Invalid(String)
-  CommandFailed(Array[String], Int, String)
+  CommandFailed(Array[String], Int32, String)
 }
 
 ///|
 struct Corpus {
   name : String
-  bytes : Int
+  bytes : Int32
   sha256 : String
   file : String
 } derive(ToJson, FromJson)
@@ -35,7 +35,7 @@ struct Configuration {
   corpus : Corpus
   mode : String
   format : String
-  level : Int
+  level : Int32
 }
 
 ///|
@@ -43,19 +43,19 @@ struct Sample {
   corpus : String
   mode : String
   format : String
-  level : Int
+  level : Int32
   operation : String
   producer : String
   implementation : String
-  round : Int
+  round : Int32
   input_sha256 : String
   fixture_sha256 : String
-  output_capacity : Int?
-  input_bytes : Int
-  fixture_bytes : Int
-  iterations : Int
+  output_capacity : Int32?
+  input_bytes : Int32
+  fixture_bytes : Int32
+  iterations : Int32
   seconds : Double
-  output_bytes : Int
+  output_bytes : Int32
   sink : Json
 } derive(ToJson)
 
@@ -64,7 +64,7 @@ struct SampleKey {
   corpus : String
   mode : String
   format : String
-  level : Int
+  level : Int32
   operation : String
   producer : String
 } derive(Eq, Hash, ToJson)
@@ -74,7 +74,7 @@ struct Ratio {
   median : Double
   min : Double
   max : Double
-  rounds : Int
+  rounds : Int32
 } derive(ToJson)
 
 ///|
@@ -82,7 +82,7 @@ struct Summary {
   corpus : String
   mode : String
   format : String
-  level : Int
+  level : Int32
   operation : String
   producer : String
   implementation : String
@@ -91,10 +91,10 @@ struct Summary {
   max_seconds : Double
   spread_pct : Double
   mib_s : Double
-  input_bytes : Int
-  output_bytes : Int
-  fixture_bytes : Int
-  rounds : Int
+  input_bytes : Int32
+  output_bytes : Int32
+  fixture_bytes : Int32
+  rounds : Int32
 } derive(ToJson)
 
 ///|
@@ -175,7 +175,7 @@ fn configurations(
 fn paired_ratios(
   samples : Array[Sample],
 ) -> Map[SampleKey, Ratio] raise BenchmarkError {
-  let groups : Map[SampleKey, Map[Int, Map[String, Sample]]] = Map([])
+  let groups : Map[SampleKey, Map[Int32, Map[String, Sample]]] = Map([])
   for sample in samples {
     let key = sample.key()
     let rounds = groups.get_or_init(key, () => Map([]))
@@ -342,11 +342,11 @@ async fn source_paths(directory : String) -> Array[String] {
 
 ///|
 struct StructuredRecord {
-  id : Int
+  id : Int32
   status : String
   name : String
-  group : Int
-  value : Int
+  group : Int32
+  value : Int32
   tags : Array[String]
 } derive(ToJson)
 
@@ -469,7 +469,7 @@ async fn replay_corpora(
 }
 
 ///|
-fn decimal(value : Double, places : Int) -> String {
+fn decimal(value : Double, places : Int32) -> String {
   let scale = if places == 1 { 10L } else { 100L }
   let scaled = value * scale.to_double()
   let lower = scaled.floor().to_int64()
@@ -489,8 +489,8 @@ struct ReportMetadata {
   started_utc : String
   revision : String
   libdeflate_version : String
-  milliseconds : Int
-  rounds : Int
+  milliseconds : Int32
+  rounds : Int32
 }
 
 ///|
@@ -620,8 +620,8 @@ fn render_report(
 ///|
 struct Options {
   profile : String
-  rounds : Int
-  milliseconds : Int
+  rounds : Int32
+  milliseconds : Int32
   corpus : Array[String]
   output : String?
   include_oneshot : Bool
@@ -708,11 +708,11 @@ fn runner_args(
   operation : String,
   mode : String,
   format : String,
-  level : Int,
+  level : Int32,
   source : String,
   fixture : String,
-  milliseconds : Int,
-  capacity : Int,
+  milliseconds : Int32,
+  capacity : Int32,
 ) -> Array[String] {
   [
     binary,
@@ -734,16 +734,16 @@ fn runner_args(
 
 ///|
 struct Timing {
-  iterations : Int
+  iterations : Int32
   seconds : Double
-  output_bytes : Int
+  output_bytes : Int32
   sink : Json
 } derive(FromJson)
 
 ///|
 struct Fixture {
   path : String
-  bytes : Int
+  bytes : Int32
   sha256 : String
 }
 
@@ -1050,7 +1050,7 @@ async fn main {
 }
 
 ///|
-async fn shake256(root : String, seed : String, size : Int) -> Bytes {
+async fn shake256(root : String, seed : String, size : Int32) -> Bytes {
   let output = @shell.Cmd(
     "python3",
     [root + "/benchmark/oracle.py", "shake", seed, size.to_string()],
@@ -1069,7 +1069,7 @@ async fn ensure_directory(path : String) -> Unit {
 ///|
 /// Python's corpus manifest sorts names lexically; String::compare sorts by
 /// length first, which would silently change the source corpus after migration.
-fn compare_paths(left : String, right : String) -> Int {
+fn compare_paths(left : String, right : String) -> Int32 {
   let left_chars = left.iter()
   let right_chars = right.iter()
   for ;; {

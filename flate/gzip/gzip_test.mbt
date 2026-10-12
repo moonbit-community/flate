@@ -71,7 +71,7 @@ fn concat_bytes(parts : Array[Bytes]) -> Bytes {
 
 ///|
 /// Copy the first `n` bytes of `data` into an owned value.
-fn prefix_bytes(data : Bytes, n : Int) -> Bytes {
+fn prefix_bytes(data : Bytes, n : Int32) -> Bytes {
   let out = @buffer.Buffer()
   for i in 0..<n {
     out.write_byte(data[i])

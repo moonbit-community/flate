@@ -350,7 +350,7 @@ let py_complex : Bytes = [
 ]
 
 ///|
-fn repeat_bytes(unit : Bytes, count : Int) -> Bytes {
+fn repeat_bytes(unit : Bytes, count : Int32) -> Bytes {
   let buf = @buffer.Buffer()
   for _ in 0..<count {
     buf.write_bytes(unit)

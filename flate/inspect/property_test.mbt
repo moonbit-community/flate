@@ -36,7 +36,7 @@ fn prop_inflate_exact_preallocated(input : Bytes) -> PropInflateOutcome {
 ///|
 /// Deterministic per-step chunk size in `[1, modulus]`, cycling through a
 /// varied schedule as `step` grows.
-fn prop_chunk_size(step : Int, modulus : Int) -> Int {
+fn prop_chunk_size(step : Int32, modulus : Int32) -> Int32 {
   1 + (step * 37 + step * step * 11) % modulus
 }
 
