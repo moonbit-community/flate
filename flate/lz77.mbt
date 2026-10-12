@@ -1346,6 +1346,9 @@ fn MatchFinder::insert_matched_positions(
   let base = finder.position_base
   let short_shift = finder.short_shift
   let long_shift = finder.long_shift
+  // Whole groups of four positions are hashed in vector lanes where those
+  // are real; the loop below inserts what is left.
+  let start = finder.insert_matched_quads(data, start, long_end)
   for position in start..<long_end {
     let product = read_match_word(data, position) * 0x1E35A7BDU
     let h = long_hash_product(product, shift=long_shift)
@@ -1379,6 +1382,7 @@ fn MatchFinder::insert_matched_window_positions(
   let base = finder.position_base
   let short_shift = finder.short_shift
   let long_shift = finder.long_shift
+  let start = finder.insert_matched_window_quads(data, start, long_end)
   for position in start..<long_end {
     let product = read_window_match_word(data, position) * 0x1E35A7BDU
     let h = long_hash_product(product, shift=long_shift)
@@ -1394,6 +1398,216 @@ fn MatchFinder::insert_matched_window_positions(
     head.unsafe_set(h, stamped)
   }
   finder.insert_window_positions(data, long_end, end, available_end)
+}
+
+///|
+/// The two hashes of the four overlapping four-byte words at the start of
+/// `bytes`, in lanes: `long_hash_product` (`shorts` false) or
+/// `short_hash_product` of `word * 0x1E35A7BD` for the words at byte 0, 1, 2
+/// and 3. Lane arithmetic is 32-bit and wraps like `UInt`.
+#cfg(any(target="native", target="wasm"))
+#inline
+fn matched_quad_hashes(bytes : V128, shift : Int32, shorts : Bool) -> V128 {
+  let words = @v128.i8x16_shuffle(
+    bytes, bytes, 0, 1, 2, 3, 1, 2, 3, 4, 2, 3, 4, 5, 3, 4, 5, 6,
+  )
+  let products = @v128.i32x4_mul(words, @v128.i32x4_splat(0x1E35A7BDU))
+  if shorts {
+    @v128.i32x4_shr_u(
+      @v128.v128_and_(products, @v128.i32x4_splat(0xFFFFFFU)),
+      shift,
+    )
+  } else {
+    @v128.i32x4_shr_u(products, shift)
+  }
+}
+
+///|
+/// One position of `insert_matched_positions`, its hashes already computed:
+/// the same three stores in the same order. The tables are passed in so the
+/// callers' loops keep them in locals.
+#cfg(any(target="native", target="wasm"))
+#inline
+fn link_matched_position(
+  short_head : FixedArray[Int32],
+  head : FixedArray[Int32],
+  prev : FixedArray[Byte],
+  base : Int32,
+  position : Int32,
+  long_hash : UInt32,
+  short_hash : UInt32,
+) -> Unit {
+  // The hashes are those of the scalar loop, which indexes the same tables
+  // unchecked: the shifts keep them below the tables' logical sizes.
+  let h = long_hash.reinterpret_as_int()
+  let stamped = position + base
+  short_head.unsafe_set(short_hash.reinterpret_as_int(), stamped)
+  let delta = stamped - head.unsafe_get(h)
+  let index = (position & WINDOW_MASK) * 2
+  prev.unsafe_set(index, delta.to_byte())
+  prev.unsafe_set(index + 1, (delta >> 8).to_byte())
+  head.unsafe_set(h, stamped)
+}
+
+///|
+/// Insert the positions of `[start, long_end)` four at a time while a
+/// 16-byte load at the position stays inside `data`, and return the first
+/// position not inserted. Positions are linked in ascending order, one after
+/// the other, so a later position of a group sees the heads an earlier one
+/// wrote, exactly as in the scalar loop of `insert_matched_positions`.
+#cfg(any(target="native", target="wasm"))
+fn MatchFinder::insert_matched_quads(
+  finder : MatchFinder,
+  data : BytesView,
+  start : Int32,
+  long_end : Int32,
+) -> Int32 {
+  let bytes = bytes_as_fixedarray(data.data())
+  let offset = data.start_offset()
+  let length = data.length()
+  let head = finder.head
+  let short_head = finder.short_head
+  let prev = finder.prev
+  let base = finder.position_base
+  let short_shift = finder.short_shift
+  let long_shift = finder.long_shift
+  let mut position = start
+  // SAFETY: `position >= start >= 0` and `position <= length - 16`: the
+  // sixteen bytes lie inside the view. Only bytes 0..6 are used, the words
+  // of `position..position + 3`, all below `long_end`.
+  while position <= long_end - 4 && position <= length - 16 {
+    let block = @v128.v128_load(bytes, offset + position)
+    let longs = matched_quad_hashes(block, long_shift, false)
+    let shorts = matched_quad_hashes(block, short_shift, true)
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position,
+      @v128.i32x4_extract_lane(longs, 0),
+      @v128.i32x4_extract_lane(shorts, 0),
+    )
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position + 1,
+      @v128.i32x4_extract_lane(longs, 1),
+      @v128.i32x4_extract_lane(shorts, 1),
+    )
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position + 2,
+      @v128.i32x4_extract_lane(longs, 2),
+      @v128.i32x4_extract_lane(shorts, 2),
+    )
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position + 3,
+      @v128.i32x4_extract_lane(longs, 3),
+      @v128.i32x4_extract_lane(shorts, 3),
+    )
+    position = position + 4
+  }
+  position
+}
+
+///|
+/// `insert_matched_quads` for the mirrored ring: a load at a masked position
+/// may run into the mirror half, which holds the same bytes.
+#cfg(any(target="native", target="wasm"))
+fn MatchFinder::insert_matched_window_quads(
+  finder : MatchFinder,
+  data : FixedArray[Byte],
+  start : Int32,
+  long_end : Int32,
+) -> Int32 {
+  let head = finder.head
+  let short_head = finder.short_head
+  let prev = finder.prev
+  let base = finder.position_base
+  let short_shift = finder.short_shift
+  let long_shift = finder.long_shift
+  let mut position = start
+  while position <= long_end - 4 {
+    // SAFETY: the masked offset is below `STREAM_RING_SIZE` and the storage
+    // is twice that, so sixteen bytes are there. Only bytes 0..6 are used,
+    // the words of `position..position + 3`, which the mirror keeps equal.
+    let block = @v128.v128_load(data, position & STREAM_RING_MASK)
+    let longs = matched_quad_hashes(block, long_shift, false)
+    let shorts = matched_quad_hashes(block, short_shift, true)
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position,
+      @v128.i32x4_extract_lane(longs, 0),
+      @v128.i32x4_extract_lane(shorts, 0),
+    )
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position + 1,
+      @v128.i32x4_extract_lane(longs, 1),
+      @v128.i32x4_extract_lane(shorts, 1),
+    )
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position + 2,
+      @v128.i32x4_extract_lane(longs, 2),
+      @v128.i32x4_extract_lane(shorts, 2),
+    )
+    link_matched_position(
+      short_head,
+      head,
+      prev,
+      base,
+      position + 3,
+      @v128.i32x4_extract_lane(longs, 3),
+      @v128.i32x4_extract_lane(shorts, 3),
+    )
+    position = position + 4
+  }
+  position
+}
+
+///|
+/// Without vector lanes the scalar loops insert every position.
+#cfg(not(any(target="native", target="wasm")))
+#inline
+fn MatchFinder::insert_matched_quads(
+  _finder : MatchFinder,
+  _data : BytesView,
+  start : Int32,
+  _long_end : Int32,
+) -> Int32 {
+  start
+}
+
+///|
+#cfg(not(any(target="native", target="wasm")))
+#inline
+fn MatchFinder::insert_matched_window_quads(
+  _finder : MatchFinder,
+  _data : FixedArray[Byte],
+  start : Int32,
+  _long_end : Int32,
+) -> Int32 {
+  start
 }
 
 ///|
