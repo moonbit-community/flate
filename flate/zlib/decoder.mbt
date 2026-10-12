@@ -371,7 +371,16 @@ fn Decoder::step_active(
       }
       ZBody => {
         let op_before = op
-        let st = self.inf.step(self.pending_view(), output.mut_view(start=op)) catch {
+        // A fixed array that is still empty goes to the inflater as it is,
+        // for its bulk window copies; a view (or a later part of the array,
+        // which `step_into` cannot address) takes the per-byte writes.
+        let st = try {
+          if fixed_output is Some(fixed) && op == 0 {
+            self.inf.step_into(self.pending_view(), fixed)
+          } else {
+            self.inf.step(self.pending_view(), output.mut_view(start=op))
+          }
+        } catch {
           InflateError(_, message) =>
             raise ZlibError(
               InvalidDeflate,
