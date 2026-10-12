@@ -126,3 +126,75 @@ test "gzip failed state freezes decoder cursors" {
   @test.assert_eq(decoder.pending.to_owned(), snapshot)
   assert_false(decoder.borrowed_input)
 }
+
+///|
+/// `step_into` and `step` must give the same bytes, the same number of steps
+/// and the same verdict for every split of input and output.
+test "gzip step_into equals step for every input and output split" {
+  let source = Bytes::makei(70000, i => {
+    if i % 4096 < 2600 {
+      b"streaming decoders must agree. "[i % 31]
+    } else {
+      ((i * 40503) >> 5).to_byte()
+    }
+  })
+  for level in [0, 6] {
+    let compressed = compress(source, level~)
+    let damaged = FixedArray::makei(compressed.length(), i => compressed[i])
+    damaged[compressed.length() - 5] = (damaged[compressed.length() - 5].to_int() ^
+    1).to_byte()
+    for stream in [compressed, Bytes::from_array(damaged)] {
+      for split in [(1 << 20, 32768), (700, 32768), (9000, 4096), (33, 7)] {
+        let (chunk, room) = split
+        let outcomes : Array[(Bytes, Int32, String)] = []
+        for fixed in [true, false] {
+          let decoder = Decoder()
+          let output = FixedArray::make(room, b'\x00')
+          let decoded = @buffer.Buffer()
+          let mut position = 0
+          let mut steps = 0
+          let mut verdict = "done"
+          for ;; {
+            let end = (position + chunk).min(stream.length())
+            let status = try {
+              if fixed {
+                decoder.step_into(
+                  stream[position:end],
+                  output,
+                  end=end == stream.length(),
+                )
+              } else {
+                decoder.step(
+                  stream[position:end],
+                  output.mut_view(),
+                  end=end == stream.length(),
+                )
+              }
+            } catch {
+              GzipError(kind, _) => {
+                verdict = @debug.to_string(kind)
+                break
+              }
+            }
+            position = position + decoder.last_consumed()
+            for i in 0..<decoder.last_produced() {
+              decoded.write_byte(output[i])
+            }
+            steps = steps + 1
+            if status is Done {
+              break
+            }
+          }
+          outcomes.push((decoded.to_bytes(), steps, verdict))
+        }
+        @test.assert_eq(outcomes[0], outcomes[1])
+        if physical_equal(stream, compressed) {
+          @test.assert_eq(outcomes[0].0, source)
+          @test.assert_eq(outcomes[0].2, "done")
+        } else {
+          @test.assert_eq(outcomes[0].2, "ChecksumMismatch")
+        }
+      }
+    }
+  }
+}

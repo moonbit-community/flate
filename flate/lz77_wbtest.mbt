@@ -754,3 +754,67 @@ test "default parser resamples narrow alphabets after compressor reuse" {
     @test.assert_eq(inflate_all(compressed), data)
   }
 }
+
+///|
+/// The interior of a match is inserted by `insert_matched_positions`. Its
+/// tables must be those of one `insert_pos` per position: for every start
+/// modulo four, lengths around a group of four, tails of zero to three
+/// positions without a full word, input ends closer than sixteen bytes, and
+/// ring positions next to the mirror half.
+test "matched insertion preserves scalar hash chains for every group phase" {
+  let period = 211
+  let data = Bytes::makei(2 * STREAM_RING_SIZE + 700, i => {
+    let j = i % period
+    ((j * 37 + j / 7) & 0xFF).to_byte()
+  })
+  for
+    base in [
+      2 * period,
+      WINDOW_SIZE - 20,
+      STREAM_RING_SIZE - 40,
+      STREAM_RING_SIZE - 17,
+      STREAM_RING_SIZE - 3,
+      2 * STREAM_RING_SIZE - 9,
+    ] {
+    for phase in 0..<4 {
+      let start = base + phase
+      for length in [32, 33, 34, 35, 36, 37, 47, 48, 64, 257, 258] {
+        for lookahead in [0, 1, 2, 3, 4, 12, 13, 300] {
+          let end = start + length
+          let available_end = end + lookahead
+          // Everything a period back is in the tables: each word of the
+          // match has a live predecessor, as after a real match.
+          let first = start - 2 * period
+          let input = data[:available_end]
+          let window = FixedArray::make(STREAM_RING_STORAGE_SIZE, b'\x00')
+          for i in (available_end - STREAM_RING_SIZE).max(0)..<available_end {
+            let offset = i & STREAM_RING_MASK
+            window[offset] = data[i]
+            window[offset + STREAM_RING_SIZE] = data[i]
+          }
+          let scalar = MatchFinder()
+          let direct = MatchFinder()
+          let streaming = MatchFinder()
+          for i in first..<start {
+            scalar.insert_pos(input, i, available_end)
+            direct.insert_pos(input, i, available_end)
+            streaming.insert_window_pos(window, i, available_end)
+          }
+          for i in start..<end {
+            scalar.insert_pos(input, i, available_end)
+          }
+          direct.insert_matched_positions(input, start, end, available_end)
+          streaming.insert_matched_window_positions(
+            window, start, end, available_end,
+          )
+          @test.assert_eq(direct.short_head, scalar.short_head)
+          @test.assert_eq(direct.head, scalar.head)
+          @test.assert_eq(direct.prev, scalar.prev)
+          @test.assert_eq(streaming.short_head, scalar.short_head)
+          @test.assert_eq(streaming.head, scalar.head)
+          @test.assert_eq(streaming.prev, scalar.prev)
+        }
+      }
+    }
+  }
+}
