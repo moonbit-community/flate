@@ -1,7 +1,8 @@
-// What a streaming decode gives must not depend on how much output room and
-// input a step is handed: the same bytes, the same consumption (bytes behind
-// the stream stay unread) and the same verdict on damaged streams, here for
-// output rooms on both sides of 258 bytes, the longest match.
+// The streaming inflater decodes whole units with local state while a step
+// has eight bytes of input and 258 bytes of output room in hand (native).
+// With less room every unit takes the careful path. Both must give the same
+// bytes, the same consumption (bytes behind the stream stay unread) and the
+// same verdict on damaged streams.
 
 ///|
 priv struct FastStreamRun {
@@ -359,5 +360,38 @@ test "malformed units are corrupt for every output room" {
         InflateDifferentialErr(Corrupt),
       )
     }
+  }
+}
+
+///|
+/// The window cursor counts every byte ever written and wraps. A call that
+/// writes a window's worth of literals must leave the window marked full
+/// wherever the counter stands afterwards, or the next call rejects a match
+/// that reaches back further than the wrapped counter's value. Getting there
+/// takes a 2 GiB output array, so the cursor is set by hand: it stands for
+/// the middle of such a call, a window short of wrapping past zero.
+#cfg(target="native")
+test "fast loop marks the window full by what a call wrote" {
+  let stream = fast_stream_malformed(40000, writer => {
+    // Length 3 at distance 20000 (symbol 28, base 16385), then end of block.
+    writer.write_rcode(fixed_ll_val[257], fixed_ll_len[257])
+    writer.write_rcode(fixed_dist_val[28], 5)
+    writer.write_bits(20000 - 16385, 13)
+    writer.write_rcode(fixed_ll_val[256], fixed_ll_len[256])
+  })
+  let inflater = Inflater()
+  inflater.wpos = -30000
+  let output = FixedArray::make(40000, b'\x00')
+  let first = inflater.step_into(stream, output, end=true)
+  assert_true(first is NeedMoreOutput)
+  @test.assert_eq(inflater.last_produced(), 40000)
+  @test.assert_eq(inflater.wpos, 10000)
+  assert_true(inflater.filled)
+  let rest = stream[inflater.last_consumed():]
+  let second = inflater.step_into(rest, output, end=true)
+  assert_true(second is Done)
+  @test.assert_eq(inflater.last_produced(), 3)
+  for i in 0..<3 {
+    @test.assert_eq(output[i], (0x41 + (20000 + i) % 26).to_byte())
   }
 }
