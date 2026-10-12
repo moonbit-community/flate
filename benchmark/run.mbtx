@@ -390,7 +390,7 @@ async fn corpora(
       value: (i.to_int64() * 2654435761L % 1000003L).to_int(),
       tags: ["tag-\{i % 31}", "tag-\{i % 17}"],
     })
-    let structured = @utf8.encode(records.to_json().stringify())
+    let structured = @utf8.encode(Json(records).stringify())
     let source_path = directory + "/.source"
     let precompressed_path = directory + "/.precompressed"
     @fs.write_file(source_path, source)
@@ -523,16 +523,16 @@ fn render_report(
   for key, ratio in ratios {
     guard key.mode == "direct" else { continue }
     let object : Map[String, Json] = {
-      "corpus": key.corpus.to_json(),
-      "mode": key.mode.to_json(),
-      "format": key.format.to_json(),
-      "level": key.level.to_json(),
-      "operation": key.operation.to_json(),
-      "producer": key.producer.to_json(),
-      "median": ratio.median.to_json(),
-      "min": ratio.min.to_json(),
-      "max": ratio.max.to_json(),
-      "rounds": ratio.rounds.to_json(),
+      "corpus": Json(key.corpus),
+      "mode": Json(key.mode),
+      "format": Json(key.format),
+      "level": Json(key.level),
+      "operation": Json(key.operation),
+      "producer": Json(key.producer),
+      "median": Json(ratio.median),
+      "min": Json(ratio.min),
+      "max": Json(ratio.max),
+      "rounds": Json(ratio.rounds),
     }
     comparisons.push(Json::object(object))
   }
@@ -807,39 +807,39 @@ async fn run_benchmark(options : Options) -> Unit {
   let moon_binary = directory +
     "/build/native/release/build/moonbit-community/flate-benchmark/runner/runner.exe"
   let binaries = { "flate": moon_binary, "libdeflate": c_binary }
-  metadata["schema"] = (2).to_json()
-  metadata["driver"] = "MoonBit mbtx".to_json()
-  metadata["profile"] = options.profile.to_json()
-  metadata["validate_only"] = options.validate_only.to_json()
-  metadata["include_oneshot"] = options.include_oneshot.to_json()
+  metadata["schema"] = Json(2)
+  metadata["driver"] = Json("MoonBit mbtx")
+  metadata["profile"] = Json(options.profile)
+  metadata["validate_only"] = Json(options.validate_only)
+  metadata["include_oneshot"] = Json(options.include_oneshot)
   let manifest_path = if options.corpus_manifest is Some(path) {
     Some(@fs.realpath(path))
   } else {
     None
   }
-  metadata["corpus_manifest"] = manifest_path.to_json()
+  metadata["corpus_manifest"] = Json(manifest_path)
   metadata["direct_policy"] = {
     "decode_capacity": "exact uncompressed size for both",
     "compress_capacity": "max of both codec bounds",
     "workspace": "reused; per-stream reset and table building timed",
     "cache": "warm reused buffers",
-  }.to_json()
-  metadata["rounds"] = options.rounds.to_json()
-  metadata["milliseconds"] = options.milliseconds.to_json()
+  }
+  metadata["rounds"] = Json(options.rounds)
+  metadata["milliseconds"] = Json(options.milliseconds)
   let revision = command(root, ["git", "rev-parse", "HEAD"])
   let libdeflate_version = command(root, [c_binary, "--version"])
-  metadata["revision"] = revision.to_json()
-  metadata["libdeflate_version"] = libdeflate_version.to_json()
+  metadata["revision"] = Json(revision)
+  metadata["libdeflate_version"] = Json(libdeflate_version)
   for
     (name, args) in [
       ("git_status", ["git", "status", "--short"]),
       ("moon", ["moon", "version", "--all"]),
       ("cc", ["clang", "--version"]),
     ] {
-    metadata[name] = command(root, args).to_json()
+    metadata[name] = Json(command(root, args))
   }
-  metadata["build_commands"] = [build_c, build_moon].to_json()
-  metadata["command"] = @env.args().to_json()
+  metadata["build_commands"] = Json([build_c, build_moon])
+  metadata["command"] = Json(@env.args())
   @fs.write_file(
     directory + "/source.diff",
     command(root, ["git", "diff", "HEAD", "--", "."]),
@@ -912,14 +912,14 @@ async fn run_benchmark(options : Options) -> Unit {
       let hash = digest(data)
       paths[implementation] = { path, bytes: data.length(), sha256: hash, }
       fixtures.push({
-        "corpus": corpus.name.to_json(),
-        "mode": mode.to_json(),
-        "format": format.to_json(),
-        "level": level.to_json(),
-        "producer": implementation.to_json(),
-        "bytes": data.length().to_json(),
-        "sha256": hash.to_json(),
-        "file": name.to_json(),
+        "corpus": Json(corpus.name),
+        "mode": Json(mode),
+        "format": Json(format),
+        "level": Json(level),
+        "producer": Json(implementation),
+        "bytes": Json(data.length()),
+        "sha256": Json(hash),
+        "file": Json(name),
       })
     }
     let jobs = [
@@ -1019,13 +1019,15 @@ async fn run_benchmark(options : Options) -> Unit {
       "[\{index + 1}/\{configs.length()}] \{corpus.name} \{mode} \{format} L\{level} (\{decimal(elapsed, 1)}s)",
     )
   }
-  metadata["elapsed_seconds"] = (@bench.monotonic_clock_end(started) / 1000000.0).to_json()
+  metadata["elapsed_seconds"] = Json(
+    @bench.monotonic_clock_end(started) / 1000000.0,
+  )
   write_json(directory + "/metadata.json", metadata)
   write_json(directory + "/fixtures.json", fixtures)
   if options.validate_only {
     write_json(directory + "/validation.json", {
-      "passed": true.to_json(),
-      "cases": samples.length().to_json(),
+      "passed": Json(true),
+      "cases": Json(samples.length()),
     })
     println("Validation: \{directory}/validation.json (no timing)")
   } else {
