@@ -464,8 +464,11 @@ fn Inflater::write_window_to_output(
   if self.fixed_out is Some(output) {
     FixedArray::unsafe_blit(output, self.out_pos, self.window, start, length)
   } else {
+    let window = self.window
+    let output = self.out
+    let out_pos = self.out_pos
     for i in 0..<length {
-      self.out.unsafe_set(self.out_pos + i, self.window[start + i])
+      output.unsafe_set(out_pos + i, window.unsafe_get(start + i))
     }
   }
   self.out_pos = self.out_pos + length
@@ -498,6 +501,11 @@ fn Inflater::copy_window_segment(
 }
 
 ///|
+/// Matches up to this length are copied byte by byte into a fixed output
+/// array when no range wraps; longer ones are two bulk copies.
+const SHORT_MATCH_COPY : Int32 = 48
+
+///|
 /// Copy as many bytes of the in-progress match as fit before `out_end`, leaving
 /// the remainder in `copy_remaining` for the next `step`. The window is updated
 /// with fixed-array blits (or a fill for distance one), while output writes are
@@ -505,6 +513,40 @@ fn Inflater::copy_window_segment(
 fn Inflater::drain_match(self : Inflater) -> Unit {
   let total = self.copy_remaining.min(self.out_end - self.out_pos)
   guard total > 0 else { return }
+  let source = (self.wpos - self.copy_dist) & (WINDOW_SIZE - 1)
+  let target = self.wpos & (WINDOW_SIZE - 1)
+  if (total <= SHORT_MATCH_COPY || self.fixed_out is None) &&
+    source <= WINDOW_SIZE - total &&
+    target <= WINDOW_SIZE - total {
+    // Most matches are a few bytes long and wrap neither range: two bulk
+    // copies cost more than the bytes. A view has no bulk copy at all, so
+    // there every such match is one loop instead of a window copy and a
+    // second pass. A forward byte loop is DEFLATE's own definition of a
+    // match, so it is right for every distance.
+    // SAFETY: `source + total` and `target + total` are at most
+    // `WINDOW_SIZE`, the window's length, and `total` is at most
+    // `out_end - out_pos`, the room left in the output of this step.
+    let window = self.window
+    let out_pos = self.out_pos
+    if self.fixed_out is Some(output) {
+      for i in 0..<total {
+        let byte = window.unsafe_get(source + i)
+        window.unsafe_set(target + i, byte)
+        output.unsafe_set(out_pos + i, byte)
+      }
+    } else {
+      let output = self.out
+      for i in 0..<total {
+        let byte = window.unsafe_get(source + i)
+        window.unsafe_set(target + i, byte)
+        output.unsafe_set(out_pos + i, byte)
+      }
+    }
+    self.out_pos = out_pos + total
+    self.advance_window(total)
+    self.copy_remaining = self.copy_remaining - total
+    return
+  }
   if self.copy_dist == 1 {
     let repeated = self.window[(self.wpos - 1) & (WINDOW_SIZE - 1)]
     let mut remaining = total
