@@ -569,14 +569,9 @@ fn MemDecoder::decode_batch(
       // bytes fitting below bit 63; afterwards 56..63 bits are available.
       // Higher loaded bits are lookahead from the same unconsumed input. They
       // agree with the next refill's OR and are discarded on batch exit.
-      let loaded = UInt64::extend_uint(input[cursor].to_uint()) |
-        (UInt64::extend_uint(input[cursor + 1].to_uint()) << 8) |
-        (UInt64::extend_uint(input[cursor + 2].to_uint()) << 16) |
-        (UInt64::extend_uint(input[cursor + 3].to_uint()) << 24) |
-        (UInt64::extend_uint(input[cursor + 4].to_uint()) << 32) |
-        (UInt64::extend_uint(input[cursor + 5].to_uint()) << 40) |
-        (UInt64::extend_uint(input[cursor + 6].to_uint()) << 48) |
-        (UInt64::extend_uint(input[cursor + 7].to_uint()) << 56)
+      // SAFETY: `can_decode_token` holds `0 <= pos <= input_length - 8`
+      // and `cursor` is `pos`: the eight bytes lie inside the view.
+      let loaded = input.unsafe_read_uint64_le(cursor)
       let bytes = (63 - remaining) >> 3
       word = word | (loaded << remaining)
       remaining += bytes << 3
