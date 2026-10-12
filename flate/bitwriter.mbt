@@ -121,8 +121,29 @@ fn BitWriter::write_bytes(
       self.overflowed = true
     }
   } else {
-    self.out.push_iter(input[offset:offset + length].iter())
+    append_payload(self.out, input[offset:offset + length])
   }
+}
+
+///|
+/// Append a byte-aligned payload to the growing array sink. Core has no bulk
+/// append of bytes to an array of bytes: stage them in a fixed array, which
+/// appends as one block.
+#cfg(not(target="js"))
+fn append_payload(out : Array[Byte], payload : BytesView) -> Unit {
+  let staged = FixedArray::make(payload.length(), b'\x00')
+  staged.blit_from_bytesview(0, payload)
+  out.append(staged)
+}
+
+///|
+/// On js the staged block gains little (the array sink itself is the cost:
+/// 5 to 7 % at level 0), and once it has run, V8 runs the decoders of the
+/// same process 9 to 17 % slower (measured with node 25; they share no code
+/// with this function). Keep the byte iterator there.
+#cfg(target="js")
+fn append_payload(out : Array[Byte], payload : BytesView) -> Unit {
+  out.push_iter(payload.iter())
 }
 
 ///|
