@@ -74,6 +74,102 @@ fn adler_groups_end(start : Int32, end : Int32) -> Int32 {
 }
 
 ///|
+/// `Bytes` and `FixedArray[Byte]` share one backing layout on these backends;
+/// the borrowed array only feeds the vector loads of `fold_chunks16`.
+#cfg(any(target="native", target="wasm"))
+fn adler_bytes_as_fixedarray(data : Bytes) -> FixedArray[Byte] = "%identity"
+
+///|
+#cfg(any(target="native", target="wasm"))
+#inline
+fn adler_lane_sum(lanes : V128) -> Int32 {
+  (@v128.i32x4_extract_lane(lanes, 0) +
+  @v128.i32x4_extract_lane(lanes, 1) +
+  @v128.i32x4_extract_lane(lanes, 2) +
+  @v128.i32x4_extract_lane(lanes, 3)).reinterpret_as_int()
+}
+
+///|
+/// Fold the whole 16-byte chunks of `data[start:end)` into the unreduced sums
+/// and return the position behind them, as zlib-rs's NEON kernel does: for a
+/// chunk `d0..d15`, `a` gains the plain sum and `b` gains `16 * a` (with `a`
+/// from before the chunk) plus the weighted sum `16*d0 + 15*d1 + ... + d15`.
+/// The lanes collect, over all chunks, the plain sums (`sums`), the plain
+/// sums of the chunks before each chunk (`before`) and the weighted sums
+/// (`weighted`). Every lane and every partial sum is at most the serial
+/// loop's `b` after the same bytes, so the caller's block bound holds and the
+/// reduced result is the same.
+///
+/// The caller passes `0 <= start <= end <= data.length()` with `a` and `b`
+/// reduced and at most `ADLER_BLOCK_SIZE` bytes in between.
+#cfg(any(target="native", target="wasm"))
+fn Adler32::fold_chunks16(
+  self : Adler32,
+  data : BytesView,
+  start : Int32,
+  end : Int32,
+) -> Int32 {
+  let chunks = (end - start) / 16
+  guard chunks > 0 else { return start }
+  let bytes = adler_bytes_as_fixedarray(data.data())
+  let offset = data.start_offset() + start
+  let weights_low = @v128.i16x8_const(16, 15, 14, 13, 12, 11, 10, 9)
+  let weights_high = @v128.i16x8_const(8, 7, 6, 5, 4, 3, 2, 1)
+  let mut sums = @v128.i32x4_splat(0)
+  let mut before = @v128.i32x4_splat(0)
+  let mut weighted = @v128.i32x4_splat(0)
+  for chunk in 0..<chunks {
+    // SAFETY: `chunk < chunks` gives `start + 16 * chunk + 16 <= end`, and
+    // `end <= data.length()`: the sixteen bytes lie inside the view, hence
+    // inside its backing bytes.
+    let block = @v128.v128_load(bytes, offset + chunk * 16)
+    before = @v128.i32x4_add(before, sums)
+    sums = @v128.i32x4_add(
+      sums,
+      @v128.i32x4_extadd_pairwise_i16x8_u(
+        @v128.i16x8_extadd_pairwise_i8x16_u(block),
+      ),
+    )
+    // Zero-extended bytes times weights of at most 16: the signed 16-bit
+    // products of the dot product are exact.
+    weighted = @v128.i32x4_add(
+      weighted,
+      @v128.i32x4_dot_i16x8_s(
+        @v128.i16x8_extend_low_i8x16_u(block),
+        weights_low,
+      ),
+    )
+    weighted = @v128.i32x4_add(
+      weighted,
+      @v128.i32x4_dot_i16x8_s(
+        @v128.i16x8_extend_high_i8x16_u(block),
+        weights_high,
+      ),
+    )
+  }
+  let length = chunks * 16
+  self.b = self.b +
+    length * self.a +
+    (adler_lane_sum(before) << 4) +
+    adler_lane_sum(weighted)
+  self.a = self.a + adler_lane_sum(sums)
+  start + length
+}
+
+///|
+/// Without vector lanes the eight-byte groups fold the whole block.
+#cfg(not(any(target="native", target="wasm")))
+#inline
+fn Adler32::fold_chunks16(
+  _self : Adler32,
+  _data : BytesView,
+  start : Int32,
+  _end : Int32,
+) -> Int32 {
+  start
+}
+
+///|
 /// Fold `data` into the running checksum.
 pub fn Adler32::update(self : Adler32, data : BytesView) -> Unit {
   let mut a = self.a
@@ -89,8 +185,14 @@ pub fn Adler32::update(self : Adler32, data : BytesView) -> Unit {
     // reduced result is the same.
     let mut a_sum = 0
     let mut weighted_sum = 0
-    let mut i = start
-    let groups_end = adler_groups_end(start, end)
+    // Whole 16-byte chunks go through vector lanes where those are real;
+    // the groups below then fold what is left of the block.
+    self.a = a
+    self.b = b
+    let mut i = self.fold_chunks16(data, start, end)
+    a = self.a
+    b = self.b
+    let groups_end = adler_groups_end(i, end)
     while i < groups_end {
       let packed = adler_group8(data, i)
       let weighted = packed >> 16
