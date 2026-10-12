@@ -889,7 +889,7 @@ fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
   self.pos = self.pos - (self.bit_count >> 3)
   self.bitbuf = 0
   self.bit_count = 0
-  if self.pos + 4 > self.input.length() {
+  if !has_bytes_from(self.pos, 4, self.input.length()) {
     raise InflateError(Truncated, "unexpected end of input")
   }
   let len = self.input[self.pos].to_int() |
@@ -898,7 +898,7 @@ fn MemDecoder::stored_block(self : MemDecoder) -> Unit raise InflateError {
     (self.input[self.pos + 3].to_int() << 8)
   self.pos = self.pos + 4
   validate_stored_length(len, nlen)
-  if self.pos + len > self.input.length() {
+  if !has_bytes_from(self.pos, len, self.input.length()) {
     raise InflateError(Truncated, "unexpected end of input")
   }
   self.copy_stored(len)

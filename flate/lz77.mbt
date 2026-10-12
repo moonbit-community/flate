@@ -468,6 +468,15 @@ fn match_candidate_can_beat(
 }
 
 ///|
+/// Whether `count` bytes lie in `[position, end)`, for `position <= end`.
+/// Written as a difference: `position + count <= end` wraps for a position
+/// within `count` of `Int`'s maximum and then admits a read past the end.
+#inline
+fn has_bytes_from(position : Int32, count : Int32, end : Int32) -> Bool {
+  end - position >= count
+}
+
+///|
 /// Find a recent length-3 match, then search the independent 4-byte chain.
 /// Keep the existing per-level budget and nice/good/lazy tuning unchanged.
 fn MatchFinder::find_match_hashed(
@@ -990,7 +999,7 @@ fn tokenize(
     // The current position is searched and inserted in the same iteration.
     // Carry its packed word/hash across both operations so incompressible
     // input pays for one load and multiply instead of two.
-    let has_word = i + 4 <= n
+    let has_word = has_bytes_from(i, 4, n)
     let mut prefix = 0U
     let mut product = 0U
     if has_word {
@@ -999,7 +1008,8 @@ fn tokenize(
     }
     // Skip the search when the deferred match is already >= max_lazy: it is
     // good enough to commit without looking for a longer one (zlib).
-    let searching = i + 3 <= n && !(have_prev && prev_len >= max_lazy)
+    let searching = has_bytes_from(i, 3, n) &&
+      !(have_prev && prev_len >= max_lazy)
     let base = if have_prev {
       prev_len - (if cost_model { 1 } else { 0 })
     } else {
@@ -1282,7 +1292,14 @@ fn set_chain_previous(
 ) -> Unit {
   // Every reachable predecessor is older. Saturate expired links to a
   // distance beyond the window, which also fits in an unsigned 16-bit slot.
-  let delta = (position - previous).min(WINDOW_SIZE + 1)
+  // An expired head can lie more than `Int`'s range below `position` (a head
+  // of an earlier stream, moved further down by a rebase), so compare before
+  // subtracting: `position` is not negative.
+  let delta = if previous < position - WINDOW_SIZE {
+    WINDOW_SIZE + 1
+  } else {
+    position - previous
+  }
   let index = (position & WINDOW_MASK) * 2
   chain.unsafe_set(index, delta.to_byte())
   chain.unsafe_set(index + 1, (delta >> 8).to_byte())

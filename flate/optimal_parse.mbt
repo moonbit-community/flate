@@ -29,7 +29,7 @@ fn insert_optimal_pos(
   n : Int32,
   seed_from : Int32,
 ) -> Unit {
-  if i + 3 <= n {
+  if has_bytes_from(i, 3, n) {
     let h = hash3(data, i)
     prev[i - seed_from] = head[h]
     head[h] = i
@@ -64,7 +64,7 @@ fn collect_matches(
   for i in start..<end {
     let frontier : Array[MatchRange] = []
     let limit = (end - i).min(258)
-    if limit >= 3 && i + 3 <= n {
+    if limit >= 3 && has_bytes_from(i, 3, n) {
       let h = hash3(data, i)
       let mut cand = head[h]
       let mut best = 2
