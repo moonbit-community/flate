@@ -126,6 +126,35 @@ fn BitWriter::write_bytes(
 }
 
 ///|
+/// Write the first `length` bytes of `bytes`, exactly as `length` calls of
+/// `write_byte` would: a direct writer keeps counting past its capacity and
+/// records the overflow. Only the 64-bit token writer hands bytes over in bulk.
+#cfg(any(target="native", target="wasm"))
+fn BitWriter::write_array(
+  self : BitWriter,
+  bytes : FixedArray[Byte],
+  length : Int32,
+) -> Unit {
+  if self.direct_output is Some(output) {
+    let output = if self.growable && length > output.length() - self.direct_pos {
+      self.grow(output, self.direct_pos + length)
+    } else {
+      output
+    }
+    let count = length.min((output.length() - self.direct_pos).max(0))
+    if count > 0 {
+      bytes.blit_to(output, len=count, dst_offset=self.direct_pos)
+    }
+    self.direct_pos = self.direct_pos + length
+    if count < length {
+      self.overflowed = true
+    }
+  } else {
+    self.out.append(bytes[:length])
+  }
+}
+
+///|
 fn BitWriter::write_bit(self : BitWriter, bit : Int32) -> Unit {
   self.bitbuf = self.bitbuf | (bit << self.bit_count)
   self.bit_count = self.bit_count + 1
