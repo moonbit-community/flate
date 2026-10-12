@@ -194,13 +194,18 @@ fn Deflater::drain_output(
   write_pos : Int32,
   out_end : Int32,
 ) -> Int32 {
-  let mut write_pos = write_pos
-  while self.out_pos < self.w.out.length() && write_pos < out_end {
-    output.set(write_pos, self.w.out[self.out_pos])
-    write_pos = write_pos + 1
-    self.out_pos = self.out_pos + 1
+  let pending = self.w.out
+  let from = self.out_pos
+  let count = (pending.length() - from).min(out_end - write_pos)
+  guard count > 0 else { return write_pos }
+  // SAFETY: `count` is positive and at most both `pending.length() - from`
+  // and `out_end - write_pos`; `from` and `write_pos` are non-negative and
+  // `out_end` is `output.length()`. Every index below is in bounds.
+  for k in 0..<count {
+    output.unsafe_set(write_pos + k, pending.unsafe_get(from + k))
   }
-  write_pos
+  self.out_pos = from + count
+  write_pos + count
 }
 
 ///|
