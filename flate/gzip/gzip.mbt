@@ -205,6 +205,11 @@ pub fn decompress(input : BytesView) -> Bytes raise GzipError {
       raise GzipError(InvalidHeader, "gzip: bad magic")
     }
     let (payload, next_p) = gunzip_decode_member(input, p, n, decoder)
+    // The usual file is one member and nothing else: its payload is the
+    // result, with no joining buffer to copy it through.
+    if p == 0 && next_p == n {
+      return payload
+    }
     out.write_bytes(payload)
     p = next_p
   }
