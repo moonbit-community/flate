@@ -1045,8 +1045,10 @@ pub fn inflate_all(
 }
 
 ///|
-/// A reusable, whole-buffer raw DEFLATE decompressor. It decodes directly into
-/// caller-owned storage while retaining Huffman and dynamic-header workspace
+/// A reusable, whole-buffer raw DEFLATE decompressor. It decodes the stream at
+/// the front of its input, into caller-owned storage (`decompress_into`) or
+/// into new `Bytes` (`decompress`), and says how much input the stream took
+/// (`last_consumed`), while retaining Huffman and dynamic-header workspace
 /// across streams.
 pub struct Decompressor {
   priv decoder : MemDecoder
@@ -1060,10 +1062,10 @@ pub fn Decompressor::Decompressor() -> Decompressor {
 }
 
 ///|
-/// Number of input bytes the latest `decompress_into` took: the DEFLATE stream
-/// up to and including the byte that holds the last bit of its final block.
-/// `input[last_consumed():]` is what the call ignored, a container's trailer
-/// for one. Zero initially and after a call raises.
+/// Number of input bytes the latest `decompress_into` or `decompress` took:
+/// the DEFLATE stream up to and including the byte that holds the last bit of
+/// its final block. `input[last_consumed():]` is what the call ignored, a
+/// container's trailer for one. Zero initially and after a call raises.
 pub fn Decompressor::last_consumed(self : Decompressor) -> Int32 {
   self.consumed
 }
@@ -1089,6 +1091,48 @@ pub fn Decompressor::decompress_into(
   let length = self.decoder.out.length
   self.decoder.release_buffers()
   length
+}
+
+///|
+/// First output capacity of `Decompressor::decompress`. Its input may reach
+/// far beyond the stream it decodes, one member of a file of thousands, so the
+/// length of the input is no measure of the output as it is in `inflate_all`:
+/// a call starts with at most this much, and growth does the rest. Allocating
+/// and clearing it is what a call costs before it decodes anything, which
+/// shows on members of a few hundred bytes; doubling from here costs a large
+/// stream nothing that can be measured.
+const PREFIX_OUTPUT_CAPACITY : Int32 = 16384
+
+///|
+/// Decompress `input` into new `Bytes` that grow with the output, as
+/// `inflate_all` does, while retaining the Huffman and dynamic-header workspace
+/// across streams. Bytes after the final DEFLATE block are ignored;
+/// `last_consumed` tells where they start, which is how a container finds the
+/// trailer of a member whose length it does not know.
+///
+/// The output is unbounded and the call cannot be cancelled: a convenience for
+/// trusted input. To reject bytes after the stream, use `inflate_exact`. For a
+/// prefix decode with a bound, use `decompress_into` (an output of the size
+/// allowed, and a `cancelled` callback) or the streaming `Inflater`; both
+/// report the input they consumed.
+///
+/// After an error the decompressor is ready for the next stream as it is, and
+/// `last_consumed()` is zero.
+pub fn Decompressor::decompress(
+  self : Decompressor,
+  input : BytesView,
+) -> Bytes raise InflateError {
+  self.consumed = 0
+  let decoder = self.decoder
+  decoder.reset_into(input, [], None)
+  // Not the caller's storage: an output of its own, which grows.
+  decoder.out = DecodeOutput(input.length().min(PREFIX_OUTPUT_CAPACITY))
+  errdefer decoder.release_buffers()
+  decoder.run()
+  self.consumed = decoder.consumed()
+  let decoded = decoder.out.to_bytes()
+  decoder.release_buffers()
+  decoded
 }
 
 ///|

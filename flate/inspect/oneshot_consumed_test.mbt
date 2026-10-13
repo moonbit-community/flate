@@ -180,3 +180,88 @@ test "Decompressor::last_consumed is zero after a call that raises" {
     @test.assert_eq(decompressor.last_consumed(), stream.length())
   }
 }
+
+///|
+/// `Decompressor::decompress` answers as `inflate_all` does, from one reused
+/// decompressor, and reports where each stream ended.
+test "Decompressor::decompress decodes a prefix and reports its length" {
+  let decompressor = @flate.Decompressor()
+  let check = (label : String, input : BytesView) => {
+    let got = pin_raw(() => decompressor.decompress(input))
+    let (expected, used) = match pin_streaming(input) {
+      Ok((bytes, used)) => (Ok(bytes), used)
+      Err((kind, message)) => (Err("\{kind}: \{message}"), 0)
+    }
+    pin_check("\{label} decompress", got, expected)
+    guard decompressor.last_consumed() == used else {
+      fail("\{label}: took \{decompressor.last_consumed()} bytes, not \{used}")
+    }
+  }
+  for stream in pin_streams() {
+    let (name, _, raw) = stream
+    pin_mutations(name, raw, check, spread=6)
+  }
+}
+
+///|
+/// One value, both methods in turn: each call is a new stream, whatever the
+/// call before it was and however it ended. After `decompress` the output of
+/// `decompress_into` is the caller's again and does not grow; after
+/// `decompress_into` the output of `decompress` does.
+test "decompress and decompress_into take turns on one decompressor" {
+  let plain = pin_pdf_text(10000)
+  let stream = @flate.deflate_all(plain)
+  let output = FixedArray::make(plain.length(), b'\x00')
+  let short = FixedArray::make(plain.length() - 1, b'\x00')
+  let decompressor = @flate.Decompressor()
+  // The first call of a fresh value may be either.
+  @test.assert_eq(decompressor.last_consumed(), 0)
+  @test.assert_eq(decompressor.decompress(stream + b"behind"), plain)
+  @test.assert_eq(decompressor.last_consumed(), stream.length())
+  let growing = (input : BytesView) => {
+    pin_show(pin_raw(() => decompressor.decompress(input)))
+  }
+  let steps : Array[(String, () -> String, Int32)] = [
+    (
+      "10000 bytes",
+      () => pin_into(decompressor, stream, output),
+      stream.length(),
+    ),
+    ("10000 bytes", () => growing(stream), stream.length()),
+    (
+      "OutputLimitExceeded: decoded output exceeds output buffer",
+      () => pin_into(decompressor, stream, short),
+      0,
+    ),
+    ("10000 bytes", () => growing(stream), stream.length()),
+    (
+      "Truncated: unexpected end of input",
+      () => growing(stream[:stream.length() - 1]),
+      0,
+    ),
+    (
+      "10000 bytes",
+      () => pin_into(decompressor, stream, output),
+      stream.length(),
+    ),
+    ("Corrupt: corrupt: reserved block type", () => growing(b"\x07"), 0),
+    ("0 bytes", () => growing(@flate.deflate_all(b"")), 2),
+    (
+      "OutputLimitExceeded: decoded output exceeds output buffer",
+      () => pin_into(decompressor, stream, short),
+      0,
+    ),
+    (
+      "Cancelled: cancelled by caller",
+      () => pin_into(decompressor, stream, output, cancelled=() => true),
+      0,
+    ),
+    ("10000 bytes", () => growing(stream + b"behind"), stream.length()),
+  ]
+  for step in steps {
+    let (expected, call, consumed) = step
+    @test.assert_eq(call(), expected)
+    @test.assert_eq(decompressor.last_consumed(), consumed)
+  }
+  @test.assert_eq(decompressor.decompress(stream), plain)
+}
