@@ -58,8 +58,10 @@ test "README caller-buffer DEFLATE" {
 
 `deflate_into` and `inflate_into` are single-use convenience forms of those
 methods. Like `inflate_all`, `inflate_into` ignores trailing bytes after a valid
-final DEFLATE block. Use the streaming APIs when input or output must suspend
-under backpressure.
+final DEFLATE block; after `Decompressor::decompress_into`,
+`Decompressor::last_consumed()` is the number of input bytes the stream took, so
+a caller can find a trailer that follows it. Use the streaming APIs when input
+or output must suspend under backpressure.
 
 `Compressor::compress(input)` returns independent `Bytes` and reuses its
 workspace across calls, without requiring a caller-owned output buffer.

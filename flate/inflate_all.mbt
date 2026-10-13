@@ -941,6 +941,16 @@ fn MemDecoder::run(self : MemDecoder) -> Unit raise InflateError {
 }
 
 ///|
+/// After `run` has returned: how many bytes of the input the stream took, up
+/// to and including the byte that holds the last bit of its final block.
+/// `pos` counts every byte that was read into the reservoir, and the reservoir
+/// is filled ahead of the decoder in whole bytes: those still unread in it
+/// are behind the stream. The bits of a started byte belong to it.
+fn MemDecoder::consumed(self : MemDecoder) -> Int32 {
+  self.pos - (self.bit_count >> 3)
+}
+
+///|
 /// Decompress a raw DEFLATE stream held entirely in memory. Bytes after the
 /// final block are ignored; use `inflate_exact` when an exact framing boundary
 /// is required. Omit `max_output` for unbounded output, or supply a non-negative
@@ -975,29 +985,42 @@ pub fn inflate_all(
 /// across streams.
 pub struct Decompressor {
   priv decoder : MemDecoder
+  priv mut consumed : Int32 // input the latest successful call took
 }
 
 ///|
 /// Create a reusable whole-buffer decompressor.
 pub fn Decompressor::Decompressor() -> Decompressor {
-  { decoder: MemDecoder(b"", () => false), }
+  { decoder: MemDecoder(b"", () => false), consumed: 0, }
+}
+
+///|
+/// Number of input bytes the latest `decompress_into` took: the DEFLATE stream
+/// up to and including the byte that holds the last bit of its final block.
+/// `input[last_consumed():]` is what the call ignored, a container's trailer
+/// for one. Zero initially and after a call raises.
+pub fn Decompressor::last_consumed(self : Decompressor) -> Int32 {
+  self.consumed
 }
 
 ///|
 /// Decompress `input` into `output`, returning the number of bytes written.
 /// The complete output must fit in `output`; otherwise this raises
 /// `InflateError(OutputLimitExceeded, _)`. As with `inflate_all`, bytes after
-/// the final DEFLATE block are ignored. Reuse one `Decompressor` and output
-/// buffer to avoid per-stream decoder and result-buffer allocation.
+/// the final DEFLATE block are ignored; `last_consumed` tells where they
+/// start. Reuse one `Decompressor` and output buffer to avoid per-stream
+/// decoder and result-buffer allocation.
 pub fn Decompressor::decompress_into(
   self : Decompressor,
   input : BytesView,
   output : FixedArray[Byte],
   cancelled? : () -> Bool,
 ) -> Int32 raise InflateError {
+  self.consumed = 0
   self.decoder.reset_into(input, output, cancelled)
   errdefer self.decoder.release_buffers()
   self.decoder.run()
+  self.consumed = self.decoder.consumed()
   let length = self.decoder.out.length
   self.decoder.release_buffers()
   length
