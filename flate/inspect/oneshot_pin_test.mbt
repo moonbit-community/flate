@@ -395,3 +395,27 @@ test "inflate_exact polls its callback once per step and enforces its limit" {
     "OutputLimitExceeded: max_output must be non-negative",
   )
 }
+
+///|
+fn pin_forward(
+  input : Bytes,
+  cancelled? : () -> Bool,
+) -> Bytes raise @flate.InflateError {
+  @flate.inflate_exact(input, cancelled?)
+}
+
+///|
+/// `cancelled` is an optional argument: a caller forwards the callback it may
+/// have, and without one nothing is polled.
+test "inflate_exact takes the callback its caller may have" {
+  let source = Bytes::makei(20000, i => (i * 31 + i / 7).to_byte())
+  let input = @flate.deflate_all(source)
+  @test.assert_eq(pin_forward(input), source)
+  let mut polls = 0
+  let counting = () => {
+    polls += 1
+    false
+  }
+  @test.assert_eq(pin_forward(input, cancelled=counting), source)
+  @test.assert_eq(polls, 4)
+}

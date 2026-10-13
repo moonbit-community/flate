@@ -1170,10 +1170,18 @@ fn inflate_streaming_all(
 ///    allocation. Peak memory stays at roughly one decoded output, at the cost
 ///    of roughly double the decode work; the default `false` grows one buffer
 ///    in a single pass, trading transient memory for one decode pass.
+///
+/// With none of the three there is nothing to poll, to bound or to count, and
+/// the stream is decoded by the in-memory decoder of `inflate_all` instead of
+/// in steps; the input it consumed tells whether anything follows the final
+/// block. The result and the errors of a malformed, truncated or extended
+/// stream are those of the stepping decoder. An output beyond the 2 GiB that
+/// `Bytes` can hold raises `InflateError(OutputLimitExceeded, _)` on this path,
+/// as it does with `preallocated`.
 pub fn inflate_exact(
   input : BytesView,
   max_output? : Int32,
-  cancelled~ : () -> Bool = () => false,
+  cancelled? : () -> Bool,
   preallocated~ : Bool = false,
 ) -> Bytes raise InflateError {
   if max_output is Some(limit) {
@@ -1181,6 +1189,16 @@ pub fn inflate_exact(
       raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
     }
   }
+  guard max_output is Some(_) || cancelled is Some(_) || preallocated else {
+    let decoder = MemDecoder(input, no_cancellation)
+    decoder.set_cancellation(None)
+    decoder.run()
+    guard decoder.consumed() == input.length() else {
+      raise InflateError(TrailingData, "trailing data after DEFLATE stream")
+    }
+    return decoder.out.to_bytes()
+  }
+  let cancelled = cancelled.unwrap_or(no_cancellation)
   if preallocated {
     inflate_preallocated(input, max_output, cancelled)
   } else {

@@ -180,7 +180,10 @@ deterministic decode a second time into one exactly sized allocation. The
 preallocated mode trades roughly double the decode work for a peak memory of
 about one decoded output (instead of a growing buffer plus a final copy), which
 matters for very large single streams. The default stays single-pass for
-callers that do not need the memory bound.
+callers that do not need the memory bound. Called with the input alone,
+`inflate_exact` runs on the in-memory decoder of `inflate_all`; a limit, a
+callback or `preallocated` selects the stepping decoder, which gives the same
+result and the same error for a malformed, truncated or extended stream.
 
 ## ZIP container
 
@@ -262,8 +265,10 @@ across its encoding and decoding paths:
 | Streaming decompression | `inflate.mbt` |
 | Shared decoding tables and validation | `huffman_table.mbt`, `tables.mbt`, `decode_rules.mbt` |
 
-Unbounded `inflate_all` uses the direct `MemDecoder` path. Bounded
-`inflate_all` and `inflate_exact` drive the streaming inflater.
+Unbounded `inflate_all` uses the direct `MemDecoder` path, and so does
+`inflate_exact` called with the input alone. Bounded `inflate_all`, and
+`inflate_exact` with a limit, a callback or `preallocated`, drive the streaming
+inflater.
 `Decompressor::decompress_into` uses the direct decoder with caller-owned output.
 Differential tests compare one-shot and streaming decoding across randomized
 chunk/output schedules, truncations and bit flips.
