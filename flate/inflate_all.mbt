@@ -192,6 +192,41 @@ fn copy_match_bytes_scalar(
 }
 
 ///|
+/// Whether a growing output of `capacity` bytes that holds `length` makes room
+/// for one whole token, 258 bytes, before the native batch looks at it: it has
+/// less than that left, and it can still double. Beyond half the size limit
+/// growth is by the byte, so there the checked decoder ends the output as it
+/// always has, growing only for what is decoded.
+#cfg(target="native")
+#inline
+fn reserves_token(capacity : Int32, length : Int32) -> Bool {
+  capacity - length < 258 && capacity <= MAX_DECODE_OUTPUT_SIZE / 2
+}
+
+///|
+/// Make room for one whole token in an output that grows. The native batch
+/// decodes only with that much room, so without this the last 258 bytes before
+/// every growth, and all of an output shorter than its first capacity plus
+/// 258, were left to the checked decoder. The caller's fixed storage is never
+/// replaced.
+#cfg(target="native")
+fn DecodeOutput::reserve_token(self : DecodeOutput) -> Unit {
+  guard !self.fixed_capacity &&
+    reserves_token(self.storage.length(), self.length) else {
+    return
+  }
+  self.storage = FixedArray::make_and_blit(
+    self.storage,
+    allocate_len=grown_decode_output_capacity(
+      self.storage.length(),
+      self.length + 258,
+    ),
+    init=b'\x00',
+    len=self.length,
+  )
+}
+
+///|
 fn DecodeOutput::to_bytes(self : DecodeOutput) -> Bytes {
   Bytes::from_array(self.storage[:self.length])
 }
@@ -538,11 +573,11 @@ fn MemDecoder::decode_batch(
   guard hd is Some(distance_tree) else { return false }
   let input = self.input
   let out = self.out
+  guard input.length() - self.pos >= 8 else { return false }
+  out.reserve_token()
   let storage = out.storage
   let output_end = storage.length().min(self.next_cancel - 1)
-  guard input.length() - self.pos >= 8 && output_end - out.length >= 258 else {
-    return false
-  }
+  guard output_end - out.length >= 258 else { return false }
   let mut bits = UInt64::extend_uint(self.bitbuf)
   let mut count = self.bit_count
   let mut pos = self.pos
