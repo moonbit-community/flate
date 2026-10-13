@@ -233,3 +233,18 @@ test "zlib and gzip report a cut, an extended and a damaged file" {
     "InvalidDeflate: corrupt: invalid literal/length code",
   )
 }
+
+///|
+/// A block-gzipped file is thousands of small members, each handed the rest of
+/// the file: one decoder serves them all.
+test "gzip.decompress decodes a file of thousands of members" {
+  let plain = Bytes::makei(300, i => (i * 7).to_byte())
+  let framed = pin_gzip_frame(@flate.deflate_all(plain), plain)
+  let file = @buffer.Buffer()
+  let joined = @buffer.Buffer()
+  for _ in 0..<3000 {
+    file.write_bytes(framed)
+    joined.write_bytes(plain)
+  }
+  assert_true(@gzip.decompress(file.to_bytes()) == joined.to_bytes())
+}
