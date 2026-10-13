@@ -79,39 +79,20 @@ pub fn compress_optimal(
 }
 
 ///|
-/// Inflate the raw DEFLATE member starting at `input[q:]`; write the compressed
-/// byte count (where the 8-byte trailer begins) to `consumed[0]`. The caller
-/// reuses that scalar cell across members instead of allocating a return tuple.
-/// The streaming inflater's reported consumption lands exactly on the
-/// byte-aligned end of the member's final block.
+/// Inflate the raw DEFLATE member starting at `input[q:]` with the in-memory
+/// decoder, which ignores what follows the member's final block; afterwards
+/// `decoder.last_consumed()` is the compressed byte count, where the 8-byte
+/// trailer begins. The caller reuses one decoder across members.
 fn inflate_member(
   input : BytesView,
   q : Int32,
-  consumed : FixedArray[Int32],
+  decoder : @flate.Decompressor,
 ) -> Bytes raise GzipError {
-  let inf = @flate.Inflater()
-  let out : Array[Byte] = []
-  let buf = FixedArray::make(65536, b'\x00')
-  let mut used = 0
-  for ;; {
-    let st = inf.step_into(input[q + used:], buf) catch {
-      err => raise wrap_inflate_error(err)
-    }
-    let c = inf.last_consumed()
-    let produced = inf.last_produced()
-    used = used + c
-    out.append(buf[:produced])
-    if st is Done {
-      break
-    }
-    if st is NeedMoreInput {
-      // All remaining input was handed over, yet the stream did not end.
-      raise GzipError(Truncated, "gzip: truncated")
-    }
-    // NeedMoreOutput: drain `buf` and continue over the unconsumed tail.
+  decoder.decompress(input[q:]) catch {
+    // All remaining input was handed over, yet the stream did not end.
+    InflateError(Truncated, _) => raise GzipError(Truncated, "gzip: truncated")
+    err => raise wrap_inflate_error(err)
   }
-  consumed[0] = used
-  Bytes::from_array(out)
 }
 
 ///|
@@ -175,7 +156,7 @@ fn gunzip_decode_member(
   input : BytesView,
   p : Int32,
   n : Int32,
-  member_consumed : FixedArray[Int32],
+  decoder : @flate.Decompressor,
 ) -> (Bytes, Int32) raise GzipError {
   guard n - p >= 18 else { raise GzipError(Truncated, "gzip: truncated") }
   guard input[p + 2].to_int() == 0x08 else {
@@ -187,8 +168,8 @@ fn gunzip_decode_member(
   }
   let q = gunzip_optional_fields_end(input, p + 10, flg)
   guard q <= n - 8 else { raise GzipError(Truncated, "gzip: truncated") }
-  let payload = inflate_member(input, q, member_consumed)
-  let trailer = q + member_consumed[0]
+  let payload = inflate_member(input, q, decoder)
+  let trailer = q + decoder.last_consumed()
   guard trailer <= n - 8 else { raise GzipError(Truncated, "gzip: truncated") }
   guard @checksum.crc32(payload) == u32_le(input, trailer) else {
     raise GzipError(ChecksumMismatch, "gzip: CRC-32 mismatch")
@@ -212,7 +193,7 @@ pub fn decompress(input : BytesView) -> Bytes raise GzipError {
   let n = input.length()
   guard n >= 18 else { raise GzipError(Truncated, "gzip: input too short") }
   let out = @buffer.Buffer()
-  let member_consumed = FixedArray::make(1, 0)
+  let decoder = @flate.Decompressor()
   let mut p = 0
   for ;; {
     // Stop once no further member begins: clean end or trailing garbage. A
@@ -223,7 +204,7 @@ pub fn decompress(input : BytesView) -> Bytes raise GzipError {
       guard p == 0 else { break }
       raise GzipError(InvalidHeader, "gzip: bad magic")
     }
-    let (payload, next_p) = gunzip_decode_member(input, p, n, member_consumed)
+    let (payload, next_p) = gunzip_decode_member(input, p, n, decoder)
     out.write_bytes(payload)
     p = next_p
   }
