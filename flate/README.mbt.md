@@ -65,6 +65,27 @@ or output must suspend under backpressure.
 
 `Compressor::compress(input)` returns independent `Bytes` and reuses its
 workspace across calls, without requiring a caller-owned output buffer.
+`Decompressor::decompress(input)` is its counterpart: the output grows as in
+`inflate_all`, and `last_consumed()` says where the stream ended. That is how
+to read a stream of unknown length from the front of a buffer and go on behind
+it:
+
+```mbt check
+///|
+test "README prefix decode" {
+  // A record: a raw DEFLATE stream, then whatever follows it.
+  let payload = b"the stream ends with its final block"
+  let record = @flate.deflate_all(payload) + b"what follows"
+  let decompressor = @flate.Decompressor()
+  @test.assert_eq(decompressor.decompress(record), payload)
+  let rest = record[decompressor.last_consumed():]
+  @test.assert_eq(rest.to_owned(), b"what follows")
+}
+```
+
+`decompress` neither bounds its output nor takes a cancellation callback; with
+untrusted input use `decompress_into`, which reports its consumption the same
+way, or the streaming `Inflater`.
 
 The streaming API is a pure push state machine. It owns no I/O object, so both
 synchronous and asynchronous callers can supply input and drain output:
@@ -269,7 +290,8 @@ Unbounded `inflate_all` uses the direct `MemDecoder` path, and so does
 `inflate_exact` called with the input alone. Bounded `inflate_all`, and
 `inflate_exact` with a limit, a callback or `preallocated`, drive the streaming
 inflater.
-`Decompressor::decompress_into` uses the direct decoder with caller-owned output.
+`Decompressor::decompress_into` uses the direct decoder with caller-owned
+output, `Decompressor::decompress` with an output that grows.
 Differential tests compare one-shot and streaming decoding across randomized
 chunk/output schedules, truncations and bit flips.
 
