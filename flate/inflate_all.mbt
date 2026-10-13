@@ -573,7 +573,12 @@ fn MemDecoder::decode_batch(
   guard hd is Some(distance_tree) else { return false }
   let input = self.input
   let out = self.out
-  guard input.length() - self.pos >= 8 else { return false }
+  // The poll counter is ahead of the output, except after a poll within 4096
+  // bytes of the size limit: there it has wrapped below zero, the bound below
+  // would wrap with it, and the checked decoder polls as it always has.
+  guard input.length() - self.pos >= 8 && self.next_cancel > 0 else {
+    return false
+  }
   out.reserve_token()
   let storage = out.storage
   let output_end = storage.length().min(self.next_cancel - 1)
@@ -847,8 +852,33 @@ fn MemDecoder::decode_block(
 }
 
 ///|
-// Fixed blocks do not use the dynamic batch. Dispatch once per block instead
-// of paying for a failed batch probe on every token of small fixed streams.
+/// The fixed literal/length and distance codes (RFC 1951 §3.2.6) as native
+/// data tables: the distance code as a table of thirty-two five-bit codes, of
+/// which the reserved 30 and 31 carry no metadata.
+#cfg(target="native")
+let fixed_data_decoders : (HuffmanDecoder, HuffmanDecoder) = {
+  let litlen = HuffmanDecoder()
+  let distance = HuffmanDecoder()
+  ignore(litlen.initialize_litlen(fixed_ll_len))
+  ignore(distance.initialize_distance(FixedArray::make(32, 5)))
+  (litlen, distance)
+}
+
+///|
+// On native a fixed block is decoded like a dynamic one, by the batch and its
+// checked tail, with the fixed codes as tables. Reading a distance through
+// the table is reading its five bits: both need five bits or the input ends,
+// and both leave the reserved codes to the same check.
+#cfg(target="native")
+fn MemDecoder::decode_fixed_block(self : MemDecoder) -> Unit raise InflateError {
+  let (litlen, distance) = fixed_data_decoders
+  self.decode_block(litlen, Some(distance))
+}
+
+///|
+// Without the batch, dispatch once per block instead of paying for a failed
+// batch probe on every token.
+#cfg(not(target="native"))
 fn MemDecoder::decode_fixed_block(self : MemDecoder) -> Unit raise InflateError {
   for ;; {
     let symbol = self.huff_sym_data(fixed_huffman_decoder)
