@@ -71,17 +71,17 @@ test "incremental ZIP pumps multiple output buffers and reuses the deflater" {
   })
   let out = @buffer.Buffer()
   let writer = Writer(bytes => out.write_bytes(bytes))
-  for name in ["first", "second"] {
-    writer.begin_entry(name, size=payload.length().to_uint64())
-    writer.write(payload)
+  let second = b"a different entry after the large stream"
+  for (name, data) in [("first", payload), ("second", second)] {
+    writer.begin_entry(name, size=data.length().to_uint64())
+    writer.write(data)
     writer.end_entry()
   }
   writer.finish()
   let archive = read(out.to_bytes())
-  for entry in archive.entries() {
-    @test.assert_eq(entry.data().to_owned(), payload)
-    @test.assert_eq(entry.crc32(), @checksum.crc32(payload))
-  }
+  @test.assert_eq(archive.entries().length(), 2)
+  @test.assert_eq(archive.get("first"), Some(payload))
+  @test.assert_eq(archive.get("second"), Some(second))
 }
 
 ///|

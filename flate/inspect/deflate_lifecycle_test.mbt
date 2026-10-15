@@ -85,13 +85,10 @@ test "preset dictionary: raw deflate round-trip" {
     got.push(dbuf[i])
   }
   @test.assert_eq(Bytes::from_array(got), msg)
-  // Without the dictionary: a back-reference reaches before the stream start.
+  // Without the dictionary, the first reference reaches before the stream.
   let inf2 = @flate.Inflater()
-  try {
-    let _ = inf2.step(compressed, dbuf.mut_view())
-  } catch {
-    InflateError(_, _) => ()
-  } noraise {
-    _ => @test.fail("expected the dictionary-less decode to fail")
-  }
+  let InflateError(kind, _) = @test.expect_error(() => {
+    inf2.step(compressed, dbuf.mut_view())
+  })
+  @test.assert_eq(kind, Corrupt)
 }

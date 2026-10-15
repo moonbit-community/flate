@@ -62,10 +62,7 @@ test "inflate_exact preallocated and grow paths agree" {
         @flate.inflate_exact(compressed, preallocated=true),
         source,
       )
-      @test.assert_eq(
-        @flate.inflate_exact(compressed),
-        @flate.inflate_exact(compressed, preallocated=true),
-      )
+      @test.assert_eq(@flate.inflate_exact(compressed), source)
     }
   }
 }

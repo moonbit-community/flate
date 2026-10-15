@@ -34,11 +34,15 @@ test "zlib failed state freezes decoder cursors" {
   let ZlibError(first_kind, first_error) = @test.expect_error(() => {
     decoder.step(malformed, output.mut_view(), end=true)
   })
+  @test.assert_eq(decoder.last_consumed(), 0)
+  @test.assert_eq(decoder.last_produced(), 0)
   let pending_pos = decoder.pending_pos
   let pending_length = decoder.pending.length()
   let ZlibError(repeated_kind, repeated_error) = @test.expect_error(() => {
     decoder.step(b"must not be accepted", output.mut_view())
   })
+  @test.assert_eq(decoder.last_consumed(), 0)
+  @test.assert_eq(decoder.last_produced(), 0)
   assert_true(first_kind == InvalidDeflate)
   assert_true(repeated_kind == first_kind)
   @test.assert_eq(repeated_error, first_error)
@@ -51,17 +55,22 @@ test "zlib failed state freezes decoder cursors" {
 // failures. Known plaintext also catches a bug shared by both entry points.
 test "zlib step_into and offset step views preserve the per-call contract" {
   let source = Bytes::makei(70000, i => {
-    if i % 4096 < 2600 { b"streaming decoders must agree. "[i % 31] }
-    else { ((i * 40503) >> 5).to_byte() }
+    if i % 4096 < 2600 {
+      b"streaming decoders must agree. "[i % 31]
+    } else {
+      ((i * 40503) >> 5).to_byte()
+    }
   })
   for level in [0, 6] {
     let compressed = compress(source, level~)
     let damaged = compressed.to_fixedarray()
-    damaged[compressed.length() - 1] = damaged[compressed.length() - 1] ^ b'\x01'
-    for (stream, expected_error) in [
-      (compressed, None),
-      (Bytes::from_array(damaged), Some(ChecksumMismatch)),
-    ] {
+    damaged[compressed.length() - 1] = damaged[compressed.length() - 1] ^
+      b'\x01'
+    for
+      (stream, expected_error) in [
+        (compressed, None),
+        (Bytes::from_array(damaged), Some(ChecksumMismatch)),
+      ] {
       for (chunk, room) in [(1 << 20, 32768), (33, 7)] {
         let fixed = Decoder()
         let viewed = Decoder()
@@ -73,28 +82,42 @@ test "zlib step_into and offset step views preserve the per-call contract" {
         for ;; {
           let end = (position + chunk).min(stream.length())
           let input = stream[position:end]
-          let status = try fixed.step_into(input, output, end=end == stream.length()) catch {
+          let status = try
+            fixed.step_into(input, output, end=end == stream.length())
+          catch {
             ZlibError(kind, _) => Err(kind)
-          } noraise { status => Ok(status) }
-          let other = try viewed.step(
-            input, padded.mut_view(start=3, end=room + 3),
-            end=end == stream.length(),
-          ) catch {
+          } noraise {
+            status => Ok(status)
+          }
+          let other = try
+            viewed.step(
+              input,
+              padded.mut_view(start=3, end=room + 3),
+              end=end == stream.length(),
+            )
+          catch {
             ZlibError(kind, _) => Err(kind)
-          } noraise { status => Ok(status) }
+          } noraise {
+            status => Ok(status)
+          }
           @test.assert_eq(status, other)
           @test.assert_eq(fixed.last_consumed(), viewed.last_consumed())
           @test.assert_eq(fixed.last_produced(), viewed.last_produced())
           @test.assert_eq(padded[2], b'\xA5')
           @test.assert_eq(padded[room + 3], b'\xA5')
           match status {
-            Err(kind) => { verdict = Some(kind); break }
+            Err(kind) => {
+              verdict = Some(kind)
+              break
+            }
             Ok(status) => {
               let count = fixed.last_produced()
               @test.assert_eq(output[:count], padded[3:3 + count])
               decoded.write_bytes(Bytes::from_array(output[:count]))
               position += fixed.last_consumed()
-              if status is Done { break }
+              if status is Done {
+                break
+              }
               assert_true(fixed.last_consumed() > 0 || count > 0)
             }
           }

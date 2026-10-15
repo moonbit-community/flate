@@ -478,31 +478,32 @@ test "zip entry-count limit" {
 
 ///|
 test "zip per-entry and total uncompressed limits" {
-  try
-    ignore(
-      @zip.read(py_mini, limits=ReadLimits(max_entry_uncompressed_bytes=1)),
+  for compression in [@zip.Store, Deflate] {
+    let archive = @zip.Archive()
+    archive.add("first", b"abc", compression~)
+    archive.add("second", b"def", compression~)
+    let bytes = @zip.write(archive)
+    let parsed = @zip.read(
+      bytes,
+      limits=ReadLimits(
+        max_entry_uncompressed_bytes=3,
+        max_total_uncompressed_bytes=6,
+      ),
     )
-  catch {
-    ZipError(kind, _) =>
-      match kind {
-        LimitExceeded(EntryUncompressedBytes, _, _) => ()
-        _ => @test.fail("expected a per-entry limit")
-      }
-  } noraise {
-    _ => @test.fail("expected a per-entry limit")
-  }
-  try
-    ignore(
-      @zip.read(py_mini, limits=ReadLimits(max_total_uncompressed_bytes=1)),
-    )
-  catch {
-    ZipError(kind, _) =>
-      match kind {
-        LimitExceeded(TotalUncompressedBytes, _, _) => ()
-        _ => @test.fail("expected a total limit")
-      }
-  } noraise {
-    _ => @test.fail("expected a total limit")
+    @test.assert_eq(parsed.get("first"), Some(b"abc"))
+    @test.assert_eq(parsed.get("second"), Some(b"def"))
+    let ZipError(kind, _) = @test.expect_error(() => {
+      @zip.read(bytes, limits=ReadLimits(max_entry_uncompressed_bytes=2))
+    })
+    guard kind is LimitExceeded(EntryUncompressedBytes, _, _) else {
+      @test.fail("expected the per-entry limit")
+    }
+    let ZipError(kind, _) = @test.expect_error(() => {
+      @zip.read(bytes, limits=ReadLimits(max_total_uncompressed_bytes=5))
+    })
+    guard kind is LimitExceeded(TotalUncompressedBytes, _, _) else {
+      @test.fail("expected the cumulative limit")
+    }
   }
 }
 
@@ -568,14 +569,31 @@ test "zip rejects non-archive input" {
 }
 
 ///|
-test "zip rejects a corrupted archive" {
+test "zip rejects corrupted fields with the correct error category" {
   let archive = @zip.Archive()
-  archive.add("a.txt", b"integrity")
-  let bytes = @zip.write(archive).to_array()
-  bytes[0] = bytes[0].lnot()
-  try ignore(@zip.read(Bytes::from_array(bytes))) catch {
-    ZipError(_, _) => ()
-  } noraise {
-    _ => @test.fail("expected a corrupt-archive error")
+  archive.add("a.txt", b"abc", compression=Store)
+  let valid = @zip.write(archive)
+  @test.assert_eq(@zip.read(valid).get("a.txt"), Some(b"abc"))
+  // Stored payload starts after the 30-byte local header and five-byte name.
+  let central = 38
+  @test.assert_eq(valid[central:central + 4], b"PK\x01\x02")
+  let cases : Array[(Array[(Int32, Byte)], @zip.ZipErrorKind)] = [
+    ([(0, b'\x00')], InvalidSignature),
+    ([(6, b'\x01'), (central + 8, b'\x01')], UnsupportedFeature),
+    ([(6, b'\x10'), (central + 8, b'\x10')], UnsupportedFeature),
+    ([(8, b'\x63'), (central + 10, b'\x63')], UnsupportedCompression(99)),
+    ([(30, b'\xFF'), (central + 46, b'\xFF')], InvalidUtf8),
+    ([(35, b'z')], ChecksumMismatch),
+    ([(22, b'\x05'), (central + 24, b'\x05')], UnsupportedFeature),
+  ]
+  for (changes, expected) in cases {
+    let damaged = valid.to_fixedarray()
+    for (at, byte) in changes {
+      damaged[at] = byte
+    }
+    let ZipError(kind, _) = @test.expect_error(() => {
+      @zip.read(Bytes::from_array(damaged))
+    })
+    @test.assert_eq(kind, expected)
   }
 }
