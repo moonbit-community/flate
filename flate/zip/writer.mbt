@@ -32,8 +32,8 @@ fn Output::grow(self : Output, additional : Int32) -> Unit raise ZipError {
       raise ZipError(
         LimitExceeded(
           OutputBytes,
-          limit,
-          self.size + additional.min(0x7fff_ffff - self.size),
+          limit.to_uint64(),
+          self.size.to_uint64() + additional.to_uint64(),
         ),
         "zip: output exceeds its byte limit",
       )
@@ -627,7 +627,11 @@ fn prepare_archive(
     if out.limit is Some(limit) {
       guard 30 + name_bytes.length() <= limit - out.size else {
         raise ZipError(
-          LimitExceeded(OutputBytes, limit, out.size + 30 + name_bytes.length()),
+          LimitExceeded(
+            OutputBytes,
+            limit.to_uint64(),
+            out.size.to_uint64() + 30UL + name_bytes.length().to_uint64(),
+          ),
           "zip: output exceeds its byte limit",
         )
       }

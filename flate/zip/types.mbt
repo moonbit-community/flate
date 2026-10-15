@@ -16,15 +16,14 @@ fn Compression::code(compression : Compression) -> Int32 {
 ///|
 /// Resource bounds applied to a bounded read. Every field is a ceiling in
 /// bytes (or, for `max_entries`, a count); `ReadLimits()` imposes no
-/// limits. `max_preserved_source_bytes` bounds the complete source
-/// retained for byte-preserving rewrites, including prefixes and gaps.
+/// limits beyond the in-memory Int32 capacity. `max_package_bytes` also bounds
+/// the complete source retained for byte-preserving rewrites.
 #valtype
 pub struct ReadLimits {
   max_package_bytes : Int32
   max_entries : Int32
   max_entry_uncompressed_bytes : Int32
   max_total_uncompressed_bytes : Int32
-  max_preserved_source_bytes : Int32
 }
 
 ///|
@@ -36,14 +35,12 @@ pub fn ReadLimits::ReadLimits(
   max_entries~ : Int32 = 0x7fff_ffff,
   max_entry_uncompressed_bytes~ : Int32 = 0x7fff_ffff,
   max_total_uncompressed_bytes~ : Int32 = 0x7fff_ffff,
-  max_preserved_source_bytes~ : Int32 = 0x7fff_ffff,
 ) -> ReadLimits {
   {
     max_package_bytes,
     max_entries,
     max_entry_uncompressed_bytes,
     max_total_uncompressed_bytes,
-    max_preserved_source_bytes,
   }
 }
 
@@ -97,12 +94,6 @@ pub fn Entry::crc32(self : Entry) -> UInt32 {
 }
 
 ///|
-/// Whether the entry uses a trailing data descriptor for its CRC and sizes.
-pub fn Entry::data_descriptor(self : Entry) -> Bool {
-  self.data_descriptor
-}
-
-///|
 /// Raw end-of-archive records captured from a read so a byte-preserving write
 /// can re-emit the trailer (with patched counts/sizes/offsets) instead of
 /// regenerating it.
@@ -130,15 +121,13 @@ pub fn Archive::Archive() -> Archive {
 
 ///|
 /// Append a new entry, retaining its payload as `Bytes`. The default method is
-/// `Deflate`; pass `Store` to keep the payload verbatim. Setting
-/// `data_descriptor=true` emits the entry in streaming form (zeroed local
-/// sizes + a trailing data descriptor).
+/// `Deflate`; pass `Store` to keep the payload verbatim. Serialization chooses
+/// the local-header and descriptor layout; use `Writer` for chunked input.
 pub fn Archive::add(
   self : Archive,
   name : String,
   data : BytesView,
   compression~ : Compression = Deflate,
-  data_descriptor~ : Bool = false,
 ) -> Unit {
   let data = data.to_owned()
   self.original = None
@@ -146,7 +135,7 @@ pub fn Archive::add(
     name,
     data,
     compression,
-    data_descriptor,
+    data_descriptor: false,
     crc32: @checksum.crc32(data),
     compressed_size: data.length(),
     source: None,

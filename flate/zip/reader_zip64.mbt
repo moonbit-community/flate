@@ -26,12 +26,14 @@ fn extra_field_at(
 /// Reads the ZIP64 (0x0001) extra field, returning the requested 64-bit
 /// uncompressed/compressed sizes and local-header offset, plus the position of
 /// the offset field within `extra` (for patching preserved central records).
-/// `need_*` selects which fields must be present, in APPNOTE order.
+/// `need_*` selects which fields must be present, in APPNOTE order. A required
+/// disk-start field must resolve to zero; split archives remain unsupported.
 fn read_zip64_extra(
   extra : BytesView,
   need_uncomp : Bool,
   need_comp : Bool,
   need_offset : Bool,
+  need_disk~ : Bool = false,
 ) -> (UInt64?, UInt64?, UInt64?, Int32?) raise ZipError {
   let mut pos = 0
   while pos < extra.length() {
@@ -41,7 +43,7 @@ fn read_zip64_extra(
       let count = (if need_uncomp { 1 } else { 0 }) +
         (if need_comp { 1 } else { 0 }) +
         (if need_offset { 1 } else { 0 })
-      if data_size != 8 * count {
+      if data_size != 8 * count + (if need_disk { 4 } else { 0 }) {
         raise ZipError(
           UnsupportedFeature,
           "zip: zip64 extra field size mismatch",
@@ -51,6 +53,14 @@ fn read_zip64_extra(
       let uncomp = if need_uncomp { Some(reader.read_u64_raw()) } else { None }
       let comp = if need_comp { Some(reader.read_u64_raw()) } else { None }
       let offset = if need_offset { Some(reader.read_u64_raw()) } else { None }
+      if need_disk {
+        guard reader.read_u32_raw() == 0U else {
+          raise ZipError(
+            UnsupportedFeature,
+            "zip: multi-disk archives are not supported",
+          )
+        }
+      }
       let offset_position = if need_offset {
         Some(
           data_offset +
@@ -63,7 +73,7 @@ fn read_zip64_extra(
       return (uncomp, comp, offset, offset_position)
     }
   }
-  if need_uncomp || need_comp || need_offset {
+  if need_uncomp || need_comp || need_offset || need_disk {
     raise ZipError(
       UnsupportedFeature,
       "zip: required zip64 extra field is missing",
@@ -159,7 +169,7 @@ fn data_descriptor_matches(
 fn data_descriptor_size(
   bytes : BytesView,
   offset : Int32,
-  meta : EntryMeta,
+  meta : MemoryEntryMeta,
   zip64 : Bool,
 ) -> Int32 raise ZipError {
   let signed = data_descriptor_matches(

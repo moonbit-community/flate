@@ -20,7 +20,7 @@ pub struct Archive {
   // private fields
 }
 pub fn Archive::Archive() -> Self
-pub fn Archive::add(Self, String, BytesView, compression? : Compression, data_descriptor? : Bool) -> Unit
+pub fn Archive::add(Self, String, BytesView, compression? : Compression) -> Unit
 pub fn Archive::clone(Self) -> Self
 pub fn Archive::comment(Self) -> BytesView
 pub fn Archive::entries(Self) -> ArrayView[Entry]
@@ -35,13 +35,49 @@ pub(all) enum Compression {
 } derive(Eq, @debug.Debug)
 pub fn Compression::equal(Self, Self) -> Bool
 
+pub struct Directory {
+  // private fields
+}
+pub fn Directory::comment(Self) -> BytesView
+pub fn Directory::entries(Self) -> ArrayView[DirectoryEntry]
+
+pub struct DirectoryEntry {
+  // private fields
+}
+pub fn DirectoryEntry::compressed_size(Self) -> UInt64
+pub fn DirectoryEntry::crc32(Self) -> UInt
+pub fn DirectoryEntry::creator_system(Self) -> Int
+pub fn DirectoryEntry::dos_date(Self) -> Int
+pub fn DirectoryEntry::dos_time(Self) -> Int
+pub fn DirectoryEntry::external_attributes(Self) -> UInt
+pub fn DirectoryEntry::is_directory(Self) -> Bool
+pub fn DirectoryEntry::is_encrypted(Self) -> Bool
+pub fn DirectoryEntry::method_id(Self) -> Int
+pub fn DirectoryEntry::name(Self) -> String
+pub fn DirectoryEntry::uncompressed_size(Self) -> UInt64
+
+pub struct DirectoryLimits {
+  // private fields
+}
+pub fn DirectoryLimits::DirectoryLimits(max_directory_bytes? : UInt64, max_entries? : UInt64) -> Self
+
+pub struct DirectoryReader {
+  // private fields
+}
+pub fn DirectoryReader::DirectoryReader(UInt64, limits? : DirectoryLimits) -> Self
+pub fn DirectoryReader::advance(Self, BytesView) -> DirectoryStep raise ZipError
+
+pub(all) enum DirectoryStep {
+  NeedRead(ReadRange)
+  Done(Directory)
+}
+
 pub struct Entry {
   // private fields
 }
 pub fn Entry::compression(Self) -> Compression
 pub fn Entry::crc32(Self) -> UInt
 pub fn Entry::data(Self) -> BytesView
-pub fn Entry::data_descriptor(Self) -> Bool
 pub fn Entry::name(Self) -> String
 
 pub(all) enum LimitKind {
@@ -49,7 +85,7 @@ pub(all) enum LimitKind {
   Entries
   EntryUncompressedBytes
   TotalUncompressedBytes
-  PreservedSourceBytes
+  DirectoryBytes
   OutputBytes
 } derive(Eq, @debug.Debug)
 pub fn LimitKind::equal(Self, Self) -> Bool
@@ -59,9 +95,14 @@ pub struct ReadLimits {
   max_entries : Int
   max_entry_uncompressed_bytes : Int
   max_total_uncompressed_bytes : Int
-  max_preserved_source_bytes : Int
 }
-pub fn ReadLimits::ReadLimits(max_package_bytes? : Int, max_entries? : Int, max_entry_uncompressed_bytes? : Int, max_total_uncompressed_bytes? : Int, max_preserved_source_bytes? : Int) -> Self
+pub fn ReadLimits::ReadLimits(max_package_bytes? : Int, max_entries? : Int, max_entry_uncompressed_bytes? : Int, max_total_uncompressed_bytes? : Int) -> Self
+
+pub struct ReadRange {
+  // private fields
+}
+pub fn ReadRange::length(Self) -> Int
+pub fn ReadRange::offset(Self) -> UInt64
 
 pub struct Writer {
   // private fields
@@ -84,8 +125,9 @@ pub(all) enum ZipErrorKind {
   InvalidUtf8
   UnsupportedFeature
   InvalidDeflate
+  InvalidRead
   ChecksumMismatch
-  LimitExceeded(LimitKind, Int, Int)
+  LimitExceeded(LimitKind, UInt64, UInt64)
   Cancelled
 } derive(Eq, @debug.Debug)
 pub fn ZipErrorKind::equal(Self, Self) -> Bool

@@ -4,7 +4,8 @@
 /// byte-preserving rewrites.
 
 ///|
-priv struct EntryMeta {
+/// Checked, materializable metadata used only by the whole-buffer reader.
+priv struct MemoryEntryMeta {
   name : String
   name_len : Int32
   flags : Int32
@@ -29,7 +30,7 @@ priv struct LocalRecord {
 ///|
 fn read_local_record(
   bytes : BytesView,
-  meta : EntryMeta,
+  meta : MemoryEntryMeta,
   central_offset : Int32,
 ) -> LocalRecord raise ZipError {
   guard meta.local_offset >= 0 && meta.local_offset < central_offset else {
@@ -117,7 +118,11 @@ fn check_sizes(
 ) -> Unit raise ZipError {
   guard uncompressed_size <= entry_limit else {
     raise ZipError(
-      LimitExceeded(EntryUncompressedBytes, entry_limit, uncompressed_size),
+      LimitExceeded(
+        EntryUncompressedBytes,
+        entry_limit.to_uint64(),
+        uncompressed_size.to_uint64(),
+      ),
       "zip: entry exceeds the per-entry uncompressed limit",
     )
   }
@@ -125,8 +130,8 @@ fn check_sizes(
     raise ZipError(
       LimitExceeded(
         TotalUncompressedBytes,
-        total_limit,
-        (used_total + uncompressed_size).min(0x7fff_ffff),
+        total_limit.to_uint64(),
+        used_total.to_uint64() + uncompressed_size.to_uint64(),
       ),
       "zip: entries exceed the total uncompressed limit",
     )
@@ -144,7 +149,11 @@ fn inflate_entry(
   @flate.inflate_exact(compressed, max_output~, cancelled~, preallocated=true) catch {
     InflateError(OutputLimitExceeded, _) =>
       raise ZipError(
-        LimitExceeded(limit_kind, reported_limit, max_output),
+        LimitExceeded(
+          limit_kind,
+          reported_limit.to_uint64(),
+          max_output.to_uint64(),
+        ),
         "zip: decompressed size limit exceeded",
       )
     err => raise wrap_inflate_error(err)
@@ -240,7 +249,11 @@ fn validate_central_bounds(
 ) -> EndOfCentral raise ZipError {
   guard entry_count <= limits.max_entries else {
     raise ZipError(
-      LimitExceeded(Entries, limits.max_entries, entry_count),
+      LimitExceeded(
+        Entries,
+        limits.max_entries.to_uint64(),
+        entry_count.to_uint64(),
+      ),
       "zip: entry count exceeds its limit",
     )
   }
@@ -272,7 +285,11 @@ fn parse_end_of_central(
   check_cancelled(cancelled)
   guard bytes.length() <= limits.max_package_bytes else {
     raise ZipError(
-      LimitExceeded(PackageBytes, limits.max_package_bytes, bytes.length()),
+      LimitExceeded(
+        PackageBytes,
+        limits.max_package_bytes.to_uint64(),
+        bytes.length().to_uint64(),
+      ),
       "zip: package exceeds the input size limit",
     )
   }
@@ -346,89 +363,46 @@ fn resolve_zip64_field(
   need : Bool,
   zip64_value : UInt64?,
   classic_raw : UInt32,
-) -> Int32 raise ZipError {
-  guard need else { return classic_raw.to_int_checked() }
-  zip64_value.unwrap().to_int_checked()
+) -> UInt64 {
+  guard need else { return UInt64::extend_uint(classic_raw) }
+  zip64_value.unwrap()
 }
 
 ///|
-/// Parse one central-directory record into `EntryMeta`.
+/// Adapt shared 64-bit directory metadata to an in-memory entry.
 fn parse_central_record(
   central_bytes : BytesView,
   central_reader : Cursor,
-) -> EntryMeta raise ZipError {
+) -> MemoryEntryMeta raise ZipError {
   let central_record_start = central_reader.pos
-  guard central_reader.read_u32_raw() == CENTRAL_HEADER_SIG else {
-    raise ZipError(InvalidSignature, "zip: invalid central directory signature")
-  }
-  ignore(central_reader.read_u16())
-  ignore(central_reader.read_u16())
-  let flags = central_reader.read_u16()
-  ensure_flags_supported(flags)
-  let method_id = central_reader.read_u16()
-  ignore(central_reader.read_u16())
-  ignore(central_reader.read_u16())
-  let crc = central_reader.read_u32_raw()
-  let comp_size_raw = central_reader.read_u32_raw()
-  let uncomp_size_raw = central_reader.read_u32_raw()
-  let name_len = central_reader.read_u16()
-  let extra_len = central_reader.read_u16()
-  let comment_len = central_reader.read_u16()
-  let disk = central_reader.read_u16()
-  ignore(central_reader.read_u16())
-  ignore(central_reader.read_u32_raw())
-  let local_offset_raw = central_reader.read_u32_raw()
-  let name_bytes = central_reader.read_bytes(name_len)
-  let extra_bytes = central_reader.read_bytes(extra_len)
-  let name = decode_name(name_bytes)
-  central_reader.skip(comment_len)
-  guard disk == 0 else {
-    raise ZipError(
-      UnsupportedFeature,
-      "zip: multi-disk archives are not supported",
-    )
-  }
-  let central_record = central_bytes[central_record_start:central_reader.pos]
-  let need_uncomp = uncomp_size_raw == MAX_U32
-  let need_comp = comp_size_raw == MAX_U32
-  let need_offset = local_offset_raw == MAX_U32
-  let (zip_uncomp, zip_comp, zip_offset, offset_position) = read_zip64_extra(
-    extra_bytes, need_uncomp, need_comp, need_offset,
-  )
-  let uncompressed_size = resolve_zip64_field(
-    need_uncomp, zip_uncomp, uncomp_size_raw,
-  )
-  let compressed_size = resolve_zip64_field(need_comp, zip_comp, comp_size_raw)
-  let local_offset = resolve_zip64_field(
-    need_offset, zip_offset, local_offset_raw,
-  )
-  let central_zip64_offset_position = offset_position.map(position => {
-    46 + name_len + position
-  })
+  let parsed = parse_directory_record(central_reader)
+  let entry = parsed.entry
+  ensure_flags_supported(entry.flags)
   {
-    name,
-    name_len,
-    flags,
-    method_id,
-    crc,
-    compressed_size,
-    uncompressed_size,
-    local_offset,
-    central_record,
-    central_zip64_offset_position,
-    data_descriptor: (flags & FLAG_DATA_DESCRIPTOR) != 0,
+    name: entry.name,
+    name_len: parsed.name_len,
+    flags: entry.flags,
+    method_id: entry.method_id,
+    crc: entry.crc,
+    // Only the eager in-memory adapter narrows file sizes and positions.
+    compressed_size: entry.compressed_size.to_int_checked(),
+    uncompressed_size: entry.uncompressed_size.to_int_checked(),
+    local_offset: entry.local_offset.to_int_checked(),
+    central_record: central_bytes[central_record_start:central_reader.pos],
+    central_zip64_offset_position: parsed.central_zip64_offset_position,
+    data_descriptor: (entry.flags & FLAG_DATA_DESCRIPTOR) != 0,
   }
 }
 
 ///|
-/// Parse every central-directory record into `EntryMeta`, enforcing the entry
+/// Parse every central-directory record into `MemoryEntryMeta`, enforcing the entry
 /// count and decompressed-size ceilings.
 fn parse_central_directory(
   bytes : BytesView,
   eocd : EndOfCentral,
   limits : ReadLimits,
   cancelled : () -> Bool,
-) -> Array[EntryMeta] raise ZipError {
+) -> Array[MemoryEntryMeta] raise ZipError {
   let central_bytes = bytes[eocd.central_offset:eocd.central_boundary]
   let central_reader = Cursor(central_bytes, 0)
   let max_plausible = eocd.central_size / 46
@@ -481,7 +455,7 @@ fn build_trailer(bytes : BytesView, eocd : EndOfCentral) -> TrailerTemplate {
 /// retain the raw source records for byte-preserving rewrites.
 fn decode_entry(
   bytes : BytesView,
-  meta : EntryMeta,
+  meta : MemoryEntryMeta,
   central_offset : Int32,
   limits : ReadLimits,
   actual_total : Int32,
@@ -508,8 +482,8 @@ fn decode_entry(
           raise ZipError(
             LimitExceeded(
               EntryUncompressedBytes,
-              entry_limit,
-              record.compressed.length(),
+              entry_limit.to_uint64(),
+              record.compressed.length().to_uint64(),
             ),
             "zip: stored entry exceeds its limit",
           )
@@ -536,8 +510,8 @@ fn decode_entry(
     raise ZipError(
       LimitExceeded(
         TotalUncompressedBytes,
-        total_limit,
-        (actual_total + data.length()).min(0x7fff_ffff),
+        total_limit.to_uint64(),
+        actual_total.to_uint64() + data.length().to_uint64(),
       ),
       "zip: entries exceed the total uncompressed limit",
     )
@@ -570,16 +544,6 @@ fn read_impl(
   cancelled : () -> Bool,
 ) -> Archive raise ZipError {
   let eocd = parse_end_of_central(bytes, limits, cancelled)
-  guard bytes.length() <= limits.max_preserved_source_bytes else {
-    raise ZipError(
-      LimitExceeded(
-        PreservedSourceBytes,
-        limits.max_preserved_source_bytes,
-        bytes.length(),
-      ),
-      "zip: preserved source exceeds its limit",
-    )
-  }
   // Own exactly the supplied view once. All record views share this copy.
   let original = copy_cancellable(bytes, cancelled)
   let bytes = original[:]
@@ -619,5 +583,11 @@ pub fn read(
   limits~ : ReadLimits = ReadLimits(),
   cancelled~ : () -> Bool = () => false,
 ) -> Archive raise ZipError {
+  guard limits.max_package_bytes >= 0 &&
+    limits.max_entries >= 0 &&
+    limits.max_entry_uncompressed_bytes >= 0 &&
+    limits.max_total_uncompressed_bytes >= 0 else {
+    raise ZipError(UnsupportedFeature, "zip: read limits must be non-negative")
+  }
   read_impl(bytes, limits, cancelled)
 }

@@ -95,33 +95,47 @@ test "zip round-trips empty and zero-length payloads" {
 
 ///|
 test "zip data descriptor write round-trips" {
-  let archive = @zip.Archive()
-  archive.add("desc.txt", b"streamed entry payload", data_descriptor=true)
-  let bytes = @zip.write(archive)
+  let output = @buffer.Buffer()
+  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
+  writer.begin_entry("desc.txt")
+  writer.write(b"streamed entry payload")
+  writer.end_entry()
+  writer.finish()
+  let bytes = output.to_bytes()
   let parsed = @zip.read(bytes)
   @test.assert_eq(parsed.get("desc.txt"), Some(b"streamed entry payload"))
-  @test.assert_eq(parsed.entries()[0].data_descriptor(), true)
+  @test.assert_eq(
+    parsed.entries()[0].crc32(),
+    @checksum.crc32(parsed.entries()[0].data()),
+  )
 }
 
 ///|
 test "zip stored data-descriptor entry round-trips" {
-  let archive = @zip.Archive()
-  archive.add(
-    "s.txt",
-    b"stored descriptor payload",
-    compression=Store,
-    data_descriptor=true,
-  )
-  let bytes = @zip.write(archive)
+  let output = @buffer.Buffer()
+  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
+  writer.begin_entry("s.txt", compression=Store)
+  writer.write(b"stored descriptor payload")
+  writer.end_entry()
+  writer.finish()
+  let bytes = output.to_bytes()
   let parsed = @zip.read(bytes)
   @test.assert_eq(parsed.get("s.txt"), Some(b"stored descriptor payload"))
-  @test.assert_eq(parsed.entries()[0].data_descriptor(), true)
+  @test.assert_eq(
+    parsed.entries()[0].crc32(),
+    @checksum.crc32(parsed.entries()[0].data()),
+  )
 }
 
 ///|
 test "zip write with max_output_bytes sizes a data-descriptor entry correctly" {
-  let archive = @zip.Archive()
-  archive.add("d.txt", b"limited descriptor payload", data_descriptor=true)
+  let output = @buffer.Buffer()
+  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
+  writer.begin_entry("d.txt")
+  writer.write(b"limited descriptor payload")
+  writer.end_entry()
+  writer.finish()
+  let archive = @zip.read(output.to_bytes())
   let exact = @zip.write(archive)
   @test.assert_eq(@zip.write(archive, max_output_bytes=exact.length()), exact)
 }
@@ -139,9 +153,13 @@ test "zip write with preserve=true re-emits a read archive byte-for-byte" {
 
 ///|
 test "zip write with preserve=true round-trips a data-descriptor entry byte-for-byte" {
-  let archive = @zip.Archive()
-  archive.add("desc.txt", b"streamed payload", data_descriptor=true)
-  let bytes = @zip.write(archive)
+  let output = @buffer.Buffer()
+  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
+  writer.begin_entry("desc.txt")
+  writer.write(b"streamed payload")
+  writer.end_entry()
+  writer.finish()
+  let bytes = output.to_bytes()
   let parsed = @zip.read(bytes)
   let rewritten = @zip.write(parsed, preserve=true)
   @test.assert_eq(rewritten, bytes)
@@ -225,10 +243,14 @@ test "zip Archive::clone isolates add/replace/remove mutations" {
 
 ///|
 test "zip Archive::clone preserves source records for byte-preserving writes" {
-  let archive = @zip.Archive()
-  archive.add("a.txt", b"alpha", compression=Store)
-  archive.add("b.txt", b"beta beta", data_descriptor=true)
-  let bytes = @zip.write(archive)
+  let output = @buffer.Buffer()
+  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
+  writer.add("a.txt", b"alpha", compression=Store)
+  writer.begin_entry("b.txt")
+  writer.write(b"beta beta")
+  writer.end_entry()
+  writer.finish()
+  let bytes = output.to_bytes()
   let parsed = @zip.read(bytes)
   let fork = parsed.clone()
   @test.assert_eq(@zip.write(fork, preserve=true), bytes)
@@ -248,7 +270,10 @@ test "zip reads a python-produced data-descriptor archive" {
   let parsed = @zip.read(py_descriptor)
   @test.assert_eq(parsed.entries().length(), 1)
   @test.assert_eq(parsed.get("desc.txt"), Some(b"descriptor entry payload"))
-  @test.assert_eq(parsed.entries()[0].data_descriptor(), true)
+  @test.assert_eq(
+    parsed.entries()[0].crc32(),
+    @checksum.crc32(parsed.entries()[0].data()),
+  )
 }
 
 ///|
@@ -525,17 +550,20 @@ test "zip per-entry and total uncompressed limits" {
 }
 
 ///|
-test "zip preserved-source limit" {
-  try
-    ignore(@zip.read(py_mini, limits=ReadLimits(max_preserved_source_bytes=10)))
-  catch {
+test "zip directory-byte limit" {
+  let reader = @zip.DirectoryReader(
+    py_mini.length().to_uint64(),
+    limits=DirectoryLimits(max_directory_bytes=10UL),
+  )
+  ignore(reader.advance(b""))
+  try ignore(reader.advance(py_mini)) catch {
     ZipError(kind, _) =>
       match kind {
-        LimitExceeded(PreservedSourceBytes, _, _) => ()
-        _ => @test.fail("expected a preserved-source limit")
+        LimitExceeded(DirectoryBytes, _, _) => ()
+        _ => @test.fail("expected a directory-byte limit")
       }
   } noraise {
-    _ => @test.fail("expected a preserved-source limit")
+    _ => @test.fail("expected a directory-byte limit")
   }
 }
 

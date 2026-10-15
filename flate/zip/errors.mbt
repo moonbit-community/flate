@@ -1,14 +1,13 @@
 ///|
 /// Which bounded resource was exceeded during a bounded read or write. The
-/// payload-related kinds guard against decompression bombs; `PreservedSourceBytes`
-/// bounds the complete source retained for byte-preserving rewrites;
-/// `OutputBytes` bounds a serialization's total size.
+/// payload-related kinds guard decoded allocations; `DirectoryBytes` bounds
+/// metadata-only directory input; `OutputBytes` bounds serialization size.
 pub(all) enum LimitKind {
   PackageBytes
   Entries
   EntryUncompressedBytes
   TotalUncompressedBytes
-  PreservedSourceBytes
+  DirectoryBytes
   OutputBytes
 } derive(Eq, @debug.Debug)
 
@@ -32,10 +31,13 @@ pub(all) enum ZipErrorKind {
   UnsupportedFeature
   /// The entry contains malformed DEFLATE data.
   InvalidDeflate
+  /// A directory reader response did not match its requested byte count,
+  /// or nonempty input was supplied before a request or after completion.
+  InvalidRead
   /// The entry payload does not match its stored CRC-32.
   ChecksumMismatch
   /// A caller-supplied resource limit was exceeded.
-  LimitExceeded(LimitKind, Int32, Int32)
+  LimitExceeded(LimitKind, UInt64, UInt64)
   /// The caller's cancellation callback returned `true` during a bounded read.
   Cancelled
 } derive(Eq, @debug.Debug)

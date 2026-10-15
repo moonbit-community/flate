@@ -154,7 +154,7 @@ test "zip zip64 end record rejects malformed trailers" {
 }
 
 ///|
-fn descriptor_meta(crc~ : UInt32) -> EntryMeta {
+fn descriptor_meta(crc~ : UInt32) -> MemoryEntryMeta {
   {
     name: "",
     name_len: 0,
@@ -230,7 +230,7 @@ test "zip data-descriptor sizing matches and rejects ambiguous or bad layouts" {
   )
   // When CRC, sizes, and signature all share one value, both layouts match.
   let sig_int = DATA_DESCRIPTOR_SIG.reinterpret_as_int()
-  let ambiguous_meta : EntryMeta = {
+  let ambiguous_meta : MemoryEntryMeta = {
     name: "",
     name_len: 0,
     flags: 0,
@@ -296,7 +296,7 @@ fn local_record(
 }
 
 ///|
-fn base_meta() -> EntryMeta {
+fn base_meta() -> MemoryEntryMeta {
   {
     name: "a.txt",
     name_len: 5,

@@ -208,8 +208,62 @@ result and the same error for a malformed, truncated or extended stream.
 
 ## ZIP container
 
-The `@zip` package reads and writes ZIP archives using the same compression
-engine. Use `Archive` for in-memory editing and serialization:
+The `@zip` package provides metadata-only range reads, in-memory archives, and
+incremental writing over the same compression engine.
+
+Use `DirectoryReader` to browse a ZIP without loading the complete file or
+decoding its payloads. It supports classic ZIP beyond 2 GiB and ZIP64, with
+`UInt64` archive sizes, file offsets, and declared entry sizes. The caller owns
+file or HTTP range I/O; the reader requests only a bounded tail, necessary ZIP64
+records, and directory chunks:
+
+```moonbit nocheck
+///|
+fn browse_zip(
+  size : UInt64,
+  read_range : (UInt64, Int32) -> Bytes raise,
+) -> @zip.Directory raise {
+  let reader = @zip.DirectoryReader(
+    size,
+    limits=DirectoryLimits(max_directory_bytes=16777216UL, max_entries=100000UL),
+  )
+  let mut input : Bytes = b""
+  for ;; {
+    match reader.advance(input) {
+      NeedRead(range) => input = read_range(range.offset(), range.length())
+      Done(directory) => return directory
+    }
+  }
+}
+```
+
+Start with empty input, then supply the exact bytes from each requested range.
+Accumulate short transport reads before submitting them. All ranges must come
+from the same immutable archive. Requests are at most 65,557 bytes; directory
+chunks are at most 64 KiB, and records crossing chunks are retained in a bounded
+buffer. Memory grows with directory metadata, rather than compressed or decoded
+payload sizes. `DirectoryLimits` caps encoded directory bytes and entry count;
+the in-memory listing can hold at most 2^31 - 1 entries. No declared payload size
+causes a payload allocation or counts against these directory limits.
+
+`Directory::entries()` preserves directory order and duplicate names.
+`DirectoryEntry` exposes the UTF-8 name, compressed/uncompressed `UInt64` sizes,
+raw compression method number, declared CRC-32, directory/encryption indicators,
+creator system, external attributes, and packed DOS modification date/time
+(without a timezone). Unknown compression methods and encrypted payloads remain
+listable when the directory itself is readable. Multi-disk archives and encrypted
+central directories are unsupported. Listing validates directory structure and
+referenced bounds; it does not read local headers, inflate files, or verify CRCs.
+`InvalidRead` identifies incorrect response lengths or input outside an active
+request. Errors remain latched; repeated empty calls after `Done` return the
+same listing. Callers can cancel by stopping between requests. Entry extraction
+from ranges is not yet provided.
+
+Use `Archive` for in-memory editing and serialization. `read(BytesView)` still
+decodes and verifies every entry, and `write(Archive)` returns one complete
+`Bytes`; these convenience paths retain their Int32 buffer limits. Use
+`DirectoryReader` for browsing large archives and chunked `Writer` input/output
+for creating them:
 
 ```mbt check
 ///|
@@ -224,9 +278,10 @@ test "README zip round-trip" {
 
 Supported features include STORED and DEFLATE entries, ZIP64, data descriptors,
 UTF-8 names, and archive comments. `read` accepts `ReadLimits` to bound archive
-size, entry count, decompressed sizes, and the complete retained source, plus a
+size (including the complete retained source), entry count, and decompressed sizes, plus a
 `cancelled` callback. Exceeding a limit raises
-`ZipError(LimitExceeded(kind, limit, actual), message)`.
+`ZipError(LimitExceeded(kind, limit, actual), message)`; limit and actual values
+are `UInt64` on both memory and directory paths.
 
 `read` verifies each entry's CRC-32, raising `ChecksumMismatch` for a damaged
 payload. Cancellation remains `Cancelled` throughout parsing, decoding and
@@ -236,7 +291,7 @@ checksum verification.
 archive round-trips byte-for-byte, including prefixes, gaps and directory order.
 After an edit, local records and directory entries keep their respective order;
 bytes outside records, such as prefixes and gaps, are omitted.
-`max_preserved_source_bytes` covers the full source, including these bytes.
+`max_package_bytes` covers the full retained source, including these bytes.
 Supply `max_output_bytes` to bound the serialized size before allocating it.
 `write` returns the complete ZIP as `Bytes`.
 
@@ -264,6 +319,11 @@ test "README incremental ZIP writer" {
 Call `finish` to write the central directory. The sink must consume each chunk
 before returning. If it raises an error, the writer becomes unusable and the
 partial output must be discarded.
+
+Large individual entries use `begin_entry` / repeated `write` / `end_entry`;
+their declared size and cumulative positions are `UInt64`. The writer selects
+ZIP64 and data descriptors internally. `add(BytesView)` remains convenient for
+a complete in-memory entry. Directory metadata is retained until `finish`.
 
 `Writer` retains directory metadata, current-entry metadata and codec buffers.
 `add` processes a complete file during the call; `write` feeds chunks through
@@ -368,8 +428,15 @@ prefix; `inflate_exact` rejects trailing bytes.
 ZIP writing uses `write(archive, preserve=true, max_output_bytes=n)` for
 byte-preserving, bounded output. The options are independent. Construct read
 bounds with `ReadLimits(max_entries=..., max_package_bytes=...,
-max_entry_uncompressed_bytes=..., max_total_uncompressed_bytes=...,
-max_preserved_source_bytes=...)`.
+max_entry_uncompressed_bytes=..., max_total_uncompressed_bytes=...)`.
+`max_package_bytes` also bounds the source retained for byte-preserving writes.
+Metadata-only reads use separate `DirectoryLimits`, without decoded-size limits.
+
+ZIP layout controls are internal: `Archive::add` no longer takes
+`data_descriptor`, and `Entry` no longer exposes `data_descriptor()`.
+The former `max_preserved_source_bytes` limit and `PreservedSourceBytes` error
+kind are replaced by the existing package-size limit. Limit errors now carry
+64-bit ceilings and actual values.
 
 Internal format and tuning constants are private. Use `deflate_bound` to size
 compression output. Filename-based compression selection belongs to the caller;
