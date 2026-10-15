@@ -254,6 +254,9 @@ creator system, external attributes, and packed DOS modification date/time
 listable when the directory itself is readable. Multi-disk archives and encrypted
 central directories are unsupported. Listing validates directory structure and
 referenced bounds; it does not read local headers, inflate files, or verify CRCs.
+An optional trailing directory digital-signature record is accepted after
+checking its signature marker and length; its cryptographic contents are not
+verified.
 `InvalidRead` identifies incorrect response lengths or input outside an active
 request. Errors remain latched; repeated empty calls after `Done` return the
 same listing. Callers can cancel by stopping between requests.
@@ -302,8 +305,10 @@ chunk, local metadata, the codec workspace, and the caller's output buffer.
 
 `Done` verifies the local header against the directory, exact compressed and
 decoded sizes, CRC-32, and any classic or ZIP64 data descriptor. Output produced
-earlier remains unverified; discard partial output on failure. Unsupported
-methods and encrypted entries remain listable but cannot be opened.
+earlier remains unverified; discard partial output on failure.
+Like `read`, zero-length Deflate entries with zero compressed bytes are accepted;
+CRC-32 and any data descriptor are still checked.
+Unsupported methods and encrypted entries remain listable but cannot be opened.
 `InvalidEntryIndex` identifies an invalid index, `SizeMismatch` an inconsistent
 decoded size, and `InvalidRead` a range-response protocol error. A failed reader
 stably rethrows its error with `last_produced()` zero; repeated empty steps after

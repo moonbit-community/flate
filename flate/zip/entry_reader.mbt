@@ -324,7 +324,7 @@ fn EntryReader::read_extra(
     self.entry.compressed_size >= 0xffff_ffffUL ||
     self.entry.uncompressed_size >= 0xffff_ffffUL
   guard self.entry.compressed_size != 0UL else {
-    guard self.entry.method_id == 0 else {
+    guard self.entry.uncompressed_size == 0UL else {
       raise ZipError(Truncated, "zip: empty DEFLATE payload")
     }
     return self.finish_payload()

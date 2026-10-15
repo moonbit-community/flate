@@ -282,18 +282,13 @@ fn DirectoryReader::advance_active(
         self.pending + input.to_owned()
       }
       let mut position = 0
-      while bytes.length() - position >= 46 {
+      while self.entries.length().to_uint64() < bounds.entries &&
+            bytes.length() - position >= 46 {
         let name_size = read_u16_le_at(bytes, position + 28)
         let extra_size = read_u16_le_at(bytes, position + 30)
         let comment_size = read_u16_le_at(bytes, position + 32)
         let record_size = 46 + name_size + extra_size + comment_size
         guard record_size <= bytes.length() - position else { break }
-        guard self.entries.length().to_uint64() < bounds.entries else {
-          raise ZipError(
-            UnsupportedFeature,
-            "zip: central directory size/count mismatch",
-          )
-        }
         let parsed = parse_directory_record(
           Cursor(bytes[position:position + record_size], 0),
         )
@@ -312,9 +307,15 @@ fn DirectoryReader::advance_active(
         position += record_size
       }
       let next = offset + length.to_uint64()
+      let entries_done = self.entries.length().to_uint64() == bounds.entries
+      if entries_done {
+        validate_directory_signature(
+          bytes[position:],
+          end - next + (bytes.length() - position).to_uint64(),
+        )
+      }
       if next == end {
-        guard position == bytes.length() &&
-          self.entries.length().to_uint64() == bounds.entries else {
+        guard entries_done else {
           raise ZipError(
             UnsupportedFeature,
             "zip: central directory size/count mismatch",
@@ -335,6 +336,34 @@ fn DirectoryReader::advance_active(
       Done(directory)
     }
     Failed(kind, message) => raise ZipError(kind, message)
+  }
+}
+
+///|
+/// The central directory may end with one digital-signature record. Validate
+/// its framing only, not the signature itself. `remaining` includes bytes in
+/// this chunk and later chunks; the 16-bit size bounds retained input even when
+/// the header straddles reads or an untrusted directory declares a huge tail.
+fn validate_directory_signature(
+  bytes : BytesView,
+  remaining : UInt64,
+) -> Unit raise ZipError {
+  guard remaining != 0UL else { return }
+  guard remaining >= 6UL && remaining <= 65541UL else {
+    raise ZipError(UnsupportedFeature, "zip: invalid directory signature size")
+  }
+  if bytes.length() >= 4 {
+    guard read_u32_le_at_raw(bytes, 0) == DIRECTORY_SIGNATURE_SIG else {
+      raise ZipError(InvalidSignature, "zip: invalid directory signature")
+    }
+  }
+  if bytes.length() >= 6 {
+    guard 6UL + read_u16_le_at(bytes, 4).to_uint64() == remaining else {
+      raise ZipError(
+        UnsupportedFeature,
+        "zip: directory signature size mismatch",
+      )
+    }
   }
 }
 
