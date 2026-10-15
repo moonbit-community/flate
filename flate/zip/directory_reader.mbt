@@ -85,10 +85,7 @@ pub fn DirectoryReader::advance(
 }
 
 ///|
-fn expect_directory_input(
-  input : BytesView,
-  length : Int32,
-) -> Unit raise ZipError {
+fn expect_range_input(input : BytesView, length : Int32) -> Unit raise ZipError {
   guard input.length() == length else {
     raise ZipError(
       InvalidRead,
@@ -98,7 +95,7 @@ fn expect_directory_input(
 }
 
 ///|
-fn directory_read_length(remaining : UInt64, maximum : Int32) -> Int32 {
+fn range_read_length(remaining : UInt64, maximum : Int32) -> Int32 {
   if remaining < maximum.to_uint64() {
     remaining.to_int()
   } else {
@@ -127,20 +124,20 @@ fn DirectoryReader::advance_active(
 ) -> DirectoryStep raise ZipError {
   match self.phase {
     Initial => {
-      expect_directory_input(input, 0)
+      expect_range_input(input, 0)
       guard self.archive_size >= 22UL else {
         raise ZipError(
           MissingEndOfCentral,
           "zip: end of central directory not found",
         )
       }
-      let length = directory_read_length(self.archive_size, DIRECTORY_TAIL_SIZE)
+      let length = range_read_length(self.archive_size, DIRECTORY_TAIL_SIZE)
       let range = { offset: self.archive_size - length.to_uint64(), length, }
       self.phase = Tail(range)
       NeedRead(range)
     }
     Tail(range) => {
-      expect_directory_input(input, range.length)
+      expect_range_input(input, range.length)
       guard find_end_of_central(input) is Some(position) else {
         raise ZipError(
           MissingEndOfCentral,
@@ -198,7 +195,7 @@ fn DirectoryReader::advance_active(
       )
     }
     Locator(classic) => {
-      expect_directory_input(input, 20)
+      expect_range_input(input, 20)
       let reader = Cursor(input, 0)
       guard reader.read_u32_raw() == ZIP64_LOCATOR_SIG else {
         raise ZipError(InvalidSignature, "zip: invalid zip64 locator signature")
@@ -220,7 +217,7 @@ fn DirectoryReader::advance_active(
       NeedRead({ offset, length: 56, })
     }
     Zip64(classic, offset) => {
-      expect_directory_input(input, 56)
+      expect_range_input(input, 56)
       let reader = Cursor(input, 0)
       guard reader.read_u32_raw() == ZIP64_EOCD_SIG else {
         raise ZipError(
@@ -277,8 +274,8 @@ fn DirectoryReader::advance_active(
     }
     Records(bounds, offset) => {
       let end = bounds.offset + bounds.size
-      let length = directory_read_length(end - offset, DIRECTORY_CHUNK_SIZE)
-      expect_directory_input(input, length)
+      let length = range_read_length(end - offset, DIRECTORY_CHUNK_SIZE)
+      expect_range_input(input, length)
       let bytes : BytesView = if self.pending.length() == 0 {
         input
       } else {
@@ -323,18 +320,18 @@ fn DirectoryReader::advance_active(
             "zip: central directory size/count mismatch",
           )
         }
-        self.complete(bounds.comment)
+        self.complete(bounds.comment, bounds.offset)
       } else {
-        self.pending = bytes[position:].to_owned()
+        self.pending = copy_zip_input(bytes[position:])
         self.phase = Records(bounds, next)
         NeedRead({
           offset: next,
-          length: directory_read_length(end - next, DIRECTORY_CHUNK_SIZE),
+          length: range_read_length(end - next, DIRECTORY_CHUNK_SIZE),
         })
       }
     }
     Complete(directory) => {
-      expect_directory_input(input, 0)
+      expect_range_input(input, 0)
       Done(directory)
     }
     Failed(kind, message) => raise ZipError(kind, message)
@@ -366,21 +363,19 @@ fn DirectoryReader::begin_records(
       "zip: central directory entry count exceeds its size",
     )
   }
-  guard size != 0UL else { return self.complete(comment) }
+  guard size != 0UL else { return self.complete(comment, offset) }
   let bounds = { offset, size, entries, comment, }
   self.phase = Records(bounds, offset)
-  NeedRead({
-    offset,
-    length: directory_read_length(size, DIRECTORY_CHUNK_SIZE),
-  })
+  NeedRead({ offset, length: range_read_length(size, DIRECTORY_CHUNK_SIZE), })
 }
 
 ///|
 fn DirectoryReader::complete(
   self : DirectoryReader,
   comment : Bytes,
+  central_offset : UInt64,
 ) -> DirectoryStep {
-  let directory = { entries: self.entries, comment, }
+  let directory = { entries: self.entries, comment, central_offset, }
   self.entries = []
   self.pending = b""
   self.phase = Complete(directory)

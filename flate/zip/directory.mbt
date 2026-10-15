@@ -25,6 +25,7 @@ pub fn DirectoryLimits::DirectoryLimits(
 pub struct Directory {
   priv entries : Array[DirectoryEntry]
   priv comment : Bytes
+  priv central_offset : UInt64
 }
 
 ///|

@@ -78,13 +78,13 @@ fn read_local_record(
   guard local_size_matches(
       comp_size_raw,
       local_zip_comp,
-      meta.compressed_size,
+      meta.compressed_size.to_uint64(),
       has_descriptor,
     ) &&
     local_size_matches(
       uncomp_size_raw,
       local_zip_uncomp,
-      meta.uncompressed_size,
+      meta.uncompressed_size.to_uint64(),
       has_descriptor,
     ) else {
     raise ZipError(UnsupportedFeature, "zip: local and central sizes differ")

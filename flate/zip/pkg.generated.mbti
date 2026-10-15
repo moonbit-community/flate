@@ -40,6 +40,7 @@ pub struct Directory {
 }
 pub fn Directory::comment(Self) -> BytesView
 pub fn Directory::entries(Self) -> ArrayView[DirectoryEntry]
+pub fn Directory::open_entry(Self, Int, limits? : EntryReadLimits) -> EntryReader raise ZipError
 
 pub struct DirectoryEntry {
   // private fields
@@ -79,6 +80,25 @@ pub fn Entry::compression(Self) -> Compression
 pub fn Entry::crc32(Self) -> UInt
 pub fn Entry::data(Self) -> BytesView
 pub fn Entry::name(Self) -> String
+
+pub struct EntryReadLimits {
+  // private fields
+}
+pub fn EntryReadLimits::EntryReadLimits(max_output_bytes? : UInt64) -> Self
+
+pub struct EntryReader {
+  // private fields
+}
+pub fn EntryReader::last_produced(Self) -> Int
+pub fn EntryReader::step(Self, BytesView, FixedArray[Byte]) -> EntryStep raise ZipError
+pub fn EntryReader::total_consumed(Self) -> UInt64
+pub fn EntryReader::total_produced(Self) -> UInt64
+
+pub(all) enum EntryStep {
+  NeedRead(ReadRange)
+  NeedMoreOutput
+  Done
+}
 
 pub(all) enum LimitKind {
   PackageBytes
@@ -126,6 +146,8 @@ pub(all) enum ZipErrorKind {
   UnsupportedFeature
   InvalidDeflate
   InvalidRead
+  InvalidEntryIndex(Int)
+  SizeMismatch
   ChecksumMismatch
   LimitExceeded(LimitKind, UInt64, UInt64)
   Cancelled

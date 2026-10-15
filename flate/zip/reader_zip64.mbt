@@ -137,8 +137,8 @@ fn data_descriptor_matches(
   bytes : BytesView,
   offset : Int32,
   crc : UInt32,
-  comp_size : Int32,
-  uncomp_size : Int32,
+  comp_size : UInt64,
+  uncomp_size : UInt64,
   zip64 : Bool,
   signed : Bool,
 ) -> Bool {
@@ -151,11 +151,10 @@ fn data_descriptor_matches(
       return false
     }
     if zip64 {
-      reader.read_u64_raw() == comp_size.to_uint64() &&
-      reader.read_u64_raw() == uncomp_size.to_uint64()
+      reader.read_u64_raw() == comp_size && reader.read_u64_raw() == uncomp_size
     } else {
-      reader.read_u32_raw() == comp_size.reinterpret_as_uint() &&
-      reader.read_u32_raw() == uncomp_size.reinterpret_as_uint()
+      UInt64::extend_uint(reader.read_u32_raw()) == comp_size &&
+      UInt64::extend_uint(reader.read_u32_raw()) == uncomp_size
     }
   } catch {
     _ => false
@@ -172,23 +171,29 @@ fn data_descriptor_size(
   meta : MemoryEntryMeta,
   zip64 : Bool,
 ) -> Int32 raise ZipError {
-  let signed = data_descriptor_matches(
-    bytes,
-    offset,
+  checked_data_descriptor_size(
+    bytes[offset:],
     meta.crc,
-    meta.compressed_size,
-    meta.uncompressed_size,
+    meta.compressed_size.to_uint64(),
+    meta.uncompressed_size.to_uint64(),
     zip64,
-    true,
+  )
+}
+
+///|
+/// Validate either descriptor layout against authoritative 64-bit directory sizes.
+fn checked_data_descriptor_size(
+  bytes : BytesView,
+  crc : UInt32,
+  comp_size : UInt64,
+  uncomp_size : UInt64,
+  zip64 : Bool,
+) -> Int32 raise ZipError {
+  let signed = data_descriptor_matches(
+    bytes, 0, crc, comp_size, uncomp_size, zip64, true,
   )
   let unsigned = data_descriptor_matches(
-    bytes,
-    offset,
-    meta.crc,
-    meta.compressed_size,
-    meta.uncompressed_size,
-    zip64,
-    false,
+    bytes, 0, crc, comp_size, uncomp_size, zip64, false,
   )
   if signed && unsigned {
     raise ZipError(UnsupportedFeature, "zip: ambiguous data descriptor")
@@ -206,12 +211,11 @@ fn data_descriptor_size(
 fn local_size_matches(
   raw : UInt32,
   zip64 : UInt64?,
-  expected : Int32,
+  expected : UInt64,
   allow_placeholder : Bool,
 ) -> Bool {
-  let expected64 = expected.to_uint64()
   let zip64_matches = zip64.map_or(true, value => {
-    value == expected64 || (allow_placeholder && value == 0)
+    value == expected || (allow_placeholder && value == 0)
   })
   if allow_placeholder && raw == 0 {
     return zip64_matches
@@ -219,5 +223,5 @@ fn local_size_matches(
   if raw == MAX_U32 {
     return zip64 is Some(_) && zip64_matches
   }
-  UInt64::extend_uint(raw) == expected64 && zip64_matches
+  UInt64::extend_uint(raw) == expected && zip64_matches
 }

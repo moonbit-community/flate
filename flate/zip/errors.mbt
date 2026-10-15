@@ -31,9 +31,13 @@ pub(all) enum ZipErrorKind {
   UnsupportedFeature
   /// The entry contains malformed DEFLATE data.
   InvalidDeflate
-  /// A directory reader response did not match its requested byte count,
-  /// or nonempty input was supplied before a request or after completion.
+  /// A range reader response did not match its requested byte count,
+  /// or nonempty input was supplied without an active range request.
   InvalidRead
+  /// The requested directory entry index is out of bounds.
+  InvalidEntryIndex(Int32)
+  /// Decoded size or Store size declarations are inconsistent.
+  SizeMismatch
   /// The entry payload does not match its stored CRC-32.
   ChecksumMismatch
   /// A caller-supplied resource limit was exceeded.

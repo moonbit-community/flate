@@ -256,14 +256,64 @@ central directories are unsupported. Listing validates directory structure and
 referenced bounds; it does not read local headers, inflate files, or verify CRCs.
 `InvalidRead` identifies incorrect response lengths or input outside an active
 request. Errors remain latched; repeated empty calls after `Done` return the
-same listing. Callers can cancel by stopping between requests. Entry extraction
-from ranges is not yet provided.
+same listing. Callers can cancel by stopping between requests.
+
+Open a listed entry with `Directory::open_entry(index)` to create an
+`EntryReader`. Indices distinguish duplicate names. It extracts Store and Deflate
+entries from bounded ranges, including ZIP64 and entries with more than 2 GiB
+of decoded data. `EntryReadLimits(max_output_bytes=...)` sets a `UInt64` output
+ceiling; oversized declarations are rejected before I/O, and actual decoded
+output is checked before reporting bytes to the caller.
+
+```moonbit nocheck
+///|
+fn extract_entry(
+  directory : @zip.Directory,
+  index : Int32,
+  read_range : (UInt64, Int32) -> Bytes raise,
+  emit : (BytesView) -> Unit raise,
+) -> Unit raise {
+  let reader = directory.open_entry(index)
+  let output = FixedArray::make(65536, b'\x00')
+  let mut input : Bytes = b""
+  for ;; {
+    let status = reader.step(input, output)
+    let produced = reader.last_produced()
+    if produced > 0 {
+      emit(Bytes::from_array(output[:produced]))
+    }
+    match status {
+      NeedRead(range) => input = read_range(range.offset(), range.length())
+      NeedMoreOutput => input = b""
+      Done => return
+    }
+  }
+}
+```
+
+Start with empty input. A `NeedRead` response requires exactly the requested
+bytes; after `NeedMoreOutput`, submit empty input with another output buffer.
+The reader retains unconsumed compressed bytes, so callers never replay an
+accepted range. Input and output arrays are released before each return.
+Read `last_produced()` after **every successful step**, including those returning
+`NeedRead` or `Done`. `total_consumed()` and `total_produced()` report `UInt64`
+compressed-payload and decoded byte counts. Memory is bounded by one compressed
+chunk, local metadata, the codec workspace, and the caller's output buffer.
+
+`Done` verifies the local header against the directory, exact compressed and
+decoded sizes, CRC-32, and any classic or ZIP64 data descriptor. Output produced
+earlier remains unverified; discard partial output on failure. Unsupported
+methods and encrypted entries remain listable but cannot be opened.
+`InvalidEntryIndex` identifies an invalid index, `SizeMismatch` an inconsistent
+decoded size, and `InvalidRead` a range-response protocol error. A failed reader
+stably rethrows its error with `last_produced()` zero; repeated empty steps after
+completion return `Done`. Cancel by stopping between calls.
 
 Use `Archive` for in-memory editing and serialization. `read(BytesView)` still
 decodes and verifies every entry, and `write(Archive)` returns one complete
 `Bytes`; these convenience paths retain their Int32 buffer limits. Use
-`DirectoryReader` for browsing large archives and chunked `Writer` input/output
-for creating them:
+`DirectoryReader` / `EntryReader` for reading large archives and chunked `Writer`
+input/output for creating them:
 
 ```mbt check
 ///|

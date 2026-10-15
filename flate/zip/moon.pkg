@@ -8,7 +8,7 @@ import {
 }
 
 // Package "@zip": ZIP over the `@flate` DEFLATE engine. Metadata-only 64-bit
-// range reads, in-memory Archive editing, and incremental Writer output.
+// directory/entry range reads, in-memory Archive editing, and Writer output.
 // File and HTTP range I/O are supplied by the caller.
 
 import {

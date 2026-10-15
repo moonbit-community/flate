@@ -46,6 +46,15 @@ priv struct Cursor {
 }
 
 ///|
+/// Own a bounded response independently of a caller's reusable read buffer.
+/// BytesView::to_owned may share a complete backing buffer, so copy explicitly.
+fn copy_zip_input(input : BytesView) -> Bytes {
+  let copy = FixedArray::make(input.length(), b'\x00')
+  copy.blit_from_bytesview(0, input)
+  owned_zip_buffer_to_bytes(copy)
+}
+
+///|
 fn Cursor::Cursor(bytes : BytesView, pos : Int32) -> Cursor {
   { bytes, pos, }
 }
