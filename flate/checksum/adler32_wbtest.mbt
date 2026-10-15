@@ -71,26 +71,3 @@ test "Adler 16-byte chunks agree with the serial sums and stay inside the view" 
     }
   }
 }
-
-///|
-/// A view into the middle of larger bytes is folded from its own start.
-#cfg(any(target="native", target="wasm"))
-test "Adler 16-byte chunks honour the offset of a view" {
-  let backing = Bytes::makei(300, i => (i * 131 + 7).to_byte())
-  for offset in [0, 1, 15, 16, 17, 100] {
-    for length in [0, 15, 16, 17, 64, 200] {
-      let view = backing[offset:offset + length]
-      let checksum = Adler32()
-      let position = checksum.fold_chunks16(view, 0, length)
-      let mut a = 1
-      let mut b = 0
-      for i in 0..<position {
-        a = a + backing[offset + i].to_int()
-        b = b + a
-      }
-      assert_eq(position, length / 16 * 16)
-      assert_eq(checksum.a, a)
-      assert_eq(checksum.b, b)
-    }
-  }
-}

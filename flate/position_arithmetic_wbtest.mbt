@@ -68,15 +68,10 @@ test "tail guards do not wrap near the largest position" {
     for back in 0..<8 {
       let position = max - back
       @test.assert_eq(has_bytes_from(position, count, max), back >= count)
-      if back < count {
-        // What the sum form answered.
-        assert_true(position + count <= max)
-      }
     }
   }
   // A stored block's length behind a position near the end of the input.
   assert_false(has_bytes_from(max - 100, 65535, max))
-  assert_true(max - 100 + 65535 <= max)
   assert_true(has_bytes_from(max - 65535, 65535, max))
   assert_true(has_bytes_from(0, 0, 0))
   assert_false(has_bytes_from(0, 1, 0))

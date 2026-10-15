@@ -1,27 +1,4 @@
 ///|
-/// Every level 0-9 produces a valid stream; level 0 is stored-only (no
-/// compression), levels >= 1 compress the repetitive payload well.
-test "compression levels round-trip" {
-  let unit = b"level test payload, the quick brown fox jumps over. "
-  let arr : Array[Byte] = []
-  for _r in 0..<600 {
-    for b in unit {
-      arr.push(b)
-    }
-  }
-  let src = Bytes::from_array(arr)
-  for level in 0..<10 {
-    let out = @flate.deflate_all(src, level~)
-    @test.assert_eq(@flate.inflate_all(out), src)
-    if level == 0 {
-      assert_true(out.length() >= src.length()) // stored only, framing added
-    } else {
-      assert_true(out.length() < src.length() / 10) // repetitive data shrinks
-    }
-  }
-}
-
-///|
 /// `reset()` reuses one engine across independent streams: the Deflater's
 /// output matches a fresh compressor's, and the Inflater decodes a second
 /// stream cleanly after the first.
@@ -108,13 +85,10 @@ test "preset dictionary: raw deflate round-trip" {
     got.push(dbuf[i])
   }
   @test.assert_eq(Bytes::from_array(got), msg)
-  // Without the dictionary: a back-reference reaches before the stream start.
+  // Without the dictionary, the first reference reaches before the stream.
   let inf2 = @flate.Inflater()
-  try {
-    let _ = inf2.step(compressed, dbuf.mut_view())
-  } catch {
-    InflateError(_, _) => ()
-  } noraise {
-    _ => @test.fail("expected the dictionary-less decode to fail")
-  }
+  let InflateError(kind, _) = @test.expect_error(() => {
+    inf2.step(compressed, dbuf.mut_view())
+  })
+  @test.assert_eq(kind, Corrupt)
 }

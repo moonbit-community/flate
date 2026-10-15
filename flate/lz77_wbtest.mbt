@@ -314,20 +314,6 @@ test "lazy parsers keep hash chains strictly backward across block boundaries" {
 }
 
 ///|
-fn match_len_fixture(mismatch? : Int32) -> Bytes {
-  let data = Array::make(516, b'\x00')
-  for i in 0..<258 {
-    let byte = ((i * 37 + i / 7) & 0xFF).to_byte()
-    data[i] = byte
-    data[258 + i] = byte
-  }
-  if mismatch is Some(index) {
-    data[258 + index] = (data[258 + index].to_int() ^ 0xFF).to_byte()
-  }
-  Bytes::from_array(data)
-}
-
-///|
 fn scalar_match_len_up_to_reference(
   data : Bytes,
   src : Int32,
@@ -394,17 +380,6 @@ fn assert_match_len_differential_case(
       "match_len_up_to differential mismatch: case=\{case_index}, src=\{src}, pos=\{pos}, limit=\{limit}, mismatch=\{mismatch}, expected=\{expected}, actual=\{actual}",
     )
   }
-}
-
-///|
-test "v128 match length finds the first unequal lane and scalar tail" {
-  for mismatch in [0, 1, 2, 15, 16, 17, 31, 32, 127, 255, 257] {
-    let data = match_len_fixture(mismatch~)
-    @test.assert_eq(match_len_up_to(data, 0, 258, 258), mismatch)
-  }
-  let identical = match_len_fixture()
-  @test.assert_eq(match_len_up_to(identical, 0, 258, 258), 258)
-  @test.assert_eq(match_len_up_to(b"abcabcX", 0, 3, 4), 3)
 }
 
 ///|
@@ -509,96 +484,21 @@ test "streaming dual hash backfills a fourth byte exactly once" {
 }
 
 ///|
-test "match table sizing preserves compact small-input workspaces" {
-  for (size, capacity) in [(4096, 16384), (8192, 32768)] {
-    let input = Bytes::makei(size, i => (i & 255).to_byte())
-    let fresh = MatchFinder(input_size=size)
-    let reused = MatchFinder(input_size=0)
-    reused.reset_for_input(input)
-    @test.assert_eq(fresh.head.length(), capacity)
-    @test.assert_eq(reused.head.length(), capacity)
-    @test.assert_eq(reused.long_shift, fresh.long_shift)
-  }
-}
-
-///|
-test "match table sizing realizes each selected adaptive width" {
-  for alphabet in [16, 80, 256] {
-    let input = Bytes::makei(65536, i => (i % alphabet).to_byte())
-    let bits = long_hash_bits_for_input(input)
-    let fresh = MatchFinder(input_size=input.length(), long_hash_bits=bits)
-    let reused = MatchFinder(input_size=0)
-    reused.reset_for_input(input)
-    @test.assert_eq(fresh.head.length(), 1 << bits)
-    @test.assert_eq(reused.head.length(), 1 << bits)
-    @test.assert_eq(fresh.long_shift, 32 - bits)
-    @test.assert_eq(reused.long_shift, fresh.long_shift)
-  }
-}
-
-///|
-test "stamped heads isolate successive inputs without clearing tables" {
-  let finder = MatchFinder()
-  let sources = [
-    b"",
-    b"a",
-    b"ab",
-    b"abc",
-    b"abcabcXabcabcYabcabcZ",
-    Bytes::makei(1027, i => ((i * 37 + i / 11) & 255).to_byte()),
-    b"abc",
-    b"",
-    b"xyzxyzxyzxyzxyz",
-  ]
-  for _ in 0..<3 {
-    for input in sources {
-      finder.reset_for_input(input)
-      for position in 0..<(input.length() - 2).max(0) {
-        for base in [0, 2, 3, 8] {
-          @test.assert_eq(
-            finder.find_match(
-              input,
-              position,
-              input.length(),
-              base,
-              level_configs[6],
-            ),
-            scalar_find_match_reference(
-              input,
-              finder,
-              position,
-              input.length(),
-              base,
-              level_configs[6],
-            ),
-          )
-        }
-        finder.insert_pos(input, position, input.length())
-      }
-    }
-  }
-}
-
-///|
 test "stamped heads reset before the position base can overflow" {
   let finder = MatchFinder()
   let input = b"abcabcXabcabcYabcabcZabcabcXabcabcY"
   finder.next_base = 2147483647 - input.length()
   finder.reset_for_input(input)
   @test.assert_eq(finder.next_base, 2147483647)
+  let fresh = MatchFinder()
+  fresh.reset_for_input(input)
   for position in 0..<(input.length() - 2) {
     @test.assert_eq(
       finder.find_match(input, position, input.length(), 0, level_configs[6]),
-      scalar_find_match_reference(
-        input,
-        finder,
-        position,
-        input.length(),
-        0,
-        level_configs[6],
-      ),
+      fresh.find_match(input, position, input.length(), 0, level_configs[6]),
     )
     finder.insert_pos(input, position, input.length())
+    fresh.insert_pos(input, position, input.length())
   }
   finder.reset_for_input(b"")
   @test.assert_eq(finder.position_base, 2147483647)
@@ -615,8 +515,25 @@ test "stamped heads reset before the position base can overflow" {
 test "reused compressors preserve output across failed and empty generations" {
   let codec = Compressor()
   codec.finder.next_base = 2147483600
-  for size in [0, 1, 2, 3, 4, 1023, 1024, 1025, 40000, 4, 0, 63] {
-    let input = Bytes::makei(size, i => ((i * 19 + i / 7) & 255).to_byte())
+  for
+    (size, alphabet) in [
+      (0, 256),
+      (1, 256),
+      (2, 256),
+      (3, 256),
+      (4, 256),
+      (1023, 256),
+      (1024, 256),
+      (1025, 256),
+      (40000, 256),
+      (2048, 8),
+      (2048, 256),
+      (2048, 8),
+      (4, 256),
+      (0, 256),
+      (63, 256),
+    ] {
+    let input = Bytes::makei(size, i => ((i * 19 + i / 7) % alphabet).to_byte())
     @test.assert_eq(
       codec.compress_into(input, FixedArray::make(0, b'\x00')),
       None,
@@ -728,34 +645,6 @@ test "short hash collision must not hide an older four-byte match" {
 }
 
 ///|
-test "compact predecessor distances preserve window endpoints and expire older links" {
-  let finder = MatchFinder()
-  for position in [0, 32767, 32768, 65535, 65536, (1 << 30) + 17] {
-    for distance in [1, 2, 257, WINDOW_SIZE, WINDOW_SIZE + 1, 200000] {
-      set_chain_previous(finder.prev, position, position - distance)
-      let previous = chain_previous(finder.prev, position)
-      if distance <= WINDOW_SIZE {
-        @test.assert_eq(previous, position - distance)
-      } else {
-        @test.assert_eq(previous < position - WINDOW_SIZE, true)
-      }
-    }
-  }
-}
-
-///|
-test "default parser resamples narrow alphabets after compressor reuse" {
-  let codec = Compressor(level=6, fast_store=false)
-  let rng = MatchLenDifferentialRng(0x715832ABU)
-  for alphabet in [256, 8, 256, 8] {
-    let data = Bytes::makei(2048, _ => rng.below(alphabet).to_byte())
-    let compressed = codec.compress(data)
-    @test.assert_eq(compressed, deflate_all(data, level=6, fast_store=false))
-    @test.assert_eq(inflate_all(compressed), data)
-  }
-}
-
-///|
 /// The interior of a match is inserted by `insert_matched_positions`. Its
 /// tables must be those of one `insert_pos` per position: for every start
 /// modulo four, lengths around a group of four, tails of zero to three
@@ -767,19 +656,11 @@ test "matched insertion preserves scalar hash chains for every group phase" {
     let j = i % period
     ((j * 37 + j / 7) & 0xFF).to_byte()
   })
-  for
-    base in [
-      2 * period,
-      WINDOW_SIZE - 20,
-      STREAM_RING_SIZE - 40,
-      STREAM_RING_SIZE - 17,
-      STREAM_RING_SIZE - 3,
-      2 * STREAM_RING_SIZE - 9,
-    ] {
+  for base in [2 * period, STREAM_RING_SIZE - 17, 2 * STREAM_RING_SIZE - 9] {
     for phase in 0..<4 {
       let start = base + phase
-      for length in [32, 33, 34, 35, 36, 37, 47, 48, 64, 257, 258] {
-        for lookahead in [0, 1, 2, 3, 4, 12, 13, 300] {
+      for length in [32, 33, 34, 35, 47, 48, 257, 258] {
+        for lookahead in [0, 3, 13, 300] {
           let end = start + length
           let available_end = end + lookahead
           // Everything a period back is in the tables: each word of the

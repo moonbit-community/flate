@@ -1,16 +1,18 @@
 ///|
-fn expect_inflate_error(data : Bytes) -> Unit raise {
-  @test.assert_raise(() => @flate.inflate_all(data))
-}
-
-///|
-test "inflate_all rejects malformed block structure" {
-  expect_inflate_error(b"")
-  expect_inflate_error([0x07]) // BFINAL=1, reserved BTYPE=3
-  expect_inflate_error([0x01, 0x01, 0x00, 0x00, 0x00]) // bad NLEN
-  expect_inflate_error([0x01, 0x02, 0x00, 0xFD, 0xFF, 0xAA]) // short stored payload
-  // Dynamic block whose code-length alphabet contains no symbols.
-  expect_inflate_error([0x05, 0x00, 0x00, 0x00, 0x00])
+test "inflate_all rejects malformed block structure with the correct category" {
+  for
+    (input, expected) in [
+      (b"", @flate.Truncated),
+      (b"\x07", Corrupt), // reserved block type
+      (b"\x01\x01\x00\x00\x00", Corrupt), // bad NLEN
+      (b"\x01\x02\x00\xFD\xFF\xAA", Truncated), // short stored payload
+      (b"\x05\x00\x00\x00\x00", Corrupt), // empty code-length alphabet
+    ] {
+    let InflateError(kind, _) = @test.expect_error(() => {
+      @flate.inflate_all(input)
+    })
+    @test.assert_eq(kind, expected)
+  }
 }
 
 ///|
@@ -55,4 +57,5 @@ test "streaming Inflater turns EOF into a stable truncation error" {
   assert_true(status is Done)
   @test.assert_eq(consumed, compressed.length())
   @test.assert_eq(produced, source.length())
+  @test.assert_eq(Bytes::from_array(output[:produced]), source)
 }

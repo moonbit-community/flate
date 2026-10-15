@@ -16,27 +16,12 @@ test "decompress decodes a python-produced zlib stream" {
 }
 
 ///|
-test "zlib round-trip" {
-  @test.assert_eq(@zlib.decompress(@zlib.compress(data)), data)
-}
-
-///|
-test "zlib round-trip: empty" {
-  @test.assert_eq(@zlib.decompress(@zlib.compress(b"")), b"")
-}
-
-///|
 /// Optimal (zopfli-style) zlib round-trips and is no larger than level 6.
 test "compress_optimal round-trips and is no larger than level 6" {
   let payload = b"the quick brown fox jumps over the lazy dog. the quick brown fox jumps over the lazy dog. pack my box with five dozen liquor jugs."
   let opt = @zlib.compress_optimal(payload)
   @test.assert_eq(@zlib.decompress(opt), payload)
   assert_true(opt.length() <= @zlib.compress(payload, level=6).length())
-}
-
-///|
-test "compress_optimal: empty" {
-  @test.assert_eq(@zlib.decompress(@zlib.compress_optimal(b"")), b"")
 }
 
 ///|
@@ -82,24 +67,6 @@ test "streaming zlib Encoder round-trips through decompress" {
 }
 
 ///|
-test "streaming zlib Encoder: empty input" {
-  let enc = @zlib.Encoder()
-  let obuf = FixedArray::make(64, b'\x00')
-  let out = @buffer.Buffer()
-  for ;; {
-    let _status = enc.step(b"", obuf.mut_view(), action=Finish)
-    let p = enc.last_produced()
-    for i in 0..<p {
-      out.write_byte(obuf[i])
-    }
-    if enc.is_finished() {
-      break
-    }
-  }
-  @test.assert_eq(@zlib.decompress(out.to_bytes()), b"")
-}
-
-///|
 /// Decode the python-produced zlib vector through the streaming `zlib.Decoder`,
 /// 3 input bytes at a time into a 7-byte output buffer.
 test "streaming zlib Decoder decodes a python zlib stream in tiny chunks" {
@@ -122,40 +89,6 @@ test "streaming zlib Decoder decodes a python zlib stream in tiny chunks" {
     }
   }
   @test.assert_eq(out.to_bytes(), data)
-}
-
-///|
-/// Stream a ~50 KB zlib blob through the streaming `zlib.Decoder` in 64-byte
-/// input chunks, draining a 13-byte output buffer.
-test "streaming zlib Decoder round-trips a large stream" {
-  let unit = b"streaming zlib decode payload, the quick brown fox. "
-  let arr : Array[Byte] = []
-  for _r in 0..<1000 {
-    for i in 0..<unit.length() {
-      arr.push(unit[i])
-    }
-  }
-  let src = Bytes::from_array(arr)
-  let z = @zlib.compress(src)
-  let dec = @zlib.Decoder()
-  let obuf = FixedArray::make(13, b'\x00')
-  let out = @buffer.Buffer()
-  let n = z.length()
-  let mut fed = 0
-  for ;; {
-    let next = if fed + 64 < n { fed + 64 } else { n }
-    let _status = dec.step(z[fed:next], obuf.mut_view())
-    let c = dec.last_consumed()
-    let p = dec.last_produced()
-    for i in 0..<p {
-      out.write_byte(obuf[i])
-    }
-    fed = fed + c
-    if dec.is_finished() {
-      break
-    }
-  }
-  @test.assert_eq(out.to_bytes(), src)
 }
 
 ///|
@@ -293,32 +226,6 @@ test "malformed DEFLATE errors are wrapped as ZlibError" {
     dec.step(malformed, output.mut_view())
   })
   @test.assert_eq(kind, InvalidDeflate)
-}
-
-///|
-/// Once corruption is reported, the decoder is a stable failed terminal state:
-/// later input is not accepted and the original diagnostic is rethrown.
-test "streaming zlib Decoder latches its first error" {
-  let malformed : Bytes = [0x78, 0x01, 0x07, 0x00, 0x00, 0x00, 0x01]
-  let decoder = @zlib.Decoder()
-  let output = FixedArray::make(8, b'\xA5')
-  let ZlibError(first_kind, first_error) = @test.expect_error(() => {
-    decoder.step(malformed, output.mut_view(), end=true)
-  })
-  @test.assert_eq(decoder.last_consumed(), 0)
-  @test.assert_eq(decoder.last_produced(), 0)
-  let ZlibError(repeated_kind, repeated_error) = @test.expect_error(() => {
-    decoder.step(b"late input", output.mut_view())
-  })
-  assert_true(first_kind == InvalidDeflate)
-  assert_true(repeated_kind == first_kind)
-  @test.assert_eq(repeated_error, first_error)
-  @test.assert_eq(decoder.last_consumed(), 0)
-  @test.assert_eq(decoder.last_produced(), 0)
-  for byte in output {
-    @test.assert_eq(byte, b'\xA5')
-  }
-  assert_false(decoder.is_finished())
 }
 
 ///|

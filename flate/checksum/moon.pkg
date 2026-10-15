@@ -11,6 +11,5 @@ import {
 warnings = "-alert_experimental-unused_package"
 
 import {
-  "moonbitlang/core/quickcheck",
   "moonbitlang/core/test",
 } for "test"

@@ -32,7 +32,7 @@ fn fixed_batch_stream(count : Int32, seed : UInt32) -> Bytes {
 
 ///|
 /// The streaming inflater over all of `input`: bytes and consumed input, or
-/// the kind and the message of the error.
+/// the error category.
 fn fixed_batch_streaming(input : BytesView) -> (Bytes, Int32, String) {
   let inflater = Inflater()
   let output = FixedArray::make(700, b'\x00')
@@ -40,8 +40,7 @@ fn fixed_batch_streaming(input : BytesView) -> (Bytes, Int32, String) {
   let mut used = 0
   for ;; {
     let status = inflater.step_into(input[used:], output, end=true) catch {
-      InflateError(kind, message) =>
-        return (b"", 0, "\{@debug.to_string(kind)}: \{message}")
+      InflateError(kind, _) => return (b"", 0, @debug.to_string(kind))
     }
     used += inflater.last_consumed()
     decoded.write_bytes(Bytes::from_array(output[:inflater.last_produced()]))
@@ -56,8 +55,7 @@ fn fixed_batch_in_memory(input : BytesView) -> (Bytes, Int32, String) {
   let decoder = MemDecoder(input, no_cancellation)
   decoder.set_cancellation(None)
   decoder.run() catch {
-    InflateError(kind, message) =>
-      return (b"", 0, "\{@debug.to_string(kind)}: \{message}")
+    InflateError(kind, _) => return (b"", 0, @debug.to_string(kind))
   }
   (decoder.out.to_bytes(), decoder.consumed(), "done")
 }

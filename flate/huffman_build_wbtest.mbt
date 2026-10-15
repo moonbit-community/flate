@@ -31,49 +31,44 @@ test "canonical Huffman assigns values for two symbols" {
 }
 
 ///|
-test "linear Huffman construction retains optimal bounded cost" {
+// Independent Huffman merge cost: no production tree builder or code
+// assignment is used to compute the expected cost. The small frequency range
+// keeps the unrestricted optimum within 15 bits; the bounded case is above.
+test "Huffman construction achieves an independently computed optimal cost" {
   let rng = MatchLenDifferentialRng(0x142BCE83U)
   for n in [3, 5, 8, 19, 30, 64, 128, 286] {
-    for max_bits in [7, 15] {
-      guard n <= 1 << max_bits else { continue }
-      for distribution in 0..<24 {
-        let nodes : Array[Node] = []
-        for lit in 0..<n {
-          let freq = if distribution % 3 == 0 {
-            1
-          } else if distribution % 3 == 1 {
-            1 << rng.below(16)
-          } else {
-            1 + rng.below(8192)
-          }
-          nodes.push({ lit, freq, })
+    for distribution in 0..<6 {
+      let weights : Array[Int32] = []
+      let frequencies = FixedArray::makei(n, _ => {
+        let frequency = if distribution == 0 {
+          1
+        } else if distribution % 2 == 0 {
+          1 << rng.below(6)
+        } else {
+          1 + rng.below(32)
         }
-        nodes.sort_by((a, b) => {
-          if a.freq != b.freq {
-            a.freq - b.freq
-          } else {
-            a.lit - b.lit
-          }
-        })
-        let counts = bit_counts(nodes, n, max_bits)
-        let reference = bounded_bit_counts(nodes, n, max_bits)
-        let lengths = FixedArray::make(n, 0)
-        let expected = FixedArray::make(n, 0)
-        assign_codes(counts, nodes, lengths, None)
-        assign_codes(reference, nodes, expected, None)
-        let mut cost = 0
-        let mut optimal_cost = 0
-        let mut kraft_sum = 0
-        for node in nodes {
-          let bits = lengths[node.lit]
-          @test.assert_eq(bits >= 1 && bits <= max_bits, true)
-          cost += node.freq * bits
-          optimal_cost += node.freq * expected[node.lit]
-          kraft_sum += 1 << (max_bits - bits)
-        }
-        @test.assert_eq(cost, optimal_cost)
-        @test.assert_eq(kraft_sum, 1 << max_bits)
+        weights.push(frequency)
+        frequency
+      })
+      let mut optimal_cost = 0
+      while weights.length() > 1 {
+        weights.sort_by((a, b) => b - a)
+        let merged = weights.pop().unwrap() + weights.pop().unwrap()
+        optimal_cost += merged
+        weights.push(merged)
       }
+      let lengths = FixedArray::make(n, 0)
+      gen_huffman(frequencies, n, 15, lengths)
+      let mut cost = 0
+      let mut kraft_sum = 0
+      for i in 0..<n {
+        let bits = lengths[i]
+        assert_true(bits >= 1 && bits <= 15)
+        cost += frequencies[i] * bits
+        kraft_sum += 1 << (15 - bits)
+      }
+      @test.assert_eq(cost, optimal_cost)
+      @test.assert_eq(kraft_sum, 1 << 15)
     }
   }
 }

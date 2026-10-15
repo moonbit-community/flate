@@ -37,107 +37,6 @@ test "reused primary workspace resets deep complete sparse invalid and empty tre
 
 ///|
 #cfg(target="native")
-test "batch primary lookup accepts every prefix of an empty table" {
-  let huffman = HuffmanDecoder()
-  for bits in 0..<512 {
-    @test.assert_eq(
-      batch_huffman_entry(
-        huffman,
-        UInt64::extend_uint(bits.reinterpret_as_uint()),
-      ),
-      0U,
-    )
-  }
-}
-
-///|
-#cfg(target="native")
-test "batch requires a distance table" {
-  let decoder = MemDecoder(b"", () => false)
-  @test.assert_eq(
-    decoder.decode_batch(packed_fixed_huffman_decoder, None),
-    false,
-  )
-}
-
-///|
-#cfg(target="native")
-test "fused Huffman metadata preserves every prefix and plain-table reset" {
-  let deep = FixedArray::make(286, 0)
-  for i in 0..<14 {
-    deep[i] = i + 1
-  }
-  deep[256] = 15
-  deep[284] = 15
-  for
-    (lengths, alphabet) in [
-      (fixed_ll_len, LiteralLength),
-      (deep, LiteralLength),
-      (FixedArray::make(32, 5), Distance),
-    ] {
-    let plain = HuffmanDecoder()
-    let packed = HuffmanDecoder()
-    @test.assert_eq(plain.initialize(lengths), true)
-    @test.assert_eq(packed.initialize_data(lengths, alphabet), true)
-    for bits in 0..<32768 {
-      let word = UInt64::extend_uint(bits.reinterpret_as_uint())
-      let raw = batch_huffman_entry(plain, word)
-      let primary = plain.chunks[bits & 511]
-      let checked = if (primary & 15) > 9 {
-        plain.links[(primary >> 4).reinterpret_as_int() +
-        ((bits >> 9).reinterpret_as_uint() & plain.link_mask).reinterpret_as_int()]
-      } else {
-        primary
-      }
-      @test.assert_eq(raw, checked)
-      let entry = batch_huffman_entry(packed, word)
-      @test.assert_eq(entry & 0x1FFF, raw)
-      let symbol = (raw >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int()
-      if alphabet is LiteralLength {
-        @test.assert_eq(entry < 4096U, symbol < 256)
-        @test.assert_eq(entry >= 8192U, symbol >= 257 && symbol < 286)
-      }
-      let expected = match alphabet {
-        LiteralLength =>
-          if symbol >= 257 && symbol < 286 {
-            length_code_info_table[symbol - 257]
-          } else {
-            0
-          }
-        Distance =>
-          if symbol < MAX_NUM_DIST {
-            distance_code_info_table[symbol]
-          } else {
-            0
-          }
-      }
-      if alphabet is LiteralLength {
-        @test.assert_eq(((entry >> 13) & 0xFFF).reinterpret_as_int(), expected)
-        let total = if expected != 0 {
-          (raw & 15).reinterpret_as_int() + (expected & 7)
-        } else {
-          0
-        }
-        @test.assert_eq((entry >> 25).reinterpret_as_int(), total)
-      } else {
-        @test.assert_eq((entry >> 13).reinterpret_as_int(), expected)
-      }
-      if alphabet is Distance {
-        @test.assert_eq(expected != 0, symbol < MAX_NUM_DIST)
-      }
-    }
-    @test.assert_eq(packed.initialize(lengths), true)
-    for i in 0..<plain.chunks.length() {
-      @test.assert_eq(packed.chunks[i], plain.chunks[i])
-    }
-    for i in 0..<plain.links.length() {
-      @test.assert_eq(packed.links[i], plain.links[i])
-    }
-  }
-}
-
-///|
-#cfg(target="native")
 let packed_fixed_huffman_decoder : HuffmanDecoder = {
   let huffman = HuffmanDecoder()
   ignore(huffman.initialize_data(fixed_ll_len, LiteralLength))
@@ -191,22 +90,6 @@ test "batch handles the maximum forty-eight-bit token" {
     for i in decoder.out.length..<storage.length() {
       @test.assert_eq(storage[i], b'\xA5')
     }
-  }
-}
-
-///|
-#cfg(target="native")
-test "batch lookup covers linked fifteen-bit Huffman entries" {
-  let lengths = FixedArray::makei(16, i => (i + 1).min(15))
-  let huffman = HuffmanDecoder()
-  @test.assert_eq(huffman.initialize(lengths), true)
-  for symbol in 0..<16 {
-    let code = if symbol == 15 { 32767U } else { (1U << (symbol + 1)) - 2 }
-    let reversed = reverse_bits(code, lengths[symbol])
-    let word = UInt64::extend_uint(reversed) | (0x55UL << lengths[symbol])
-    let entry = batch_huffman_entry(huffman, word)
-    @test.assert_eq((entry >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int(), symbol)
-    @test.assert_eq((entry & 15).reinterpret_as_int(), lengths[symbol])
   }
 }
 

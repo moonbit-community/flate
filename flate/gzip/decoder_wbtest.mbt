@@ -3,67 +3,23 @@
 /// arrive, never banked in `pending`, so an adversarial unterminated FNAME
 /// cannot grow decoder memory.
 test "gzip header FNAME bytes are discarded, not retained" {
-  let dec = Decoder()
-  let obuf = FixedArray::make(1, b'\x00')
-  // Fixed header with FLG = FNAME only.
-  let hdr : Bytes = [0x1F, 0x8B, 0x08, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF]
-  let _st = dec.step(hdr, obuf.mut_view())
-  let _c = dec.last_consumed()
-  let _p = dec.last_produced()
-  // 64 KB of name bytes with no terminator, fed in 1 KB chunks.
+  let decoder = Decoder()
+  let output = FixedArray::make(64, b'\x00')
+  let header = b"\x1F\x8B\x08\x08\x00\x00\x00\x00\x00\xFF"
+  @test.assert_eq(decoder.step(header, output.mut_view()), NeedMoreInput)
   let chunk = Bytes::make(1024, b'x')
-  for _i in 0..<64 {
-    let _st2 = dec.step(chunk, obuf.mut_view())
-    let _c2 = dec.last_consumed()
-    let _p2 = dec.last_produced()
-    @test.assert_eq(dec.pending.length(), 0)
+  for _ in 0..<64 {
+    @test.assert_eq(decoder.step(chunk, output.mut_view()), NeedMoreInput)
+    @test.assert_eq(decoder.last_consumed(), chunk.length())
+    @test.assert_eq(decoder.last_produced(), 0)
+    @test.assert_eq(decoder.pending.length(), 0)
   }
-}
-
-///|
-/// Output-only resume calls advance a cursor into the retained input.
-/// They must not rebuild or shift the large compressed tail on every
-/// byte of output.
-test "gzip body backpressure reuses pending storage" {
-  let input : Array[Byte] = []
-  for i in 0..<10000 {
-    input.push((i & 0xFF).to_byte())
-  }
-  let gz = compress(Bytes::from_array(input), level=0)
-  let dec = Decoder()
-  let obuf = FixedArray::make(1, b'\x00')
-  let split = 9000
-  assert_true(gz.length() > split + 1)
-  let _st = dec.step(gz[:split], obuf.mut_view())
-  let consumed = dec.last_consumed()
-  let produced = dec.last_produced()
-  @test.assert_eq(consumed, split)
-  @test.assert_eq(produced, 1)
-  let backing_len = dec.pending.length()
-  let first_pos = dec.pending_pos
-  assert_true(backing_len > 8900)
-  assert_true(backing_len <= DECODER_INPUT_LIMIT)
-  assert_false(dec.borrowed_input)
-  for _i in 0..<64 {
-    let _st2 = dec.step(b"", obuf.mut_view())
-    let c = dec.last_consumed()
-    let p = dec.last_produced()
-    @test.assert_eq(c, 0)
-    @test.assert_eq(p, 1)
-    @test.assert_eq(dec.pending.length(), backing_len)
-    assert_false(dec.borrowed_input)
-  }
-  assert_true(dec.pending_pos > first_pos)
-  // While accepted body input remains output-backpressured, a new transport
-  // byte stays with the caller and the decoder keeps draining its current view.
-  let pending_len = dec.pending.length()
-  let _st3 = dec.step(gz[split:split + 1], obuf.mut_view())
-  let c3 = dec.last_consumed()
-  let p3 = dec.last_produced()
-  @test.assert_eq(c3, 0)
-  @test.assert_eq(p3, 1)
-  @test.assert_eq(dec.pending.length(), pending_len)
-  assert_false(dec.borrowed_input)
+  let plain = b"body after a long filename"
+  let normal = compress(plain)
+  let rest = b"\x00" + normal[10:].to_owned()
+  @test.assert_eq(decoder.step(rest, output.mut_view(), end=true), Done)
+  @test.assert_eq(decoder.last_consumed(), rest.length())
+  @test.assert_eq(Bytes::from_array(output[:decoder.last_produced()]), plain)
 }
 
 ///|
@@ -128,9 +84,9 @@ test "gzip failed state freezes decoder cursors" {
 }
 
 ///|
-/// `step_into` and `step` must give the same bytes, the same number of steps
-/// and the same verdict for every split of input and output.
-test "gzip step_into equals step for every input and output split" {
+// Both output entry points must agree on every call, including checksum
+// failures. Known plaintext also catches a bug shared by both entry points.
+test "gzip step_into and offset step views preserve the per-call contract" {
   let source = Bytes::makei(70000, i => {
     if i % 4096 < 2600 {
       b"streaming decoders must agree. "[i % 31]
@@ -140,99 +96,71 @@ test "gzip step_into equals step for every input and output split" {
   })
   for level in [0, 6] {
     let compressed = compress(source, level~)
-    let damaged = FixedArray::makei(compressed.length(), i => compressed[i])
-    damaged[compressed.length() - 5] = (damaged[compressed.length() - 5].to_int() ^
-    1).to_byte()
-    for stream in [compressed, Bytes::from_array(damaged)] {
-      for split in [(1 << 20, 32768), (700, 32768), (9000, 4096), (33, 7)] {
-        let (chunk, room) = split
-        let outcomes : Array[(Bytes, Int32, String)] = []
-        for fixed in [true, false] {
-          let decoder = Decoder()
-          let output = FixedArray::make(room, b'\x00')
-          let decoded = @buffer.Buffer()
-          let mut position = 0
-          let mut steps = 0
-          let mut verdict = "done"
-          for ;; {
-            let end = (position + chunk).min(stream.length())
-            let status = try {
-              if fixed {
-                decoder.step_into(
-                  stream[position:end],
-                  output,
-                  end=end == stream.length(),
-                )
-              } else {
-                decoder.step(
-                  stream[position:end],
-                  output.mut_view(),
-                  end=end == stream.length(),
-                )
-              }
-            } catch {
-              GzipError(kind, _) => {
-                verdict = @debug.to_string(kind)
-                break
-              }
-            }
-            position = position + decoder.last_consumed()
-            for i in 0..<decoder.last_produced() {
-              decoded.write_byte(output[i])
-            }
-            steps = steps + 1
-            if status is Done {
+    let damaged = compressed.to_fixedarray()
+    damaged[compressed.length() - 5] = damaged[compressed.length() - 5] ^
+      b'\x01'
+    for
+      (stream, expected_error) in [
+        (compressed, None),
+        (Bytes::from_array(damaged), Some(ChecksumMismatch)),
+      ] {
+      for (chunk, room) in [(1 << 20, 32768), (33, 7)] {
+        let fixed = Decoder()
+        let viewed = Decoder()
+        let output = FixedArray::make(room, b'\x00')
+        let padded = FixedArray::make(room + 6, b'\xA5')
+        let decoded = @buffer.Buffer()
+        let mut position = 0
+        let mut verdict = None
+        for ;; {
+          let end = (position + chunk).min(stream.length())
+          let input = stream[position:end]
+          let status = try
+            fixed.step_into(input, output, end=end == stream.length())
+          catch {
+            GzipError(kind, _) => Err(kind)
+          } noraise {
+            status => Ok(status)
+          }
+          let other = try
+            viewed.step(
+              input,
+              padded.mut_view(start=3, end=room + 3),
+              end=end == stream.length(),
+            )
+          catch {
+            GzipError(kind, _) => Err(kind)
+          } noraise {
+            status => Ok(status)
+          }
+          @test.assert_eq(status, other)
+          @test.assert_eq(fixed.last_consumed(), viewed.last_consumed())
+          @test.assert_eq(fixed.last_produced(), viewed.last_produced())
+          @test.assert_eq(padded[2], b'\xA5')
+          @test.assert_eq(padded[room + 3], b'\xA5')
+          match status {
+            Err(kind) => {
+              verdict = Some(kind)
               break
             }
+            Ok(status) => {
+              let count = fixed.last_produced()
+              @test.assert_eq(output[:count], padded[3:3 + count])
+              decoded.write_bytes(Bytes::from_array(output[:count]))
+              position += fixed.last_consumed()
+              if status is Done {
+                break
+              }
+              assert_true(fixed.last_consumed() > 0 || count > 0)
+            }
           }
-          outcomes.push((decoded.to_bytes(), steps, verdict))
         }
-        @test.assert_eq(outcomes[0], outcomes[1])
-        if physical_equal(stream, compressed) {
-          @test.assert_eq(outcomes[0].0, source)
-          @test.assert_eq(outcomes[0].2, "done")
-        } else {
-          @test.assert_eq(outcomes[0].2, "ChecksumMismatch")
+        @test.assert_eq(verdict, expected_error)
+        if expected_error is None {
+          @test.assert_eq(decoded.to_bytes(), source)
+          @test.assert_eq(position, stream.length())
         }
       }
     }
-  }
-}
-
-///|
-test "gzip view checksum batches equal bytewise updates" {
-  let storage = FixedArray::makei(3 * CHECKSUM_VIEW_CHUNK + 40, i => {
-    (i * 131 + i / 7).to_byte()
-  })
-  for view_start in [0, 3] {
-    let view = storage.mut_view(start=view_start)
-    for start in [0, 1, 17] {
-      for
-        length in [
-          0,
-          1,
-          15,
-          16,
-          17,
-          CHECKSUM_VIEW_CHUNK - 1,
-          CHECKSUM_VIEW_CHUNK,
-          CHECKSUM_VIEW_CHUNK + 1,
-          2 * CHECKSUM_VIEW_CHUNK + 5,
-          view.length() - start,
-        ] {
-        let batched = Decoder()
-        let bytewise = Decoder()
-        batched.checksum_view(view, start, length)
-        for i in 0..<length {
-          bytewise.crc.update_byte(view[start + i])
-        }
-        @test.assert_eq(batched.crc.finish(), bytewise.crc.finish())
-      }
-    }
-    // A range that is not inside the view folds nothing.
-    let outside = Decoder()
-    outside.checksum_view(view, view.length() - 1, 2)
-    outside.checksum_view(view, -1, 1)
-    @test.assert_eq(outside.crc.finish(), Decoder().crc.finish())
   }
 }

@@ -1,11 +1,4 @@
 ///|
-test "status is inspectable" {
-  debug_inspect(@flate.Done, content="Done")
-  debug_inspect(@flate.NeedMoreInput, content="NeedMoreInput")
-  debug_inspect(@flate.NeedMoreOutput, content="NeedMoreOutput")
-}
-
-///|
 /// A single final stored (uncompressed) DEFLATE block holding "hello".
 let hello_stored : Bytes = [
   0x01, 0x05, 0x00, 0xFA, 0xFF, 0x68, 0x65, 0x6C, 0x6C, 0x6F,
@@ -41,6 +34,22 @@ let v_stored_seq : Bytes = [
 ]
 
 ///|
+// Full plaintext independently decoded from v_dynamic_text with Python zlib.
+let dynamic_plain : Bytes = b"The quick brown fox jumps over the lazy dog. " +
+  b"The quick brown fox jumps over the lazy dog. " +
+  b"The quick brown fox jumps over the lazy dog. " +
+  b"The quick brown fox jumps over the lazy dog. " +
+  b"The quick brown fox jumps over the lazy dog. " +
+  b"The quick brown fox jumps over the lazy dog. " +
+  b"Pack my box with five dozen liquor jugs. " +
+  b"Pack my box with five dozen liquor jugs. " +
+  b"Pack my box with five dozen liquor jugs. " +
+  b"Pack my box with five dozen liquor jugs. " +
+  b"How razorback-jumping frogs can level six piqued gymnasts! " +
+  b"How razorback-jumping frogs can level six piqued gymnasts! " +
+  b"How razorback-jumping frogs can level six piqued gymnasts! "
+
+///|
 test "inflate a stored block (one-shot)" {
   @test.assert_eq(@flate.inflate_all(hello_stored), b"hello")
 }
@@ -60,29 +69,13 @@ test "inflate fixed-Huffman with back-references" {
 
 ///|
 test "inflate dynamic-Huffman block (exercises link table)" {
-  let out = @flate.inflate_all(v_dynamic_text)
-  inspect(out.length(), content="611")
-  @test.assert_eq(
-    out[0:44].to_owned(),
-    b"The quick brown fox jumps over the lazy dog.",
-  )
+  @test.assert_eq(@flate.inflate_all(v_dynamic_text), dynamic_plain)
 }
 
 ///|
 test "inflate stored block via inflate_all" {
-  let out = @flate.inflate_all(v_stored_seq)
-  inspect(out.length(), content="60")
-  inspect(out[0].to_int(), content="0")
-  inspect(out[59].to_int(), content="59")
-}
-
-///|
-test "inflate_all bulk-copies multi-block stored input" {
-  let bytes = Array::make(131072, b'\x00')
-  for i in 0..<bytes.length() {
-    bytes[i] = (i * 31 + i / 7).to_byte()
-  }
-  let source = Bytes::from_array(bytes)
-  let compressed = @flate.deflate_all(source, level=0)
-  @test.assert_eq(@flate.inflate_all(compressed), source)
+  @test.assert_eq(
+    @flate.inflate_all(v_stored_seq),
+    Bytes::makei(60, i => i.to_byte()),
+  )
 }

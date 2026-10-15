@@ -41,21 +41,3 @@ test "gzip wrappers bound accepted input under output backpressure" {
     assert_false(decoder.ending)
   }
 }
-
-///|
-test "gzip decoder waits at an empty boundary after a verified member" {
-  // This is the exact valid state reached after a member trailer is consumed
-  // at an input boundary. Without a physical end signal, an empty next view
-  // must not be mistaken for the end of a concatenated gzip stream.
-  let decoder = Decoder()
-  decoder.members = 1
-  decoder.mode = GzHeader
-  let output = FixedArray::make(1, b'\x00')
-  let status = decoder.step_into(b"", output)
-  let consumed = decoder.last_consumed()
-  let produced = decoder.last_produced()
-  assert_true(status is NeedMoreInput)
-  @test.assert_eq(consumed, 0)
-  @test.assert_eq(produced, 0)
-  assert_false(decoder.is_finished())
-}

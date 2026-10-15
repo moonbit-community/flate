@@ -68,38 +68,35 @@ test "Deflater latches end before a completed view is backpressured" {
 }
 
 ///|
-test "stored block count handles empty and 65535-byte boundaries" {
-  @test.assert_eq(stored_block_count(0), 1)
-  @test.assert_eq(stored_block_count(1), 1)
-  @test.assert_eq(stored_block_count(65534), 1)
-  @test.assert_eq(stored_block_count(65535), 1)
-  @test.assert_eq(stored_block_count(65536), 2)
-  @test.assert_eq(stored_block_count(131069), 2)
-  @test.assert_eq(stored_block_count(131070), 2)
-  @test.assert_eq(stored_block_count(131071), 3)
-}
-
-///|
-test "Deflater reset clears a queued flush request" {
-  let d = Deflater(level=0)
-  let src = Bytes::from_array(Array::make(17000, b'\x5A'))
+test "Deflater reset clears queued flush and end requests" {
+  let source = Bytes::make(17000, b'Z')
   let no_output = FixedArray::make(0, b'\x00')
-  let _ = d.step(src, no_output.mut_view())
-  let _ = d.step(b"", no_output.mut_view(), action=SyncFlush)
-  assert_true(d.flush_requested)
-  d.reset()
-  assert_false(d.flush_requested)
-}
-
-///|
-test "Deflater reset clears a queued end request" {
-  let d = Deflater(level=0)
-  let src = Bytes::from_array(Array::make(17000, b'\x5A'))
-  let no_output = FixedArray::make(0, b'\x00')
-  let _ = d.step(src, no_output.mut_view())
-  let _ = d.step(b"", no_output.mut_view(), action=Finish)
-  assert_true(d.end_requested)
-  assert_false(d.emitted_final)
-  d.reset()
-  assert_false(d.end_requested)
+  for action in [SyncFlush, Finish] {
+    let deflater = Deflater(level=0)
+    @test.assert_eq(deflater.step(source, no_output.mut_view()), NeedMoreOutput)
+    @test.assert_eq(
+      deflater.step(b"", no_output.mut_view(), action~),
+      NeedMoreOutput,
+    )
+    assert_true(
+      if action is SyncFlush {
+        deflater.flush_requested
+      } else {
+        deflater.end_requested
+      },
+    )
+    deflater.reset()
+    let output = FixedArray::make(64, b'\xA5')
+    let status = deflater.step(
+      b"fresh stream",
+      output.mut_view(),
+      action=Finish,
+    )
+    @test.assert_eq(status, Done)
+    @test.assert_eq(deflater.last_consumed(), 12)
+    @test.assert_eq(
+      inflate_all(Bytes::from_array(output[:deflater.last_produced()])),
+      b"fresh stream",
+    )
+  }
 }

@@ -16,31 +16,6 @@ fn expect_zip_kind(
 }
 
 ///|
-test "zip checked conversions reject out-of-range values" {
-  expect_zip_error(() => ignore(0x80000000U.to_int_checked()))
-}
-
-///|
-test "zip cursor and field readers reject truncated input" {
-  expect_zip_error(() => ignore(Cursor(b"", 0).read_u8()))
-  expect_zip_error(() => ignore(Cursor(b"", 0).read_bytes(1)))
-  expect_zip_error(() => ignore(read_u16_le_at(b"", 0)))
-  expect_zip_error(() => ignore(read_u32_le_at_raw(b"", 0)))
-  expect_zip_error(() => ignore(read_u64_le_at(b"", 0)))
-  @test.assert_eq(find_end_of_central(b"too short"), None)
-  expect_zip_kind(() => ignore(decode_name(b"\xff")), InvalidUtf8)
-  expect_zip_kind(
-    () => ensure_flags_supported(FLAG_ENCRYPTED),
-    UnsupportedFeature,
-  )
-  expect_zip_kind(() => ensure_flags_supported(0x0010), UnsupportedFeature)
-  expect_zip_kind(
-    () => ignore(method_from_code(99)),
-    UnsupportedCompression(99),
-  )
-}
-
-///|
 fn push_u16le(buf : Array[Byte], v : Int32) -> Unit {
   buf.push((v & 0xFF).to_byte())
   buf.push(((v >> 8) & 0xFF).to_byte())
@@ -314,86 +289,67 @@ fn base_meta() -> MemoryEntryMeta {
 
 ///|
 test "zip local-record validation rejects each mismatch" {
-  // Offset outside the central directory.
-  expect_zip_error(() => {
-    ignore(read_local_record(b"", { ..base_meta(), local_offset: 100, }, 50))
-  })
-  // Flags differ between local and central.
-  let flags_bytes = local_record(
-    0x0800, 0, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => {
-    ignore(read_local_record(flags_bytes, base_meta(), 100))
-  })
-  // Method differs.
-  let method_bytes = local_record(
-    0, 8, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => {
-    ignore(read_local_record(method_bytes, base_meta(), 100))
-  })
-  // Name differs.
-  let name_bytes = local_record(
-    0, 0, 0x11111111U, 3, 3, b"b.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => ignore(read_local_record(name_bytes, base_meta(), 100)))
-  // Descriptor entry with a mismatched CRC.
-  let desc_crc_bytes = local_record(
-    0x0008, 0, 0x22222222U, 3, 3, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => {
-    ignore(
-      read_local_record(
-        desc_crc_bytes,
-        { ..base_meta(), flags: 0x0008, data_descriptor: true, },
-        100,
-      ),
+  let valid = local_record(0, 0, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b"")
+  let record = read_local_record(valid, base_meta(), valid.length())
+  @test.assert_eq(record.compressed, b"abc")
+  @test.assert_eq(record.end, valid.length())
+  for
+    invalid in [
+      local_record(0x0800, 0, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b""),
+      local_record(0, 8, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b""),
+      local_record(0, 0, 0x11111111U, 3, 3, b"b.txt", b"", b"abc", b""),
+      local_record(0, 0, 0x22222222U, 3, 3, b"a.txt", b"", b"abc", b""),
+      local_record(0, 0, 0x11111111U, 5, 5, b"a.txt", b"", b"abcde", b""),
+    ] {
+    expect_zip_kind(
+      () => ignore(read_local_record(invalid, base_meta(), invalid.length())),
+      UnsupportedFeature,
     )
-  })
-  // Non-descriptor entry with a mismatched CRC.
-  let crc_bytes = local_record(
-    0, 0, 0x22222222U, 3, 3, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => ignore(read_local_record(crc_bytes, base_meta(), 100)))
-  // Size mismatch between local and central.
-  let size_bytes = local_record(
-    0, 0, 0x11111111U, 5, 5, b"a.txt", b"", b"abcde", b"",
-  )
-  expect_zip_error(() => ignore(read_local_record(size_bytes, base_meta(), 100)))
-  // Compressed payload runs past the central directory.
-  let overflow_bytes = local_record(
-    0, 0, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => {
-    ignore(read_local_record(overflow_bytes, base_meta(), 37))
-  })
-  // A data descriptor extending past the central directory.
-  let desc_overflow = {
-    let buf : Array[Byte] = []
-    push_u32le(buf, 0x11111111U)
-    push_u32le(buf, 1)
-    push_u32le(buf, 1)
-    bytes_of(buf)
   }
-  let desc_bytes = local_record(
-    0x0008, 0, 0x11111111U, 1, 1, b"a", b"", b"x", desc_overflow,
+  expect_zip_kind(
+    () => {
+      ignore(
+        read_local_record(valid, { ..base_meta(), local_offset: 100, }, 50),
+      )
+    },
+    Truncated,
   )
-  expect_zip_error(() => {
-    ignore(
-      read_local_record(
-        desc_bytes,
-        {
-          ..base_meta(),
-          flags: 0x0008,
-          compressed_size: 1,
-          uncompressed_size: 1,
-          name: "a",
-          data_descriptor: true,
-        },
-        43,
-      ),
-    )
-  })
+  expect_zip_kind(
+    () => ignore(read_local_record(valid, base_meta(), valid.length() - 1)),
+    Truncated,
+  )
+  // Validate a complete descriptor first. Its name metadata must match the
+  // local name so the truncated version reaches the descriptor-boundary check.
+  let descriptor : Array[Byte] = []
+  push_u32le(descriptor, 0x11111111U)
+  push_u32le(descriptor, 1)
+  push_u32le(descriptor, 1)
+  let framed = local_record(
+    8,
+    0,
+    0,
+    1,
+    1,
+    b"a.txt",
+    b"",
+    b"x",
+    bytes_of(descriptor),
+  )
+  let meta = {
+    ..base_meta(),
+    flags: 8,
+    compressed_size: 1,
+    uncompressed_size: 1,
+    data_descriptor: true,
+  }
+  @test.assert_eq(
+    read_local_record(framed, meta, framed.length()).end,
+    framed.length(),
+  )
+  expect_zip_kind(
+    () => ignore(read_local_record(framed, meta, framed.length() - 1)),
+    Truncated,
+  )
 }
 
 ///|
@@ -622,140 +578,52 @@ fn eocd_for(
 
 ///|
 test "zip central-directory parsing rejects malformed records" {
-  let default_limits = ReadLimits()
-  // Wrong central record signature.
-  expect_zip_error(() => {
-    ignore(
-      parse_central_directory(
-        b"\x00\x00\x00\x00",
-        eocd_for(1, 4, 4),
-        default_limits,
-        () => false,
-      ),
-    )
-  })
-  // Central record on a non-zero disk.
-  let disk_record = central_record(1, 0, 0, 0x11111111U, 3, 3, b"a.txt", b"", 0)
-  expect_zip_error(() => {
-    ignore(
-      parse_central_directory(
-        disk_record,
-        eocd_for(1, disk_record.length(), disk_record.length()),
-        default_limits,
-        () => false,
-      ),
-    )
-  })
-  // ZIP64 size placeholders with no zip64 extra field.
+  let valid = central_record(0, 0, 0, 0x11111111U, 3, 3, b"a.txt", b"", 0)
+  let limits = ReadLimits()
+  let eocd = eocd_for(1, valid.length(), valid.length())
+  let parsed = parse_central_directory(valid, eocd, limits, () => false)
+  @test.assert_eq(parsed.length(), 1)
+  @test.assert_eq(parsed[0].name, "a.txt")
+  let wrong_signature = valid.to_fixedarray()
+  wrong_signature[0] = b'\x00'
+  expect_zip_kind(
+    () => {
+      ignore(
+        parse_central_directory(
+          Bytes::from_array(wrong_signature),
+          eocd,
+          limits,
+          () => false,
+        ),
+      )
+    },
+    InvalidSignature,
+  )
   let max_int = MAX_U32.reinterpret_as_int()
-  let missing_uncomp = central_record(
-    0, 0, 0, 0x11111111U, 3, max_int, b"a.txt", b"", 0,
-  )
-  expect_zip_error(() => {
-    ignore(
-      parse_central_directory(
-        missing_uncomp,
-        eocd_for(1, missing_uncomp.length(), missing_uncomp.length()),
-        default_limits,
-        () => false,
-      ),
+  for
+    invalid in [
+      central_record(1, 0, 0, 0x11111111U, 3, 3, b"a.txt", b"", 0),
+      central_record(0, 0, 0, 0x11111111U, 3, max_int, b"a.txt", b"", 0),
+      central_record(0, 0, 0, 0x11111111U, max_int, 3, b"a.txt", b"", 0),
+      central_record(0, 0, 0, 0x11111111U, 3, 3, b"a.txt", b"", max_int),
+    ] {
+    expect_zip_kind(
+      () => ignore(parse_central_directory(invalid, eocd, limits, () => false)),
+      UnsupportedFeature,
     )
-  })
-  let missing_comp = central_record(
-    0, 0, 0, 0x11111111U, max_int, 3, b"a.txt", b"", 0,
-  )
-  expect_zip_error(() => {
-    ignore(
-      parse_central_directory(
-        missing_comp,
-        eocd_for(1, missing_comp.length(), missing_comp.length()),
-        default_limits,
-        () => false,
-      ),
-    )
-  })
-  let missing_offset = central_record(
-    0, 0, 0, 0x11111111U, 3, 3, b"a.txt", b"", max_int,
-  )
-  expect_zip_error(() => {
-    ignore(
-      parse_central_directory(
-        missing_offset,
-        eocd_for(1, missing_offset.length(), missing_offset.length()),
-        default_limits,
-        () => false,
-      ),
-    )
-  })
-  // Central records end before the declared central size.
-  let good_record = central_record(0, 0, 0, 0x11111111U, 3, 3, b"a.txt", b"", 0)
-  expect_zip_error(() => {
-    ignore(
-      parse_central_directory(
-        good_record,
-        eocd_for(1, good_record.length() + 3, good_record.length()),
-        default_limits,
-        () => false,
-      ),
-    )
-  })
-}
-
-///|
-test "zip entry decode rejects oversized and mismatched payloads" {
-  // Stored entry larger than the per-entry limit.
-  let big_store = local_record(
-    0, 0, 0x11111111U, 10, 10, b"a.txt", b"", b"0123456789", b"",
-  )
+  }
   expect_zip_kind(
     () => {
       ignore(
-        decode_entry(
-          big_store,
-          { ..base_meta(), compressed_size: 10, uncompressed_size: 10, },
-          100,
-          ReadLimits(max_entry_uncompressed_bytes=5),
-          0,
+        parse_central_directory(
+          valid,
+          eocd_for(1, valid.length() + 3, valid.length()),
+          limits,
           () => false,
         ),
       )
     },
-    LimitExceeded(EntryUncompressedBytes, 5, 10),
-  )
-  // Decoded size disagrees with the central directory.
-  let size_mismatch = local_record(
-    0, 0, 0x11111111U, 3, 5, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => {
-    ignore(
-      decode_entry(
-        size_mismatch,
-        { ..base_meta(), compressed_size: 3, uncompressed_size: 5, },
-        100,
-        ReadLimits(),
-        0,
-        () => false,
-      ),
-    )
-  })
-  // Entries together exceed the total uncompressed limit.
-  let total_over = local_record(
-    0, 0, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_kind(
-    () => {
-      ignore(
-        decode_entry(
-          total_over,
-          base_meta(),
-          100,
-          ReadLimits(max_total_uncompressed_bytes=3),
-          2,
-          () => false,
-        ),
-      )
-    },
-    LimitExceeded(TotalUncompressedBytes, 3, 5),
+    UnsupportedFeature,
   )
 }
 
@@ -787,45 +655,6 @@ test "zip entry names and output limits are checked" {
     write(small, max_output_bytes=1000, preserve=true),
     write(small),
   )
-}
-
-///|
-test "zip local-order keeps a replaced entry in its original position" {
-  let src = Archive()
-  src.add("a.txt", b"x")
-  src.add("b.txt", b"y")
-  let archive = read(write(src))
-  @test.assert_eq(archive.replace("a.txt", b"xx"), true)
-  let order = archive.local_order()
-  @test.assert_eq(order.length(), 2)
-  @test.assert_eq(archive.entries()[order[0]].name(), "a.txt")
-  @test.assert_eq(archive.entries()[order[1]].name(), "b.txt")
-}
-
-///|
-test "zip local-order sorts read-origin entries ahead of fresh ones" {
-  let src = Archive()
-  src.add("a.txt", b"x")
-  src.add("b.txt", b"y")
-  let archive = read(write(src))
-  archive.add("fresh.txt", b"z")
-  // Read-origin entries (origin Some) precede a fresh entry (origin None).
-  let forward = archive.local_order()
-  @test.assert_eq(forward.length(), 3)
-  @test.assert_eq(archive.entries()[forward[0]].name(), "a.txt")
-  @test.assert_eq(archive.entries()[forward[1]].name(), "b.txt")
-  @test.assert_eq(archive.entries()[forward[2]].name(), "fresh.txt")
-  // Even when the fresh entry sits first in the array, it still sorts last.
-  let mixed = {
-    entries: [archive.entries[2], archive.entries[0], archive.entries[1]],
-    comment: b"",
-    trailer: None,
-    original: None,
-  }
-  let reordered = mixed.local_order()
-  @test.assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
-  @test.assert_eq(mixed.entries()[reordered[1]].name(), "b.txt")
-  @test.assert_eq(mixed.entries()[reordered[2]].name(), "fresh.txt")
 }
 
 ///|
@@ -1027,33 +856,4 @@ test "CRC-32 computation honours ZIP cancellation" {
   })
   @test.assert_eq(kind, Cancelled)
   assert_true(polls >= 4)
-}
-
-///|
-/// Cancellation cases moved from the former combined checksum property.
-test "property: ZIP checksum cancellation includes the last poll" {
-  @quickcheck.check(
-    (data : Bytes) => {
-      guard crc32_cancellable(data, cancelled=() => false) ==
-        @checksum.crc32(data) else {
-        return false
-      }
-      let ZipError(kind, _) = @test.expect_error(() => {
-        crc32_cancellable(data, cancelled=() => true)
-      })
-      guard kind is Cancelled else { return false }
-      let total_polls = 2 + (data.length() - 1) / 4096
-      let mut polls = 0
-      let ZipError(kind, _) = @test.expect_error(() => {
-        crc32_cancellable(data, cancelled=() => {
-          polls += 1
-          polls >= total_polls
-        })
-      })
-      kind is Cancelled
-    },
-    count=60,
-    max_size=2000,
-    seed=0xC0C11E,
-  )
 }

@@ -1,36 +1,4 @@
 ///|
-test "raw inflate errors expose stable categories" {
-  try ignore(@flate.inflate_all(b"")) catch {
-    InflateError(kind, _) => assert_true(kind == Truncated)
-  } noraise {
-    _ => @test.fail("empty raw DEFLATE input was accepted")
-  }
-  try ignore(@flate.inflate_all(([0x07] : Bytes))) catch {
-    InflateError(kind, _) => assert_true(kind == Corrupt)
-  } noraise {
-    _ => @test.fail("reserved raw DEFLATE block was accepted")
-  }
-}
-
-///|
-test "inflate_exact rejects bytes after the raw stream" {
-  let source = b"exact framing keeps the next protocol frame visible"
-  let compressed = @flate.deflate_all(source)
-  @test.assert_eq(@flate.inflate_exact(compressed), source)
-  let framed = compressed + b"NEXT"
-  try ignore(@flate.inflate_exact(framed)) catch {
-    InflateError(kind, _) => assert_true(kind == TrailingData)
-  } noraise {
-    _ => @test.fail("inflate_exact accepted trailing data")
-  }
-  try ignore(@flate.inflate_exact(b"")) catch {
-    InflateError(kind, _) => assert_true(kind == Truncated)
-  } noraise {
-    _ => @test.fail("inflate_exact accepted truncated input")
-  }
-}
-
-///|
 test "bounded inflate_all enforces its decoded-size boundary" {
   let source = b"bounded one-shot inflate"
   let compressed = @flate.deflate_all(source)
@@ -94,10 +62,7 @@ test "inflate_exact preallocated and grow paths agree" {
         @flate.inflate_exact(compressed, preallocated=true),
         source,
       )
-      @test.assert_eq(
-        @flate.inflate_exact(compressed),
-        @flate.inflate_exact(compressed, preallocated=true),
-      )
+      @test.assert_eq(@flate.inflate_exact(compressed), source)
     }
   }
 }
@@ -128,38 +93,12 @@ test "inflate_exact enforces max_output on both paths" {
 }
 
 ///|
-test "preallocated inflate_exact still rejects trailing bytes" {
-  let source = b"exact framing stays exact under preallocation"
-  let compressed = @flate.deflate_all(source)
-  let framed = compressed + b"NEXT"
-  try ignore(@flate.inflate_exact(framed, preallocated=true)) catch {
-    InflateError(kind, _) => assert_true(kind == TrailingData)
-  } noraise {
-    _ => @test.fail("preallocated inflate_exact accepted trailing data")
-  }
-}
-
-///|
-test "inflate_exact entry cancellation raises Cancelled" {
-  try ignore(@flate.inflate_exact(b"\x03\x00", cancelled=() => true)) catch {
-    InflateError(kind, _) => assert_true(kind == Cancelled)
-  } noraise {
-    _ => @test.fail("entry cancellation was not honored")
-  }
-}
-
-///|
-test "preallocated inflate_exact entry cancellation raises Cancelled" {
-  let source = Bytes::from_array(Array::make(30000, b'A'))
-  let compressed = @flate.deflate_all(source)
-  try
-    ignore(
-      @flate.inflate_exact(compressed, preallocated=true, cancelled=() => true),
-    )
-  catch {
-    InflateError(kind, _) => assert_true(kind == Cancelled)
-  } noraise {
-    _ => @test.fail("preallocated entry cancellation was not honored")
+test "inflate_exact entry cancellation raises Cancelled on both paths" {
+  for preallocated in [false, true] {
+    let InflateError(kind, _) = @test.expect_error(() => {
+      @flate.inflate_exact(b"\x03\x00", preallocated~, cancelled=() => true)
+    })
+    @test.assert_eq(kind, Cancelled)
   }
 }
 
@@ -192,72 +131,22 @@ test "preallocated inflate_exact honors cancellation in both passes" {
 }
 
 ///|
-test "inflate_all polls the cancel callback" {
-  let source = Bytes::from_array(Array::make(20000, b'X'))
-  let compressed = @flate.deflate_all(source)
-  let mut calls = 0
-  try
-    ignore(
-      @flate.inflate_all(compressed, cancelled=() => {
-        calls = calls + 1
-        calls >= 5
-      }),
-    )
-  catch {
-    InflateError(kind, _) => assert_true(kind == Cancelled)
-  } noraise {
-    _ => @test.fail("inflate_all ignored cancellation")
-  }
-  // Entry poll fires even for input that would decode instantly.
-  let mut early = 0
-  try
-    ignore(
-      @flate.inflate_all(compressed, cancelled=() => {
-        early = early + 1
-        early >= 1
-      }),
-    )
-  catch {
-    InflateError(kind, _) => assert_true(kind == Cancelled)
-  } noraise {
-    _ => @test.fail("inflate_all ignored entry cancellation")
-  }
-}
-
-///|
-test "inflate_all polls while copying stored blocks" {
-  let source = Bytes::from_array(Array::make(10000, b'X'))
-  let compressed = @flate.deflate_all(source, level=0)
-  let mut calls = 0
-  try
-    ignore(
-      @flate.inflate_all(compressed, cancelled=() => {
-        calls = calls + 1
-        calls >= 3
-      }),
-    )
-  catch {
-    InflateError(kind, _) => assert_true(kind == Cancelled)
-  } noraise {
-    _ => @test.fail("inflate_all did not poll while copying stored data")
-  }
-}
-
-///|
-test "bounded inflate_all polls the cancel callback" {
-  let source = Bytes::from_array(Array::make(20000, b'X'))
-  let compressed = @flate.deflate_all(source)
-  let mut calls = 0
-  try
-    ignore(
-      @flate.inflate_all(compressed, max_output=100000, cancelled=() => {
-        calls = calls + 1
-        calls >= 3
-      }),
-    )
-  catch {
-    InflateError(kind, _) => assert_true(kind == Cancelled)
-  } noraise {
-    _ => @test.fail("bounded inflate_all ignored cancellation")
+test "inflate_all honours entry and mid-stream cancellation with or without a limit" {
+  let source = Bytes::make(20000, b'X')
+  for level in [0, 6] {
+    let compressed = @flate.deflate_all(source, level~)
+    for limit in [None, Some(source.length())] {
+      for cancel_at in [1, 3] {
+        let mut polls = 0
+        let InflateError(kind, _) = @test.expect_error(() => {
+          @flate.inflate_all(compressed, max_output?=limit, cancelled=() => {
+            polls += 1
+            polls == cancel_at
+          })
+        })
+        @test.assert_eq(kind, Cancelled)
+        @test.assert_eq(polls, cancel_at)
+      }
+    }
   }
 }

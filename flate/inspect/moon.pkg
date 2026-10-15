@@ -7,7 +7,6 @@ import {
   "moonbit-community/flate/gzip",
   "moonbit-community/flate/zlib",
   "moonbit-community/flate/zip",
-  "moonbit-community/flate/checksum",
   "moonbitlang/core/debug",
   "moonbitlang/core/buffer",
   "moonbitlang/core/quickcheck",

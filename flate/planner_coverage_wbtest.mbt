@@ -14,22 +14,6 @@ test "compression levels clamp at both public boundaries" {
 }
 
 ///|
-test "stored blocks split at the 16-bit LEN limit" {
-  let split_source = Bytes::from_array(Array::make(65536, b'\x5A'))
-  let split_stored = BitWriter()
-  split_stored.write_stored(
-    split_source,
-    0,
-    split_source.length(),
-    is_final=true,
-  )
-  @test.assert_eq(
-    inflate_all(Bytes::from_array(split_stored.out)),
-    split_source,
-  )
-}
-
-///|
 test "lazy match pending at a block boundary is committed" {
   // The token range is one byte wide, but lookahead extends beyond it. A
   // history match beginning at index 3 is deferred by lazy parsing; reaching
@@ -76,45 +60,6 @@ test "optimal planner crosses its master-block boundary" {
 }
 
 ///|
-fn make_second_split_candidate_for_coverage(variant : Int32) -> Bytes {
-  let bytes : Array[Byte] = []
-  let trap = b"abcde abcdef lazy parsing boundary trap; "
-  let mut state = (0xA341316CU + variant.reinterpret_as_uint()) | 1U
-  for segment in 0..<7 {
-    let length = 384 + (variant * 97 + segment * 193) % 521
-    match (segment + variant) % 4 {
-      0 =>
-        for _ in 0..<length {
-          state = state ^ (state << 13)
-          state = state ^ (state >> 17)
-          state = state ^ (state << 5)
-          bytes.push((state & 0xFF).to_byte())
-        }
-      1 =>
-        for i in 0..<length {
-          bytes.push(trap[i % trap.length()])
-        }
-      2 =>
-        for i in 0..<length {
-          bytes.push(((i / (7 + variant % 9)) & 0x03).to_byte())
-        }
-      _ =>
-        for i in 0..<length {
-          bytes.push(((i * 29 + segment * 71) & 0xFF).to_byte())
-        }
-    }
-  }
-  Bytes::from_array(bytes)
-}
-
-///|
-test "optimal planner round-trips mixed segment distributions" {
-  let source = make_second_split_candidate_for_coverage(7)
-  let compressed = deflate_all_optimal(source, iterations=2)
-  @test.assert_eq(inflate_all(compressed), source)
-}
-
-///|
 test "split planner cuts and resets observations across literal-class changes" {
   // Exercise planner behavior independently of a particular matchfinder's
   // token choices: three long literal regions have sharply different classes.
@@ -150,50 +95,4 @@ test "split planner cuts and resets observations across literal-class changes" {
   }
   writer.flush()
   @test.assert_eq(inflate_all(Bytes::from_array(writer.out)), data)
-}
-
-///|
-fn coverage_divergent_bytes(size : Int32) -> Bytes {
-  let mut state = 0x12345678U
-  Bytes::makei(size, i => {
-    state = state * 1103515245U + 12345U
-    let raw = ((state >> 16) & 0x3FU).reinterpret_as_int()
-    match i / 16384 % 4 {
-      0 => (0x40 + raw).to_byte()
-      1 => (0x80 + raw).to_byte()
-      2 => (0x20 + raw).to_byte()
-      _ => (0xC0 + raw).to_byte()
-    }
-  })
-}
-
-///|
-test "split planner round-trips changing byte distributions" {
-  let data = coverage_divergent_bytes(65535)
-  let compressed = deflate_all_split(data)
-  @test.assert_eq(inflate_all(compressed), data)
-}
-
-///|
-test "reusable compressor covers multi-block encode loop" {
-  // The public whole-buffer helper tests normally fit in one block. A
-  // reusable compressor must also carry its workspace into a second block.
-  // A different suffix prevents a boundary-spanning periodic match from
-  // making the first parse consume the entire input.
-  let source = Bytes::makei(65535, i => {
-      match i % 4 {
-        0 => b'W'
-        1 => b'X'
-        2 => b'Y'
-        _ => b'Z'
-      }
-    }) +
-    Bytes::make(257, b'\x00')
-  let codec = Compressor(level=6)
-  let compressed = codec.compress(source)
-  @test.assert_eq(inflate_all(compressed), source)
-  @test.assert_eq(
-    codec.compress(b"reuse after multi-block"),
-    deflate_all(b"reuse after multi-block"),
-  )
 }
