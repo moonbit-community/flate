@@ -300,14 +300,12 @@ test "preallocated inflate_exact matches the grow path" {
       let source = sources[source_index]
       let compressed = deflate_all(source, level~)
       let corpus = "source-\{source_index}/level-\{level}"
-      @test.assert_eq(
-        inflate_exact(compressed, preallocated=true),
-        inflate_exact(compressed),
-      )
+      @test.assert_eq(inflate_exact(compressed, preallocated=true), source)
       let framed = compressed + b"TAIL"
       let default_outcome = inflate_differential_exact_kind(framed, false)
       let preallocated_outcome = inflate_differential_exact_kind(framed, true)
-      if default_outcome != preallocated_outcome {
+      if default_outcome != Some(TrailingData) ||
+        preallocated_outcome != Some(TrailingData) {
         @test.fail(
           "preallocated vs grow mismatch on trailing corpus: \{corpus}, default=\{@debug.Repr(default_outcome)}, preallocated=\{@debug.Repr(preallocated_outcome)}",
         )

@@ -50,12 +50,7 @@ test "Inflater::step streams a dynamic block in small chunks" {
       avail = if avail + 5 < comp.length() { avail + 5 } else { comp.length() }
     }
   }
-  let out = result.to_bytes()
-  inspect(out.length(), content="611")
-  @test.assert_eq(
-    out[0:44].to_owned(),
-    b"The quick brown fox jumps over the lazy dog.",
-  )
+  @test.assert_eq(result.to_bytes(), dynamic_plain)
 }
 
 ///|
@@ -121,7 +116,7 @@ test "Inflater::step makes progress with a 1-byte output buffer" {
 /// (write into the middle of a larger array).
 test "Inflater::step honors a small out_len within a larger buffer" {
   let inf = @flate.Inflater()
-  let obuf = FixedArray::make(64, b'\x00')
+  let obuf = FixedArray::make(64, b'\xA5')
   let result = @buffer.Buffer()
   let view = v_dynamic_text[:]
   let mut consumed = 0
@@ -132,15 +127,12 @@ test "Inflater::step honors a small out_len within a larger buffer" {
     for i in 8..<(8 + p) {
       result.write_byte(obuf[i])
     }
+    @test.assert_eq(obuf[7], b'\xA5')
+    @test.assert_eq(obuf[15], b'\xA5')
     consumed = consumed + c
     if st is Done {
       break
     }
   }
-  let out = result.to_bytes()
-  inspect(out.length(), content="611")
-  @test.assert_eq(
-    out[0:44].to_owned(),
-    b"The quick brown fox jumps over the lazy dog.",
-  )
+  @test.assert_eq(result.to_bytes(), dynamic_plain)
 }

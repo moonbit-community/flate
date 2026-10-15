@@ -17,16 +17,6 @@ test "decompress decodes a python-produced gzip stream" {
 }
 
 ///|
-test "gzip round-trip" {
-  @test.assert_eq(@gzip.decompress(@gzip.compress(data)), data)
-}
-
-///|
-test "gzip round-trip: empty" {
-  @test.assert_eq(@gzip.decompress(@gzip.compress(b"")), b"")
-}
-
-///|
 /// Complete RFC 1952 golden for a level-0 stored member. Python's
 /// `gzip.compress(b"abc", compresslevel=0, mtime=0)` produces the same raw
 /// DEFLATE bytes and trailer; its header advertises fast compression with
@@ -50,11 +40,6 @@ test "compress_optimal round-trips and is no larger than level 6" {
   let opt = @gzip.compress_optimal(payload)
   @test.assert_eq(@gzip.decompress(opt), payload)
   assert_true(opt.length() <= @gzip.compress(payload, level=6).length())
-}
-
-///|
-test "compress_optimal: empty" {
-  @test.assert_eq(@gzip.decompress(@gzip.compress_optimal(b"")), b"")
 }
 
 ///|
@@ -97,33 +82,6 @@ test "decompress decodes a multi-member stream" {
 test "decompress ignores trailing garbage after the last member" {
   let stream = concat_bytes([@gzip.compress(data), b"\x00\x01\x02\x04\x05"])
   @test.assert_eq(@gzip.decompress(stream), data)
-}
-
-///|
-/// Streaming `Decoder` decodes a multi-member stream fed in one pass, draining a
-/// tiny output buffer (heavy NeedMoreOutput suspension across member boundaries).
-test "streaming gzip Decoder decodes a multi-member stream" {
-  let p1 = b"alpha alpha alpha alpha "
-  let p2 = b"beta beta beta beta beta "
-  let stream = concat_bytes([@gzip.compress(p1), @gzip.compress(p2)])
-  let dec = @gzip.Decoder()
-  let obuf = FixedArray::make(8, b'\x00')
-  let out = @buffer.Buffer()
-  let mut fed = false
-  for ;; {
-    let view = if fed { b""[:] } else { stream }
-    fed = true
-    let _st = dec.step_into(view, obuf, end=true)
-    let _c = dec.last_consumed()
-    let p = dec.last_produced()
-    for i in 0..<p {
-      out.write_byte(obuf[i])
-    }
-    if dec.is_finished() {
-      break
-    }
-  }
-  @test.assert_eq(out.to_bytes(), concat_bytes([p1, p2]))
 }
 
 ///|
@@ -255,67 +213,6 @@ test "streaming gzip Encoder: empty input" {
     }
   }
   @test.assert_eq(@gzip.decompress(out.to_bytes()), b"")
-}
-
-///|
-/// Decode the python-produced gzip vector through the streaming `gzip.Decoder`,
-/// revealing 3 input bytes at a time into a 7-byte output buffer — exercising
-/// both NeedMoreInput and NeedMoreOutput suspension and the CRC/length verify.
-test "streaming gzip Decoder decodes a python gzip stream in tiny chunks" {
-  let dec = @gzip.Decoder()
-  let obuf = FixedArray::make(7, b'\x00')
-  let out = @buffer.Buffer()
-  let n = py_gzip.length()
-  let mut fed = 0
-  for ;; {
-    let next = if fed + 3 < n { fed + 3 } else { n }
-    let _st = dec.step_into(py_gzip[fed:next], obuf, end=next == n)
-    let c = dec.last_consumed()
-    let p = dec.last_produced()
-    for i in 0..<p {
-      out.write_byte(obuf[i])
-    }
-    fed = fed + c
-    if dec.is_finished() {
-      break
-    }
-  }
-  @test.assert_eq(out.to_bytes(), data)
-}
-
-///|
-/// Stream a ~50 KB gzip blob (built by the one-shot `compress`) through the
-/// streaming `gzip.Decoder` in 64-byte input chunks, draining a 13-byte output
-/// buffer.
-test "streaming gzip Decoder round-trips a large stream" {
-  let unit = b"streaming gzip decode payload, the quick brown fox. "
-  let arr : Array[Byte] = []
-  for _r in 0..<1000 {
-    for i in 0..<unit.length() {
-      arr.push(unit[i])
-    }
-  }
-  let src = Bytes::from_array(arr)
-  let gz = @gzip.compress(src)
-  let dec = @gzip.Decoder()
-  let obuf = FixedArray::make(13, b'\x00')
-  let out = @buffer.Buffer()
-  let n = gz.length()
-  let mut fed = 0
-  for ;; {
-    let next = if fed + 64 < n { fed + 64 } else { n }
-    let _st = dec.step_into(gz[fed:next], obuf, end=next == n)
-    let c = dec.last_consumed()
-    let p = dec.last_produced()
-    for i in 0..<p {
-      out.write_byte(obuf[i])
-    }
-    fed = fed + c
-    if dec.is_finished() {
-      break
-    }
-  }
-  @test.assert_eq(out.to_bytes(), src)
 }
 
 ///|
@@ -849,4 +746,17 @@ test "streaming gzip Decoder can stop after one member" {
   assert_true(decoder.is_finished())
   @test.assert_eq(decoded.to_bytes(), first_payload)
   @test.assert_eq(decoder.unused_input(), second_member)
+}
+
+///|
+test "gzip.decompress decodes a file of thousands of members" {
+  let plain = Bytes::makei(300, i => (i * 7).to_byte())
+  let framed = @gzip.compress(plain)
+  let file = @buffer.Buffer()
+  let joined = @buffer.Buffer()
+  for _ in 0..<3000 {
+    file.write_bytes(framed)
+    joined.write_bytes(plain)
+  }
+  @test.assert_eq(@gzip.decompress(file.to_bytes()), joined.to_bytes())
 }

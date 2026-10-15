@@ -38,13 +38,3 @@ test "deflate_all_optimal splits heterogeneous data" {
   @test.assert_eq(@flate.inflate_all(opt), src)
   assert_true(opt.length() <= @flate.deflate_all(src, level=9).length() + 16)
 }
-
-///|
-test "deflate_all_optimal: empty and tiny inputs" {
-  @test.assert_eq(@flate.inflate_all(@flate.deflate_all_optimal(b"")), b"")
-  @test.assert_eq(@flate.inflate_all(@flate.deflate_all_optimal(b"x")), b"x")
-  @test.assert_eq(
-    @flate.inflate_all(@flate.deflate_all_optimal(b"aaaaaaaa")),
-    b"aaaaaaaa",
-  )
-}

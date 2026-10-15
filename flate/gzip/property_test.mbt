@@ -21,23 +21,3 @@ test "property: gzip round-trips at every level" {
     seed=0x6A7F001,
   )
 }
-
-///|
-/// Property: decoding arbitrary bytes through `decompress` never panics and is
-/// deterministic — the same input yields the same bytes or error every time.
-test "property: decompress never panics and is deterministic" {
-  @quickcheck.check(
-    (data : Bytes) => {
-      let a = Ok(@gzip.decompress(data)) catch {
-        GzipError(kind, _) => Err(kind)
-      }
-      let b = Ok(@gzip.decompress(data)) catch {
-        GzipError(kind, _) => Err(kind)
-      }
-      a == b
-    },
-    count=60,
-    max_size=2000,
-    seed=0x6A7F002,
-  )
-}

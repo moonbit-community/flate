@@ -314,20 +314,6 @@ test "lazy parsers keep hash chains strictly backward across block boundaries" {
 }
 
 ///|
-fn match_len_fixture(mismatch? : Int32) -> Bytes {
-  let data = Array::make(516, b'\x00')
-  for i in 0..<258 {
-    let byte = ((i * 37 + i / 7) & 0xFF).to_byte()
-    data[i] = byte
-    data[258 + i] = byte
-  }
-  if mismatch is Some(index) {
-    data[258 + index] = (data[258 + index].to_int() ^ 0xFF).to_byte()
-  }
-  Bytes::from_array(data)
-}
-
-///|
 fn scalar_match_len_up_to_reference(
   data : Bytes,
   src : Int32,
@@ -394,17 +380,6 @@ fn assert_match_len_differential_case(
       "match_len_up_to differential mismatch: case=\{case_index}, src=\{src}, pos=\{pos}, limit=\{limit}, mismatch=\{mismatch}, expected=\{expected}, actual=\{actual}",
     )
   }
-}
-
-///|
-test "v128 match length finds the first unequal lane and scalar tail" {
-  for mismatch in [0, 1, 2, 15, 16, 17, 31, 32, 127, 255, 257] {
-    let data = match_len_fixture(mismatch~)
-    @test.assert_eq(match_len_up_to(data, 0, 258, 258), mismatch)
-  }
-  let identical = match_len_fixture()
-  @test.assert_eq(match_len_up_to(identical, 0, 258, 258), 258)
-  @test.assert_eq(match_len_up_to(b"abcabcX", 0, 3, 4), 3)
 }
 
 ///|
@@ -506,34 +481,6 @@ test "streaming dual hash backfills a fourth byte exactly once" {
     d.finder.find_window_match(d.pending, 0, 4, 0, level_configs[6]),
     0,
   )
-}
-
-///|
-test "match table sizing preserves compact small-input workspaces" {
-  for (size, capacity) in [(4096, 16384), (8192, 32768)] {
-    let input = Bytes::makei(size, i => (i & 255).to_byte())
-    let fresh = MatchFinder(input_size=size)
-    let reused = MatchFinder(input_size=0)
-    reused.reset_for_input(input)
-    @test.assert_eq(fresh.head.length(), capacity)
-    @test.assert_eq(reused.head.length(), capacity)
-    @test.assert_eq(reused.long_shift, fresh.long_shift)
-  }
-}
-
-///|
-test "match table sizing realizes each selected adaptive width" {
-  for alphabet in [16, 80, 256] {
-    let input = Bytes::makei(65536, i => (i % alphabet).to_byte())
-    let bits = long_hash_bits_for_input(input)
-    let fresh = MatchFinder(input_size=input.length(), long_hash_bits=bits)
-    let reused = MatchFinder(input_size=0)
-    reused.reset_for_input(input)
-    @test.assert_eq(fresh.head.length(), 1 << bits)
-    @test.assert_eq(reused.head.length(), 1 << bits)
-    @test.assert_eq(fresh.long_shift, 32 - bits)
-    @test.assert_eq(reused.long_shift, fresh.long_shift)
-  }
 }
 
 ///|

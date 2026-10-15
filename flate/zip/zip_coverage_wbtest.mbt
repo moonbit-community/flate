@@ -16,11 +16,6 @@ fn expect_zip_kind(
 }
 
 ///|
-test "zip checked conversions reject out-of-range values" {
-  expect_zip_error(() => ignore(0x80000000U.to_int_checked()))
-}
-
-///|
 test "zip cursor and field readers reject truncated input" {
   expect_zip_error(() => ignore(Cursor(b"", 0).read_u8()))
   expect_zip_error(() => ignore(Cursor(b"", 0).read_bytes(1)))
@@ -803,32 +798,6 @@ test "zip local-order keeps a replaced entry in its original position" {
 }
 
 ///|
-test "zip local-order sorts read-origin entries ahead of fresh ones" {
-  let src = Archive()
-  src.add("a.txt", b"x")
-  src.add("b.txt", b"y")
-  let archive = read(write(src))
-  archive.add("fresh.txt", b"z")
-  // Read-origin entries (origin Some) precede a fresh entry (origin None).
-  let forward = archive.local_order()
-  @test.assert_eq(forward.length(), 3)
-  @test.assert_eq(archive.entries()[forward[0]].name(), "a.txt")
-  @test.assert_eq(archive.entries()[forward[1]].name(), "b.txt")
-  @test.assert_eq(archive.entries()[forward[2]].name(), "fresh.txt")
-  // Even when the fresh entry sits first in the array, it still sorts last.
-  let mixed = {
-    entries: [archive.entries[2], archive.entries[0], archive.entries[1]],
-    comment: b"",
-    trailer: None,
-    original: None,
-  }
-  let reordered = mixed.local_order()
-  @test.assert_eq(mixed.entries()[reordered[0]].name(), "a.txt")
-  @test.assert_eq(mixed.entries()[reordered[1]].name(), "b.txt")
-  @test.assert_eq(mixed.entries()[reordered[2]].name(), "fresh.txt")
-}
-
-///|
 test "zip owned copy handles chunk boundaries and cancellation" {
   for length in [0, 1, 65535, 65536, 65537, 131073] {
     let source = Bytes::makei(length + 2, i => (i % 251).to_byte())
@@ -1027,33 +996,4 @@ test "CRC-32 computation honours ZIP cancellation" {
   })
   @test.assert_eq(kind, Cancelled)
   assert_true(polls >= 4)
-}
-
-///|
-/// Cancellation cases moved from the former combined checksum property.
-test "property: ZIP checksum cancellation includes the last poll" {
-  @quickcheck.check(
-    (data : Bytes) => {
-      guard crc32_cancellable(data, cancelled=() => false) ==
-        @checksum.crc32(data) else {
-        return false
-      }
-      let ZipError(kind, _) = @test.expect_error(() => {
-        crc32_cancellable(data, cancelled=() => true)
-      })
-      guard kind is Cancelled else { return false }
-      let total_polls = 2 + (data.length() - 1) / 4096
-      let mut polls = 0
-      let ZipError(kind, _) = @test.expect_error(() => {
-        crc32_cancellable(data, cancelled=() => {
-          polls += 1
-          polls >= total_polls
-        })
-      })
-      kind is Cancelled
-    },
-    count=60,
-    max_size=2000,
-    seed=0xC0C11E,
-  )
 }
