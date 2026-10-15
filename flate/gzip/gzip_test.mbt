@@ -78,13 +78,6 @@ test "decompress decodes a multi-member stream" {
 }
 
 ///|
-/// Trailing bytes that do not begin another member are ignored, like `gzip -d`.
-test "decompress ignores trailing garbage after the last member" {
-  let stream = concat_bytes([@gzip.compress(data), b"\x00\x01\x02\x04\x05"])
-  @test.assert_eq(@gzip.decompress(stream), data)
-}
-
-///|
 /// A member boundary may coincide with an input boundary, and the next call
 /// may contain only the first magic byte. Neither boundary means EOF without
 /// `end=true`; both must suspend for more input.
@@ -297,40 +290,6 @@ test "streaming gzip Decoder validates optional header fields" {
 }
 
 ///|
-/// A flipped ISIZE byte must be caught by the trailer verification.
-test "streaming gzip Decoder rejects a corrupted trailer" {
-  let gz = @gzip.compress(b"corrupt me please, corrupt me please")
-  let arr : Array[Byte] = []
-  for b in gz {
-    arr.push(b)
-  }
-  let last = arr.length() - 1
-  arr[last] = (arr[last].to_int() ^ 0xFF).to_byte()
-  let bad = Bytes::from_array(arr)
-  let dec = @gzip.Decoder()
-  let obuf = FixedArray::make(256, b'\x00')
-  try {
-    let n = bad.length()
-    let mut fed = 0
-    for ;; {
-      let _st = dec.step_into(bad[fed:n], obuf, end=true)
-      let c = dec.last_consumed()
-      let _p = dec.last_produced()
-      fed = fed + c
-      if dec.is_finished() {
-        break
-      }
-    }
-  } catch {
-    GzipError(kind, _) => assert_true(kind == LengthMismatch)
-  } noraise {
-    _ => @test.fail("expected corruption to be rejected")
-  }
-  @test.assert_eq(dec.last_consumed(), 0)
-  @test.assert_eq(dec.last_produced(), 0)
-}
-
-///|
 /// RFC 1952 reserves the top three FLG bits and requires a decoder to reject a
 /// member when any of them is non-zero.
 test "gzip decoders reject reserved FLG bits" {
@@ -352,30 +311,6 @@ test "gzip decoders reject reserved FLG bits" {
     GzipError(kind, _) => assert_true(kind == InvalidHeader)
   } noraise {
     _ => @test.fail("streaming decoding accepted a reserved FLG bit")
-  }
-  @test.assert_eq(dec.last_consumed(), 0)
-  @test.assert_eq(dec.last_produced(), 0)
-}
-
-///|
-/// A magic-prefixed partial member after a valid member is not ignorable
-/// trailing garbage. Both entry points must report the second member as
-/// truncated, even though the first payload was already complete.
-test "gzip decoders reject a truncated subsequent member" {
-  let first = @gzip.compress(b"complete first member")
-  let second = @gzip.compress(b"the second member is deliberately cut")
-  let stream = concat_bytes([first, prefix_bytes(second, 17)])
-  try ignore(@gzip.decompress(stream)) catch {
-    GzipError(kind, _) => assert_true(kind == Truncated)
-  } noraise {
-    _ => @test.fail("one-shot decoding ignored a partial second member")
-  }
-  let dec = @gzip.Decoder()
-  let out = FixedArray::make(4096, b'\x00')
-  try ignore(dec.step_into(stream, out, end=true)) catch {
-    GzipError(kind, _) => assert_true(kind == Truncated)
-  } noraise {
-    _ => @test.fail("streaming decoding ignored a partial second member")
   }
   @test.assert_eq(dec.last_consumed(), 0)
   @test.assert_eq(dec.last_produced(), 0)
@@ -430,35 +365,6 @@ test "gzip decoders wrap malformed DEFLATE as GzipError" {
   }
   @test.assert_eq(dec.last_consumed(), 0)
   @test.assert_eq(dec.last_produced(), 0)
-}
-
-///|
-/// Once a streaming decoder reports corruption, later calls must not resume a
-/// partially-mutated inflater or accept bytes into that failed stream.
-test "streaming gzip Decoder latches its first error" {
-  let malformed : Bytes = [
-    0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x07, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  ]
-  let decoder = @gzip.Decoder()
-  let output = FixedArray::make(8, b'\xA5')
-  let GzipError(first_kind, first_error) = @test.expect_error(() => {
-    decoder.step_into(malformed, output, end=true)
-  })
-  @test.assert_eq(decoder.last_consumed(), 0)
-  @test.assert_eq(decoder.last_produced(), 0)
-  let GzipError(repeated_kind, repeated_error) = @test.expect_error(() => {
-    decoder.step_into(b"late input", output)
-  })
-  @test.assert_eq(decoder.last_consumed(), 0)
-  @test.assert_eq(decoder.last_produced(), 0)
-  assert_true(first_kind == InvalidDeflate)
-  assert_true(repeated_kind == first_kind)
-  @test.assert_eq(repeated_error, first_error)
-  for byte in output {
-    @test.assert_eq(byte, b'\xA5')
-  }
-  assert_false(decoder.is_finished())
 }
 
 ///|

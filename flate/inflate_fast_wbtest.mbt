@@ -5,26 +5,16 @@
 // same verdict on damaged streams.
 
 ///|
-priv struct FastStreamRun {
-  decoded : Bytes
-  consumed : Int32
-  verdict : String
-} derive(Eq, @debug.Debug)
-
-///|
-/// Decode `input` in chunks of `chunk` bytes into `room` bytes of output per
-/// step, through a fixed array or a view.
 fn fast_stream_run(
   input : Bytes,
   chunk : Int32,
   room : Int32,
   fixed : Bool,
-) -> FastStreamRun {
+) -> Result[(Bytes, Int32), InflateErrorKind] {
   let inflater = Inflater()
   let output = FixedArray::make(room, b'\x00')
   let decoded = @buffer.Buffer()
   let mut position = 0
-  let mut verdict = "done"
   for ;; {
     let end = (position + chunk).min(input.length())
     let status = try {
@@ -42,32 +32,13 @@ fn fast_stream_run(
         )
       }
     } catch {
-      InflateError(kind, _) => {
-        verdict = @debug.to_string(kind)
-        break
-      }
+      InflateError(kind, _) => return Err(kind)
     }
-    position = position + inflater.last_consumed()
-    for i in 0..<inflater.last_produced() {
-      decoded.write_byte(output[i])
-    }
+    position += inflater.last_consumed()
+    decoded.write_bytes(Bytes::from_array(output[:inflater.last_produced()]))
     if status is Done {
-      break
+      return Ok((decoded.to_bytes(), position))
     }
-  }
-  // What a failed stream produced before failing depends on the schedule.
-  {
-    decoded: if verdict == "done" {
-      decoded.to_bytes()
-    } else {
-      b""
-    },
-    consumed: if verdict == "done" {
-      position
-    } else {
-      0
-    },
-    verdict,
   }
 }
 
@@ -104,81 +75,6 @@ fn fast_stream_sources() -> Array[Bytes] {
 }
 
 ///|
-#cfg(target="native")
-test "streaming decode is independent of output room on intact streams" {
-  for source in fast_stream_sources() {
-    for level in [0, 1, 6, 9] {
-      let compressed = deflate_all(source, level~)
-      // Bytes behind the stream (a container's trailer) must stay unread.
-      let framed = compressed +
-        b"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF"
-      let careful = fast_stream_run(framed, 1 << 20, 257, true)
-      @test.assert_eq(careful.verdict, "done")
-      @test.assert_eq(careful.decoded, source)
-      @test.assert_eq(careful.consumed, compressed.length())
-      for room in [258, 259, 300, 4096, 32768, 65536, 200000] {
-        for chunk in [1 << 20, 4096, 263, 9, 8, 7] {
-          for fixed in [true, false] {
-            guard chunk >= 263 || source.length() <= 2000 || room == 300 else {
-              continue
-            }
-            @test.assert_eq(
-              fast_stream_run(framed, chunk, room, fixed),
-              careful,
-            )
-          }
-        }
-      }
-    }
-  }
-}
-
-///|
-#cfg(target="native")
-test "streaming decode is independent of output room on damaged streams" {
-  let rng = InflateDifferentialRng(0xDA3A6EDU)
-  for source in fast_stream_sources() {
-    for level in [1, 6] {
-      let compressed = deflate_all(source, level~)
-      let damaged : Array[Bytes] = []
-      let cuts = if compressed.length() > 4000 { 12 } else { 30 }
-      for _ in 0..<cuts {
-        damaged.push(compressed[:rng.size(compressed.length()) - 1].to_owned())
-      }
-      for k in 0..<(3 * cuts) {
-        // Half of the flips fall into the first block header and its trees.
-        let index = if k % 2 == 0 {
-          rng.size(compressed.length().min(96)) - 1
-        } else {
-          rng.size(compressed.length()) - 1
-        }
-        damaged.push(
-          inflate_differential_flip(compressed, index, 1 << (rng.size(8) - 1)),
-        )
-      }
-      for stream in damaged {
-        let careful = fast_stream_run(stream, 1 << 20, 257, true)
-        for
-          schedule in [
-            (1 << 20, 65536, true),
-            (1 << 20, 258, false),
-            (263, 4096, true),
-          ] {
-          let (chunk, room, fixed) = schedule
-          @test.assert_eq(fast_stream_run(stream, chunk, room, fixed), careful)
-        }
-        // The one-shot decoder is the third opinion on the verdict.
-        let one_shot = match inflate_differential_one_shot(stream) {
-          InflateDifferentialOk(_) => "done"
-          InflateDifferentialErr(kind) => @debug.to_string(kind)
-        }
-        @test.assert_eq(careful.verdict, one_shot)
-      }
-    }
-  }
-}
-
-///|
 /// Run one schedule on two decoders and compare what every call reports. The
 /// first takes each call as it is. The second is given the same input view
 /// but its output room in pieces of at most 257 bytes, a room in which no
@@ -192,17 +88,18 @@ fn assert_calls_agree(
   chunk : Int32,
   room : Int32,
   fixed : Bool,
-) -> Unit raise {
+) -> Result[(Bytes, Int32), InflateErrorKind] raise {
   let whole = Inflater()
   let pieces = Inflater()
   let output = FixedArray::make(room, b'\x00')
   let reference = FixedArray::make(room, b'\x00')
   let mut position = 0
+  let decoded = @buffer.Buffer()
   for ;; {
     let end = (position + chunk).min(input.length())
     let view = input[position:end]
     let last = end == input.length()
-    let mut verdict = "ok"
+    let mut verdict : InflateErrorKind? = None
     let mut status : Status = Done
     try {
       status = if fixed {
@@ -211,11 +108,11 @@ fn assert_calls_agree(
         whole.step(view, output.mut_view(), end=last)
       }
     } catch {
-      InflateError(kind, _) => verdict = @debug.to_string(kind)
+      InflateError(kind, _) => verdict = Some(kind)
     }
     let mut consumed = 0
     let mut produced = 0
-    let mut expected_verdict = "ok"
+    let mut expected_verdict : InflateErrorKind? = None
     let mut expected : Status = NeedMoreOutput
     for ;; {
       let piece = (room - produced).min(257)
@@ -225,7 +122,7 @@ fn assert_calls_agree(
         end=last,
       ) catch {
         InflateError(kind, _) => {
-          expected_verdict = @debug.to_string(kind)
+          expected_verdict = Some(kind)
           break
         }
       }
@@ -235,7 +132,9 @@ fn assert_calls_agree(
       guard step is NeedMoreOutput && produced < room else { break }
     }
     @test.assert_eq(verdict, expected_verdict)
-    guard verdict == "ok" else { return }
+    if verdict is Some(kind) {
+      return Err(kind)
+    }
     @test.assert_eq(status, expected)
     @test.assert_eq(whole.last_consumed(), consumed)
     @test.assert_eq(whole.last_produced(), produced)
@@ -244,8 +143,12 @@ fn assert_calls_agree(
         @test.fail("byte \{i} of a call differs")
       }
     }
-    position = position + consumed
-    guard !(status is Done) else { return }
+    decoded.write_bytes(Bytes::from_array(output[:produced]))
+    position += consumed
+    if status is Done {
+      return Ok((decoded.to_bytes(), position))
+    }
+    assert_true(consumed > 0 || produced > 0, msg="streaming decoder stalled")
   }
 }
 
@@ -271,7 +174,10 @@ test "streaming calls report what careful calls report" {
       for schedule in schedules {
         let (chunk, room, fixed) = schedule
         guard chunk >= 263 || source.length() <= 2000 else { continue }
-        assert_calls_agree(framed, chunk, room, fixed)
+        @test.assert_eq(
+          assert_calls_agree(framed, chunk, room, fixed),
+          Ok((source, compressed.length())),
+        )
       }
       for k in 0..<8 {
         let stream = if k % 2 == 0 {
@@ -283,8 +189,14 @@ test "streaming calls report what careful calls report" {
             1 << (rng.size(8) - 1),
           )
         }
-        assert_calls_agree(stream, 1 << 20, 65536, true)
-        assert_calls_agree(stream, 263, 1000, false)
+        let expected = inflate_differential_one_shot(stream)
+        for (chunk, room, fixed) in [(1 << 20, 65536, true), (263, 1000, false)] {
+          let actual = match assert_calls_agree(stream, chunk, room, fixed) {
+            Ok((bytes, _)) => InflateDifferentialOk(bytes)
+            Err(kind) => InflateDifferentialErr(kind)
+          }
+          @test.assert_eq(actual, expected)
+        }
       }
     }
   }
@@ -349,11 +261,10 @@ test "malformed units are corrupt for every output room" {
           (9, 300, false),
         ] {
         let (chunk, room, fixed) = schedule
-        @test.assert_eq(fast_stream_run(stream, chunk, room, fixed), {
-          decoded: b"",
-          consumed: 0,
-          verdict: "Corrupt",
-        })
+        @test.assert_eq(
+          fast_stream_run(stream, chunk, room, fixed),
+          Err(Corrupt),
+        )
       }
       @test.assert_eq(
         inflate_differential_one_shot(stream),

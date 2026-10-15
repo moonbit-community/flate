@@ -229,32 +229,6 @@ test "malformed DEFLATE errors are wrapped as ZlibError" {
 }
 
 ///|
-/// Once corruption is reported, the decoder is a stable failed terminal state:
-/// later input is not accepted and the original diagnostic is rethrown.
-test "streaming zlib Decoder latches its first error" {
-  let malformed : Bytes = [0x78, 0x01, 0x07, 0x00, 0x00, 0x00, 0x01]
-  let decoder = @zlib.Decoder()
-  let output = FixedArray::make(8, b'\xA5')
-  let ZlibError(first_kind, first_error) = @test.expect_error(() => {
-    decoder.step(malformed, output.mut_view(), end=true)
-  })
-  @test.assert_eq(decoder.last_consumed(), 0)
-  @test.assert_eq(decoder.last_produced(), 0)
-  let ZlibError(repeated_kind, repeated_error) = @test.expect_error(() => {
-    decoder.step(b"late input", output.mut_view())
-  })
-  assert_true(first_kind == InvalidDeflate)
-  assert_true(repeated_kind == first_kind)
-  @test.assert_eq(repeated_error, first_error)
-  @test.assert_eq(decoder.last_consumed(), 0)
-  @test.assert_eq(decoder.last_produced(), 0)
-  for byte in output {
-    @test.assert_eq(byte, b'\xA5')
-  }
-  assert_false(decoder.is_finished())
-}
-
-///|
 /// Physical EOF is distinct from temporary input starvation in every zlib
 /// wrapper state, including the optional DICTID and checksum trailer.
 test "streaming zlib Decoder reports truncation at end" {

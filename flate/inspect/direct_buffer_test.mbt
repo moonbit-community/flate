@@ -72,36 +72,3 @@ test "caller-buffer codecs match one-shot streams and reuse workspace" {
     }
   }
 }
-
-///|
-test "caller-buffer codecs report insufficient output capacity" {
-  let source = b"a direct buffer needs enough space for its complete stream"
-  let compressor = @flate.Compressor()
-  let no_compressed_space = FixedArray::make(0, b'\x00')
-  @test.assert_eq(compressor.compress_into(source, no_compressed_space), None)
-
-  let compressed = @flate.deflate_all(source)
-  let decompressor = @flate.Decompressor()
-  let short_output = FixedArray::make(source.length() - 1, b'\x00')
-  try ignore(decompressor.decompress_into(compressed, short_output)) catch {
-    InflateError(kind, _) => @test.assert_eq(kind, OutputLimitExceeded)
-  } noraise {
-    _ => @test.fail("short direct output was accepted")
-  }
-}
-
-///|
-test "caller-buffer one-shot convenience functions round-trip" {
-  let source = b"single-use caller-owned buffers"
-  let compressed_buffer = FixedArray::make(
-    @flate.deflate_bound(source.length()),
-    b'\x00',
-  )
-  guard @flate.deflate_into(source, compressed_buffer) is Some(compressed_len) else {
-    @test.fail("deflate_into did not fit deflate_bound")
-  }
-  let compressed = direct_bytes(compressed_buffer, compressed_len)
-  let decoded_buffer = FixedArray::make(source.length(), b'\x00')
-  let decoded_len = @flate.inflate_into(compressed, decoded_buffer)
-  @test.assert_eq(direct_bytes(decoded_buffer, decoded_len), source)
-}

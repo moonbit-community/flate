@@ -1,138 +1,41 @@
 ///|
-test "inflate suspends/resumes across a tiny output buffer" {
-  let inf = @flate.Inflater()
-  let small : FixedArray[Byte] = FixedArray::make(2, b'\x00')
-  let collected = @buffer.Buffer()
-  let view = hello_stored[:]
-  let mut consumed = 0
-  for ;; {
-    let status = inf.step(view[consumed:], small.mut_view())
-    let used = inf.last_consumed()
-    let produced = inf.last_produced()
-    for i in 0..<produced {
-      collected.write_byte(small[i])
-    }
-    consumed = consumed + used
-    if status is Done {
-      break
-    }
-  }
-  @test.assert_eq(collected.to_bytes(), b"hello")
-  assert_true(inf.is_finished())
-}
-
-///|
-/// Stream a dynamic-Huffman block through `step`, revealing input 5 bytes at a
-/// time and draining a 300-byte output buffer (< 611 decoded), exercising both
-/// NeedMoreInput and NeedMoreOutput suspension/resume.
-test "Inflater::step streams a dynamic block in small chunks" {
-  let comp = v_dynamic_text
-  let inf = @flate.Inflater()
-  let obuf = FixedArray::make(300, b'\x00')
-  let result = @buffer.Buffer()
-  let mut consumed = 0
-  let mut avail = 0
-  for ;; {
-    let st = inf.step(comp[consumed:avail], obuf.mut_view())
-    let c = inf.last_consumed()
-    let p = inf.last_produced()
-    for i in 0..<p {
-      result.write_byte(obuf[i])
-    }
-    consumed = consumed + c
-    if st is Done {
-      break
-    }
-    if st is NeedMoreInput {
-      if avail >= comp.length() {
-        @test.fail("unexpected truncation")
+// Standard vectors, including overlapping matches, with non-overlapping input
+// chunks and an offset output view. Assert progress instead of hanging on a stall.
+test "streaming standard vectors preserve bytes consumption and output boundaries" {
+  for
+    (compressed, plain) in [
+      (hello_stored, b"hello"),
+      (v_fixed_hello, b"hello"),
+      (v_fixed_aaa, b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+      (v_dynamic_text, dynamic_plain),
+    ] {
+    for (chunk, room) in [(1, 1), (5, 300)] {
+      let inflater = @flate.Inflater()
+      let output = FixedArray::make(room + 6, b'\xA5')
+      let decoded = @buffer.Buffer()
+      let mut pos = 0
+      for ;; {
+        let end = (pos + chunk).min(compressed.length())
+        let status = inflater.step(
+          compressed[pos:end],
+          output.mut_view(start=3, end=3 + room),
+          end=end == compressed.length(),
+        )
+        let used = inflater.last_consumed()
+        let written = inflater.last_produced()
+        assert_true(used >= 0 && used <= end - pos)
+        assert_true(written >= 0 && written <= room)
+        @test.assert_eq(output[2], b'\xA5')
+        @test.assert_eq(output[room + 3], b'\xA5')
+        decoded.write_bytes(Bytes::from_array(output[3:3 + written]))
+        pos += used
+        if status is Done {
+          break
+        }
+        assert_true(used > 0 || written > 0, msg="streaming decoder stalled")
       }
-      avail = if avail + 5 < comp.length() { avail + 5 } else { comp.length() }
+      @test.assert_eq(pos, compressed.length())
+      @test.assert_eq(decoded.to_bytes(), plain)
     }
   }
-  @test.assert_eq(result.to_bytes(), dynamic_plain)
-}
-
-///|
-/// Stream a fixed-Huffman block (with back-references) one input byte at a time.
-test "Inflater::step streams a fixed block one input byte at a time" {
-  let comp = v_fixed_aaa
-  let inf = @flate.Inflater()
-  let obuf = FixedArray::make(300, b'\x00')
-  let result = @buffer.Buffer()
-  let mut consumed = 0
-  let mut avail = 0
-  for ;; {
-    let st = inf.step(comp[consumed:avail], obuf.mut_view())
-    let c = inf.last_consumed()
-    let p = inf.last_produced()
-    for i in 0..<p {
-      result.write_byte(obuf[i])
-    }
-    consumed = consumed + c
-    if st is Done {
-      break
-    }
-    if st is NeedMoreInput {
-      if avail >= comp.length() {
-        @test.fail("unexpected truncation")
-      }
-      avail = avail + 1
-    }
-  }
-  @test.assert_eq(result.to_bytes(), b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-}
-
-///|
-/// Drain a long back-reference (30 'a's, a single match) through a *1-byte*
-/// output buffer, forcing the decoder to suspend and resume mid-copy on every
-/// byte. This is the case the async `@io.Reader` driver hits with small reads,
-/// which the old 258-byte-per-unit output floor would have deadlocked on.
-test "Inflater::step makes progress with a 1-byte output buffer" {
-  let inf = @flate.Inflater()
-  let obuf = FixedArray::make(1, b'\x00')
-  let result = @buffer.Buffer()
-  let view = v_fixed_aaa[:]
-  let mut consumed = 0
-  for ;; {
-    let st = inf.step(view[consumed:], obuf.mut_view(end=1))
-    let c = inf.last_consumed()
-    let p = inf.last_produced()
-    for i in 0..<p {
-      result.write_byte(obuf[i])
-    }
-    consumed = consumed + c
-    if st is Done {
-      break
-    }
-  }
-  @test.assert_eq(result.to_bytes(), b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-  assert_true(inf.is_finished())
-}
-
-///|
-/// Decode the 611-byte dynamic block into a buffer far smaller than a single
-/// 258-byte match, exercising mid-copy suspension plus `out_len` sub-ranging
-/// (write into the middle of a larger array).
-test "Inflater::step honors a small out_len within a larger buffer" {
-  let inf = @flate.Inflater()
-  let obuf = FixedArray::make(64, b'\xA5')
-  let result = @buffer.Buffer()
-  let view = v_dynamic_text[:]
-  let mut consumed = 0
-  for ;; {
-    let st = inf.step(view[consumed:], obuf.mut_view(start=8, end=15))
-    let c = inf.last_consumed()
-    let p = inf.last_produced()
-    for i in 8..<(8 + p) {
-      result.write_byte(obuf[i])
-    }
-    @test.assert_eq(obuf[7], b'\xA5')
-    @test.assert_eq(obuf[15], b'\xA5')
-    consumed = consumed + c
-    if st is Done {
-      break
-    }
-  }
-  @test.assert_eq(result.to_bytes(), dynamic_plain)
 }

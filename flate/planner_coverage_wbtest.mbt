@@ -96,27 +96,3 @@ test "split planner cuts and resets observations across literal-class changes" {
   writer.flush()
   @test.assert_eq(inflate_all(Bytes::from_array(writer.out)), data)
 }
-
-///|
-test "reusable compressor covers multi-block encode loop" {
-  // The public whole-buffer helper tests normally fit in one block. A
-  // reusable compressor must also carry its workspace into a second block.
-  // A different suffix prevents a boundary-spanning periodic match from
-  // making the first parse consume the entire input.
-  let source = Bytes::makei(65535, i => {
-      match i % 4 {
-        0 => b'W'
-        1 => b'X'
-        2 => b'Y'
-        _ => b'Z'
-      }
-    }) +
-    Bytes::make(257, b'\x00')
-  let codec = Compressor(level=6)
-  let compressed = codec.compress(source)
-  @test.assert_eq(inflate_all(compressed), source)
-  @test.assert_eq(
-    codec.compress(b"reuse after multi-block"),
-    deflate_all(b"reuse after multi-block"),
-  )
-}

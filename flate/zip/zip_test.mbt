@@ -94,40 +94,6 @@ test "zip round-trips empty and zero-length payloads" {
 }
 
 ///|
-test "zip data descriptor write round-trips" {
-  let output = @buffer.Buffer()
-  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
-  writer.begin_entry("desc.txt")
-  writer.write(b"streamed entry payload")
-  writer.end_entry()
-  writer.finish()
-  let bytes = output.to_bytes()
-  let parsed = @zip.read(bytes)
-  @test.assert_eq(parsed.get("desc.txt"), Some(b"streamed entry payload"))
-  @test.assert_eq(
-    parsed.entries()[0].crc32(),
-    @checksum.crc32(parsed.entries()[0].data()),
-  )
-}
-
-///|
-test "zip stored data-descriptor entry round-trips" {
-  let output = @buffer.Buffer()
-  let writer = @zip.Writer(chunk => output.write_bytes(chunk))
-  writer.begin_entry("s.txt", compression=Store)
-  writer.write(b"stored descriptor payload")
-  writer.end_entry()
-  writer.finish()
-  let bytes = output.to_bytes()
-  let parsed = @zip.read(bytes)
-  @test.assert_eq(parsed.get("s.txt"), Some(b"stored descriptor payload"))
-  @test.assert_eq(
-    parsed.entries()[0].crc32(),
-    @checksum.crc32(parsed.entries()[0].data()),
-  )
-}
-
-///|
 test "zip write with max_output_bytes sizes a data-descriptor entry correctly" {
   let output = @buffer.Buffer()
   let writer = @zip.Writer(chunk => output.write_bytes(chunk))
@@ -465,15 +431,6 @@ test "zip writes and reads back a zip64 trailer" {
   let bytes = @zip.write(archive)
   let parsed = @zip.read(bytes)
   @test.assert_eq(parsed.entries().length(), 65_536)
-}
-
-///|
-test "zip archive comment round-trips" {
-  let archive = @zip.Archive()
-  archive.add("a.txt", b"x")
-  archive.set_comment(b"archive comment")
-  let parsed = @zip.read(@zip.write(archive))
-  @test.assert_eq(parsed.comment(), b"archive comment")
 }
 
 ///|

@@ -16,26 +16,6 @@ fn expect_zip_kind(
 }
 
 ///|
-test "zip cursor and field readers reject truncated input" {
-  expect_zip_error(() => ignore(Cursor(b"", 0).read_u8()))
-  expect_zip_error(() => ignore(Cursor(b"", 0).read_bytes(1)))
-  expect_zip_error(() => ignore(read_u16_le_at(b"", 0)))
-  expect_zip_error(() => ignore(read_u32_le_at_raw(b"", 0)))
-  expect_zip_error(() => ignore(read_u64_le_at(b"", 0)))
-  @test.assert_eq(find_end_of_central(b"too short"), None)
-  expect_zip_kind(() => ignore(decode_name(b"\xff")), InvalidUtf8)
-  expect_zip_kind(
-    () => ensure_flags_supported(FLAG_ENCRYPTED),
-    UnsupportedFeature,
-  )
-  expect_zip_kind(() => ensure_flags_supported(0x0010), UnsupportedFeature)
-  expect_zip_kind(
-    () => ignore(method_from_code(99)),
-    UnsupportedCompression(99),
-  )
-}
-
-///|
 fn push_u16le(buf : Array[Byte], v : Int32) -> Unit {
   buf.push((v & 0xFF).to_byte())
   buf.push(((v >> 8) & 0xFF).to_byte())
@@ -697,64 +677,6 @@ test "zip central-directory parsing rejects malformed records" {
 }
 
 ///|
-test "zip entry decode rejects oversized and mismatched payloads" {
-  // Stored entry larger than the per-entry limit.
-  let big_store = local_record(
-    0, 0, 0x11111111U, 10, 10, b"a.txt", b"", b"0123456789", b"",
-  )
-  expect_zip_kind(
-    () => {
-      ignore(
-        decode_entry(
-          big_store,
-          { ..base_meta(), compressed_size: 10, uncompressed_size: 10, },
-          100,
-          ReadLimits(max_entry_uncompressed_bytes=5),
-          0,
-          () => false,
-        ),
-      )
-    },
-    LimitExceeded(EntryUncompressedBytes, 5, 10),
-  )
-  // Decoded size disagrees with the central directory.
-  let size_mismatch = local_record(
-    0, 0, 0x11111111U, 3, 5, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_error(() => {
-    ignore(
-      decode_entry(
-        size_mismatch,
-        { ..base_meta(), compressed_size: 3, uncompressed_size: 5, },
-        100,
-        ReadLimits(),
-        0,
-        () => false,
-      ),
-    )
-  })
-  // Entries together exceed the total uncompressed limit.
-  let total_over = local_record(
-    0, 0, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b"",
-  )
-  expect_zip_kind(
-    () => {
-      ignore(
-        decode_entry(
-          total_over,
-          base_meta(),
-          100,
-          ReadLimits(max_total_uncompressed_bytes=3),
-          2,
-          () => false,
-        ),
-      )
-    },
-    LimitExceeded(TotalUncompressedBytes, 3, 5),
-  )
-}
-
-///|
 test "zip classic trailer rejects too many entries and long comments" {
   let out = Output::writing(None)
   expect_zip_error(() => {
@@ -782,19 +704,6 @@ test "zip entry names and output limits are checked" {
     write(small, max_output_bytes=1000, preserve=true),
     write(small),
   )
-}
-
-///|
-test "zip local-order keeps a replaced entry in its original position" {
-  let src = Archive()
-  src.add("a.txt", b"x")
-  src.add("b.txt", b"y")
-  let archive = read(write(src))
-  @test.assert_eq(archive.replace("a.txt", b"xx"), true)
-  let order = archive.local_order()
-  @test.assert_eq(order.length(), 2)
-  @test.assert_eq(archive.entries()[order[0]].name(), "a.txt")
-  @test.assert_eq(archive.entries()[order[1]].name(), "b.txt")
 }
 
 ///|

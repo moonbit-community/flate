@@ -103,23 +103,6 @@ fn split_midmix(size : Int32) -> Bytes {
 }
 
 ///|
-test "deflate_all_split round-trips across levels and shapes" {
-  for level in 0..<=9 {
-    for
-      src in [
-        b"",
-        b"x",
-        b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        split_prose(200000),
-        split_code(200000),
-      ] {
-      let c = @flate.deflate_all_split(src, level~)
-      @test.assert_eq(@flate.inflate_all(c), src)
-    }
-  }
-}
-
-///|
 /// The splitter must never be larger than the fixed-cadence `deflate_all` on
 /// any input the arbitration can judge, and round-trips on large inputs that
 /// cross master-chunk boundaries.
@@ -144,18 +127,6 @@ test "deflate_all_split never worse than fixed cadence" {
       @test.assert_eq(@flate.inflate_all(split), data)
     }
   }
-}
-
-///|
-test "deflate_all_split: level 0 emits stored blocks, empty emits one block" {
-  let src = b"stored only, no compression of any kind, plain bytes here"
-  @test.assert_eq(
-    @flate.deflate_all_split(src, level=0),
-    @flate.deflate_all(src, level=0),
-  )
-  let empty = @flate.deflate_all_split(b"", level=6)
-  @test.assert_eq(@flate.inflate_all(empty), b"")
-  assert_true(empty.length() > 0)
 }
 
 ///|

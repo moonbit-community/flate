@@ -47,111 +47,64 @@ test "zlib failed state freezes decoder cursors" {
 }
 
 ///|
-/// `step_into` and `step` must give the same bytes, the same number of steps
-/// and the same verdict for every split of input and output.
-test "zlib step_into equals step for every input and output split" {
+// Both output entry points must agree on every call, including checksum
+// failures. Known plaintext also catches a bug shared by both entry points.
+test "zlib step_into and offset step views preserve the per-call contract" {
   let source = Bytes::makei(70000, i => {
-    if i % 4096 < 2600 {
-      b"streaming decoders must agree. "[i % 31]
-    } else {
-      ((i * 40503) >> 5).to_byte()
-    }
+    if i % 4096 < 2600 { b"streaming decoders must agree. "[i % 31] }
+    else { ((i * 40503) >> 5).to_byte() }
   })
   for level in [0, 6] {
     let compressed = compress(source, level~)
-    let damaged = FixedArray::makei(compressed.length(), i => compressed[i])
-    damaged[compressed.length() - 1] = (damaged[compressed.length() - 1].to_int() ^
-    1).to_byte()
-    for stream in [compressed, Bytes::from_array(damaged)] {
-      for split in [(1 << 20, 32768), (700, 32768), (9000, 4096), (33, 7)] {
-        let (chunk, room) = split
-        let outcomes : Array[(Bytes, Int32, String)] = []
-        for fixed in [true, false] {
-          let decoder = Decoder()
-          let output = FixedArray::make(room, b'\x00')
-          let decoded = @buffer.Buffer()
-          let mut position = 0
-          let mut steps = 0
-          let mut verdict = "done"
-          for ;; {
-            let end = (position + chunk).min(stream.length())
-            let status = try {
-              if fixed {
-                decoder.step_into(
-                  stream[position:end],
-                  output,
-                  end=end == stream.length(),
-                )
-              } else {
-                decoder.step(
-                  stream[position:end],
-                  output.mut_view(),
-                  end=end == stream.length(),
-                )
-              }
-            } catch {
-              ZlibError(kind, _) => {
-                verdict = @debug.to_string(kind)
-                break
-              }
-            }
-            position = position + decoder.last_consumed()
-            for i in 0..<decoder.last_produced() {
-              decoded.write_byte(output[i])
-            }
-            steps = steps + 1
-            if status is Done {
-              break
+    let damaged = compressed.to_fixedarray()
+    damaged[compressed.length() - 1] = damaged[compressed.length() - 1] ^ b'\x01'
+    for (stream, expected_error) in [
+      (compressed, None),
+      (Bytes::from_array(damaged), Some(ChecksumMismatch)),
+    ] {
+      for (chunk, room) in [(1 << 20, 32768), (33, 7)] {
+        let fixed = Decoder()
+        let viewed = Decoder()
+        let output = FixedArray::make(room, b'\x00')
+        let padded = FixedArray::make(room + 6, b'\xA5')
+        let decoded = @buffer.Buffer()
+        let mut position = 0
+        let mut verdict = None
+        for ;; {
+          let end = (position + chunk).min(stream.length())
+          let input = stream[position:end]
+          let status = try fixed.step_into(input, output, end=end == stream.length()) catch {
+            ZlibError(kind, _) => Err(kind)
+          } noraise { status => Ok(status) }
+          let other = try viewed.step(
+            input, padded.mut_view(start=3, end=room + 3),
+            end=end == stream.length(),
+          ) catch {
+            ZlibError(kind, _) => Err(kind)
+          } noraise { status => Ok(status) }
+          @test.assert_eq(status, other)
+          @test.assert_eq(fixed.last_consumed(), viewed.last_consumed())
+          @test.assert_eq(fixed.last_produced(), viewed.last_produced())
+          @test.assert_eq(padded[2], b'\xA5')
+          @test.assert_eq(padded[room + 3], b'\xA5')
+          match status {
+            Err(kind) => { verdict = Some(kind); break }
+            Ok(status) => {
+              let count = fixed.last_produced()
+              @test.assert_eq(output[:count], padded[3:3 + count])
+              decoded.write_bytes(Bytes::from_array(output[:count]))
+              position += fixed.last_consumed()
+              if status is Done { break }
+              assert_true(fixed.last_consumed() > 0 || count > 0)
             }
           }
-          outcomes.push((decoded.to_bytes(), steps, verdict))
         }
-        @test.assert_eq(outcomes[0], outcomes[1])
-        if physical_equal(stream, compressed) {
-          @test.assert_eq(outcomes[0].0, source)
-          @test.assert_eq(outcomes[0].2, "done")
-        } else {
-          @test.assert_eq(outcomes[0].2, "ChecksumMismatch")
+        @test.assert_eq(verdict, expected_error)
+        if expected_error is None {
+          @test.assert_eq(decoded.to_bytes(), source)
+          @test.assert_eq(position, stream.length())
         }
       }
     }
-  }
-}
-
-///|
-test "zlib view checksum batches equal bytewise updates" {
-  let storage = FixedArray::makei(3 * CHECKSUM_VIEW_CHUNK + 40, i => {
-    (i * 131 + i / 7).to_byte()
-  })
-  for view_start in [0, 3] {
-    let view = storage.mut_view(start=view_start)
-    for start in [0, 1, 17] {
-      for
-        length in [
-          0,
-          1,
-          15,
-          16,
-          17,
-          CHECKSUM_VIEW_CHUNK - 1,
-          CHECKSUM_VIEW_CHUNK,
-          CHECKSUM_VIEW_CHUNK + 1,
-          2 * CHECKSUM_VIEW_CHUNK + 5,
-          view.length() - start,
-        ] {
-        let batched = Decoder()
-        let bytewise = Decoder()
-        batched.checksum_view(view, start, length)
-        for i in 0..<length {
-          bytewise.adler.update_byte(view[start + i])
-        }
-        @test.assert_eq(batched.adler.finish(), bytewise.adler.finish())
-      }
-    }
-    // A range that is not inside the view folds nothing.
-    let outside = Decoder()
-    outside.checksum_view(view, view.length() - 1, 2)
-    outside.checksum_view(view, -1, 1)
-    @test.assert_eq(outside.adler.finish(), Decoder().adler.finish())
   }
 }

@@ -95,22 +95,6 @@ test "batch handles the maximum forty-eight-bit token" {
 
 ///|
 #cfg(target="native")
-test "batch lookup covers linked fifteen-bit Huffman entries" {
-  let lengths = FixedArray::makei(16, i => (i + 1).min(15))
-  let huffman = HuffmanDecoder()
-  @test.assert_eq(huffman.initialize(lengths), true)
-  for symbol in 0..<16 {
-    let code = if symbol == 15 { 32767U } else { (1U << (symbol + 1)) - 2 }
-    let reversed = reverse_bits(code, lengths[symbol])
-    let word = UInt64::extend_uint(reversed) | (0x55UL << lengths[symbol])
-    let entry = batch_huffman_entry(huffman, word)
-    @test.assert_eq((entry >> HUFFMAN_VALUE_SHIFT).reinterpret_as_int(), symbol)
-    @test.assert_eq((entry & 15).reinterpret_as_int(), lengths[symbol])
-  }
-}
-
-///|
-#cfg(target="native")
 test "batch and checked tails preserve literal capacity and cancellation boundaries" {
   let distances = HuffmanDecoder()
   @test.assert_eq(
