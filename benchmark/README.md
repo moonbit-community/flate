@@ -5,19 +5,19 @@ compares raw DEFLATE with reused codecs and preallocated output on both sides.
 fzip is not included: its public compression API does not provide equivalent
 caller-owned output and reusable workspace.
 
-Latest measured revision: **`d32b69f` (2026-09-24 Asia/Shanghai)**, including
-the LZ77 and workspace/hash-table optimizations in #4 and #5. Fresh baseline
-(`83b26bb`) and current **3-round, >=200 ms** quick runs each cover
-**23 configurations and 414 timed samples**, with `fast_store=false` and the
-same frozen inputs. Both encoders generated fixtures; both decoders and Python
-zlib validated them. L6 random, mixed, JSON and precompressed throughput improved
-by roughly **38–52%** over the remeasured baseline; source improved **15%** with
-a **0.42%** size increase, while repetitive-1m was **1.7%** slower. See the
-[MacBook Pro M3 Max results](./results-macbook-pro-m3-max.md) for current
-compression/decompression rates, compressed sizes, paired ratios and noisy rows.
-The comparison uses a newly measured same-input baseline. Cross-run timing
-drift still limits attribution. Raw samples and frozen inputs for these results
-are not included in the repository.
+Latest measured revision: **`f9a5e6d` (2026-10-15 Asia/Shanghai)**, using
+Moon `0.1.20261012`, moonc `0.10.15+943464bfa` and libdeflate **1.25**.
+The **7-round, >=200 ms** quick run covers **23 configurations and 966 timed
+samples**, with `fast_store=false`. All nine inputs were replayed and hash-verified
+from the previous `d32b69f` run; source inputs therefore stay fixed across the
+test cleanup. Both encoders generated fixtures; both decoders and Python zlib
+validated them. See the [MacBook Pro M3 Max results](./results-macbook-pro-m3-max.md)
+for current rates, compressed sizes, paired ratios and noisy rows.
+**34 of 138 summaries exceed 10% spread**; affected paired multipliers are suppressed.
+
+The compiler has changed since the September 24 measurement, so the updated
+snapshot makes no before/after optimization claims from the old timings.
+Raw samples and frozen inputs are retained locally and are not included in Git.
 
 ## Run
 
@@ -31,6 +31,8 @@ zlib fixture creation/validation, and runtime metadata; SHA-256 uses the existin
 ```sh
 # Raw direct: 7 rounds, >=150 ms
 moon run --target native benchmark/run.mbtx
+# Published snapshot settings: 7 rounds, >=200 ms
+moon run --target native benchmark/run.mbtx -- --profile quick --rounds 7 --milliseconds 200
 # Validate without timing, warmup or calibration
 moon run --target native benchmark/run.mbtx -- --profile smoke --validate-only
 # Broader corpus and levels
@@ -39,6 +41,14 @@ moon run --target native benchmark/run.mbtx -- --profile full
 moon run --target native benchmark/run.mbtx -- --include-oneshot
 moon run --target native benchmark/run.mbtx -- --corpus /path/to/application-data.bin
 moon run --target native benchmark/run.mbtx -- --corpus-manifest /path/to/old-run/corpus.json
+```
+
+For Homebrew libdeflate with `pkg-config`, expose its search paths before
+running the driver:
+
+```sh
+export C_INCLUDE_PATH="$(pkg-config --variable=includedir libdeflate)"
+export LIBRARY_PATH="$(pkg-config --variable=libdir libdeflate)"
 ```
 
 Each run builds fresh runners and saves results to a new output directory
