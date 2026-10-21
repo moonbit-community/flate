@@ -56,6 +56,16 @@ fn bitwriter_growth_capacity(current : Int32, required : Int32) -> Int32 {
 }
 
 ///|
+/// Counts are non-negative. Reject an unrepresentable growing result before
+/// adding, just as deflate_bound rejects an unrepresentable output capacity.
+fn bitwriter_output_length(written : Int32, additional : Int32) -> Int32 {
+  guard additional <= 0x7fff_ffff - written else {
+    abort("DEFLATE output capacity overflow")
+  }
+  written + additional
+}
+
+///|
 fn BitWriter::grow(
   self : BitWriter,
   output : FixedArray[Byte],
@@ -73,28 +83,30 @@ fn BitWriter::grow(
 
 ///|
 /// Emit one whole byte to the configured destination. The normal writer grows
-/// `out`; a direct writer keeps counting after capacity exhaustion so all block
-/// planning code can remain allocation-free and branch-free at call sites.
+/// `out`; a fixed writer counts only bytes actually written and latches
+/// capacity exhaustion, so continued encoding cannot overflow its cursor.
 #inline
 fn BitWriter::write_byte(self : BitWriter, byte : Byte) -> Unit {
   if self.direct_output is Some(output) {
     if self.direct_pos < output.length() {
       output[self.direct_pos] = byte
+      self.direct_pos += 1
     } else if self.growable {
-      let grown = self.grow(output, self.direct_pos + 1)
+      let required = bitwriter_output_length(self.direct_pos, 1)
+      let grown = self.grow(output, required)
       grown[self.direct_pos] = byte
+      self.direct_pos = required
     } else {
       self.overflowed = true
     }
-    self.direct_pos = self.direct_pos + 1
   } else {
     self.out.push(byte)
   }
 }
 
 ///|
-/// Write a byte-aligned payload. Preserve the direct writer's overflow count
-/// even if a previous header or payload already exhausted the output buffer.
+/// Write a byte-aligned payload. Count only the prefix that fits in a fixed
+/// buffer, retaining the overflow flag after any earlier exhaustion.
 fn BitWriter::write_bytes(
   self : BitWriter,
   input : BytesView,
@@ -103,7 +115,7 @@ fn BitWriter::write_bytes(
 ) -> Unit {
   if self.direct_output is Some(output) {
     let output = if self.growable && length > output.length() - self.direct_pos {
-      self.grow(output, self.direct_pos + length)
+      self.grow(output, bitwriter_output_length(self.direct_pos, length))
     } else {
       output
     }
@@ -116,7 +128,7 @@ fn BitWriter::write_bytes(
         count,
       )
     }
-    self.direct_pos = self.direct_pos + length
+    self.direct_pos += count
     if count < length {
       self.overflowed = true
     }
@@ -148,7 +160,7 @@ fn append_payload(out : Array[Byte], payload : BytesView) -> Unit {
 
 ///|
 /// Write the first `length` bytes of `bytes`, exactly as `length` calls of
-/// `write_byte` would: a direct writer keeps counting past its capacity and
+/// `write_byte` would: a fixed writer counts only the prefix that fits and
 /// records the overflow. Only the 64-bit token writer hands bytes over in bulk.
 #cfg(any(target="native", target="wasm"))
 fn BitWriter::write_array(
@@ -158,7 +170,7 @@ fn BitWriter::write_array(
 ) -> Unit {
   if self.direct_output is Some(output) {
     let output = if self.growable && length > output.length() - self.direct_pos {
-      self.grow(output, self.direct_pos + length)
+      self.grow(output, bitwriter_output_length(self.direct_pos, length))
     } else {
       output
     }
@@ -166,7 +178,7 @@ fn BitWriter::write_array(
     if count > 0 {
       bytes.blit_to(output, len=count, dst_offset=self.direct_pos)
     }
-    self.direct_pos = self.direct_pos + length
+    self.direct_pos += count
     if count < length {
       self.overflowed = true
     }
