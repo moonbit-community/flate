@@ -175,8 +175,7 @@ priv struct EndOfCentral {
 }
 
 ///|
-/// Resolve the ZIP64 end-of-central-directory fields for a classic EOCD whose
-/// entry count or central size/offset spilled into the ZIP64 sentinels.
+/// Resolve ZIP64 end records and verify any non-sentinel classic fields.
 /// Returns (entry_count, central_size, central_offset, zip64_eocd_offset).
 fn zip64_central_bounds(
   bytes : BytesView,
@@ -318,7 +317,10 @@ fn parse_end_of_central(
   let needs_zip64 = disk_entries == 0xFFFF ||
     total_entries == 0xFFFF ||
     central_size_raw == MAX_U32 ||
-    central_offset_raw == MAX_U32
+    central_offset_raw == MAX_U32 ||
+    UInt64::extend_uint(central_offset_raw) +
+    UInt64::extend_uint(central_size_raw) !=
+    eocd_offset.to_uint64()
   guard !needs_zip64 else {
     let (entry_count, central_size, central_offset, zip64_offset) = zip64_central_bounds(
       bytes, eocd_offset, disk_entries, total_entries, central_size_raw, central_offset_raw,
