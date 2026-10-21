@@ -63,6 +63,7 @@ test "memory and range readers agree on local size mismatches" {
     let changed = original.to_array()
     changed[22] = b'\x04'
     let bytes = Bytes::from_array(changed)
+    let directory = list_zip_ranges(bytes)
     expect_zip_kind(() => ignore(read(bytes)), SizeMismatch)
     expect_zip_kind(
       () => ignore(extract_zip_ranges(directory, 0, bytes, 3)),
