@@ -8,7 +8,7 @@ import {
 // Values
 pub fn read(BytesView, limits? : ReadLimits, cancelled? : () -> Bool) -> Archive raise ZipError
 
-pub fn write(Archive, preserve? : Bool, max_output_bytes? : Int, level? : Int, fast_store? : Bool) -> Bytes raise ZipError
+pub fn write(Archive, preserve? : Bool, max_output_bytes? : Int32, level? : Int32, fast_store? : Bool) -> Bytes raise ZipError
 
 // Errors
 pub suberror ZipError {
@@ -40,20 +40,20 @@ pub struct Directory {
 }
 pub fn Directory::comment(Self) -> BytesView
 pub fn Directory::entries(Self) -> ArrayView[DirectoryEntry]
-pub fn Directory::open_entry(Self, Int, limits? : EntryReadLimits) -> EntryReader raise ZipError
+pub fn Directory::open_entry(Self, Int32, limits? : EntryReadLimits) -> EntryReader raise ZipError
 
 pub struct DirectoryEntry {
   // private fields
 }
 pub fn DirectoryEntry::compressed_size(Self) -> UInt64
-pub fn DirectoryEntry::crc32(Self) -> UInt
-pub fn DirectoryEntry::creator_system(Self) -> Int
-pub fn DirectoryEntry::dos_date(Self) -> Int
-pub fn DirectoryEntry::dos_time(Self) -> Int
-pub fn DirectoryEntry::external_attributes(Self) -> UInt
+pub fn DirectoryEntry::crc32(Self) -> UInt32
+pub fn DirectoryEntry::creator_system(Self) -> Int32
+pub fn DirectoryEntry::dos_date(Self) -> Int32
+pub fn DirectoryEntry::dos_time(Self) -> Int32
+pub fn DirectoryEntry::external_attributes(Self) -> UInt32
 pub fn DirectoryEntry::is_directory(Self) -> Bool
 pub fn DirectoryEntry::is_encrypted(Self) -> Bool
-pub fn DirectoryEntry::method_id(Self) -> Int
+pub fn DirectoryEntry::method_id(Self) -> Int32
 pub fn DirectoryEntry::name(Self) -> String
 pub fn DirectoryEntry::uncompressed_size(Self) -> UInt64
 
@@ -77,7 +77,7 @@ pub struct Entry {
   // private fields
 }
 pub fn Entry::compression(Self) -> Compression
-pub fn Entry::crc32(Self) -> UInt
+pub fn Entry::crc32(Self) -> UInt32
 pub fn Entry::data(Self) -> BytesView
 pub fn Entry::name(Self) -> String
 
@@ -89,7 +89,7 @@ pub fn EntryReadLimits::EntryReadLimits(max_output_bytes? : UInt64) -> Self
 pub struct EntryReader {
   // private fields
 }
-pub fn EntryReader::last_produced(Self) -> Int
+pub fn EntryReader::last_produced(Self) -> Int32
 pub fn EntryReader::step(Self, BytesView, FixedArray[Byte]) -> EntryStep raise ZipError
 pub fn EntryReader::total_consumed(Self) -> UInt64
 pub fn EntryReader::total_produced(Self) -> UInt64
@@ -111,23 +111,23 @@ pub(all) enum LimitKind {
 pub fn LimitKind::equal(Self, Self) -> Bool
 
 pub struct ReadLimits {
-  max_package_bytes : Int
-  max_entries : Int
-  max_entry_uncompressed_bytes : Int
-  max_total_uncompressed_bytes : Int
+  max_package_bytes : Int32
+  max_entries : Int32
+  max_entry_uncompressed_bytes : Int32
+  max_total_uncompressed_bytes : Int32
 }
-pub fn ReadLimits::ReadLimits(max_package_bytes? : Int, max_entries? : Int, max_entry_uncompressed_bytes? : Int, max_total_uncompressed_bytes? : Int) -> Self
+pub fn ReadLimits::ReadLimits(max_package_bytes? : Int32, max_entries? : Int32, max_entry_uncompressed_bytes? : Int32, max_total_uncompressed_bytes? : Int32) -> Self
 
 pub struct ReadRange {
   // private fields
 }
-pub fn ReadRange::length(Self) -> Int
+pub fn ReadRange::length(Self) -> Int32
 pub fn ReadRange::offset(Self) -> UInt64
 
 pub struct Writer {
   // private fields
 }
-pub fn Writer::Writer((BytesView) -> Unit raise, level? : Int, fast_store? : Bool) -> Self
+pub fn Writer::Writer((BytesView) -> Unit raise, level? : Int32, fast_store? : Bool) -> Self
 pub fn Writer::add(Self, String, BytesView, compression? : Compression) -> Unit raise
 pub fn Writer::begin_entry(Self, String, compression? : Compression, size? : UInt64) -> Unit raise
 pub fn Writer::end_entry(Self) -> Unit raise
@@ -141,12 +141,12 @@ pub(all) enum ZipErrorKind {
   Truncated
   InvalidSignature
   MissingEndOfCentral
-  UnsupportedCompression(Int)
+  UnsupportedCompression(Int32)
   InvalidUtf8
   UnsupportedFeature
   InvalidDeflate
   InvalidRead
-  InvalidEntryIndex(Int)
+  InvalidEntryIndex(Int32)
   SizeMismatch
   ChecksumMismatch
   LimitExceeded(LimitKind, UInt64, UInt64)

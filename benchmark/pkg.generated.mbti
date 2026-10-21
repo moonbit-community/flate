@@ -2,9 +2,9 @@
 package "moonbit-community/flate-benchmark"
 
 // Values
-pub fn bench_mixed(Int) -> Bytes
+pub fn bench_mixed(Int32) -> Bytes
 
-pub fn bench_repetitive(Int) -> Bytes
+pub fn bench_repetitive(Int32) -> Bytes
 
 // Errors
 
