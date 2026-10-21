@@ -87,7 +87,7 @@ fn read_local_record(
       meta.uncompressed_size.to_uint64(),
       has_descriptor,
     ) else {
-    raise ZipError(UnsupportedFeature, "zip: local and central sizes differ")
+    raise ZipError(SizeMismatch, "zip: local and central sizes differ")
   }
   guard reader.pos <= central_offset &&
     meta.compressed_size <= central_offset - reader.pos else {
@@ -530,7 +530,7 @@ fn decode_entry(
   }
   guard data.length() == meta.uncompressed_size else {
     raise ZipError(
-      UnsupportedFeature,
+      SizeMismatch,
       "zip: decoded size does not match central directory",
     )
   }

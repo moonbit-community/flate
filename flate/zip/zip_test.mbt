@@ -584,7 +584,7 @@ test "zip rejects corrupted fields with the correct error category" {
     ([(8, b'\x63'), (central + 10, b'\x63')], UnsupportedCompression(99)),
     ([(30, b'\xFF'), (central + 46, b'\xFF')], InvalidUtf8),
     ([(35, b'z')], ChecksumMismatch),
-    ([(22, b'\x05'), (central + 24, b'\x05')], UnsupportedFeature),
+    ([(22, b'\x05'), (central + 24, b'\x05')], SizeMismatch),
   ]
   for (changes, expected) in cases {
     let damaged = valid.to_fixedarray()

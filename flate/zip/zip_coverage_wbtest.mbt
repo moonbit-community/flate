@@ -299,13 +299,21 @@ test "zip local-record validation rejects each mismatch" {
       local_record(0, 8, 0x11111111U, 3, 3, b"a.txt", b"", b"abc", b""),
       local_record(0, 0, 0x11111111U, 3, 3, b"b.txt", b"", b"abc", b""),
       local_record(0, 0, 0x22222222U, 3, 3, b"a.txt", b"", b"abc", b""),
-      local_record(0, 0, 0x11111111U, 5, 5, b"a.txt", b"", b"abcde", b""),
     ] {
     expect_zip_kind(
       () => ignore(read_local_record(invalid, base_meta(), invalid.length())),
       UnsupportedFeature,
     )
   }
+  let wrong_size = local_record(
+    0, 0, 0x11111111U, 5, 5, b"a.txt", b"", b"abcde", b"",
+  )
+  expect_zip_kind(
+    () => {
+      ignore(read_local_record(wrong_size, base_meta(), wrong_size.length()))
+    },
+    SizeMismatch,
+  )
   expect_zip_kind(
     () => {
       ignore(

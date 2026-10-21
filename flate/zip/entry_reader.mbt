@@ -317,7 +317,7 @@ fn EntryReader::read_extra(
       self.entry.uncompressed_size,
       descriptor,
     ) else {
-    raise ZipError(UnsupportedFeature, "zip: local and central sizes differ")
+    raise ZipError(SizeMismatch, "zip: local and central sizes differ")
   }
   self.descriptor_zip64 = need_uncomp ||
     need_comp ||

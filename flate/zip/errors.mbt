@@ -36,7 +36,7 @@ pub(all) enum ZipErrorKind {
   InvalidRead
   /// The requested directory entry index is out of bounds.
   InvalidEntryIndex(Int32)
-  /// Decoded size or Store size declarations are inconsistent, or a `Writer`
+  /// Entry size declarations or decoded sizes are inconsistent, or a `Writer`
   /// entry received more or fewer bytes than its declared size.
   SizeMismatch
   /// The entry payload does not match its stored CRC-32.
