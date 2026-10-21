@@ -36,7 +36,8 @@ pub(all) enum ZipErrorKind {
   InvalidRead
   /// The requested directory entry index is out of bounds.
   InvalidEntryIndex(Int32)
-  /// Decoded size or Store size declarations are inconsistent.
+  /// Decoded size or Store size declarations are inconsistent, or a `Writer`
+  /// entry received more or fewer bytes than its declared size.
   SizeMismatch
   /// The entry payload does not match its stored CRC-32.
   ChecksumMismatch
@@ -44,6 +45,11 @@ pub(all) enum ZipErrorKind {
   LimitExceeded(LimitKind, UInt64, UInt64)
   /// The caller's cancellation callback returned `true` during a bounded read.
   Cancelled
+  /// A caller-supplied argument is out of range, such as a negative limit.
+  InvalidArgument
+  /// A `Writer` call is not valid in its current state: no open entry, an
+  /// entry already open, a reentrant sink call, or use after finish/failure.
+  InvalidState
 } derive(Eq, @debug.Debug)
 
 ///|

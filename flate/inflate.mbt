@@ -25,6 +25,8 @@ pub(all) enum InflateErrorKind {
   OutputLimitExceeded
   /// A caller-supplied cancellation callback requested an early stop.
   Cancelled
+  /// A caller-supplied argument is out of range, such as a negative limit.
+  InvalidArgument
 } derive(Eq, @debug.Debug)
 
 ///|

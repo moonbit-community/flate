@@ -20,7 +20,7 @@ test "bounded inflate_all enforces its decoded-size boundary" {
     _ => @test.fail("bounded inflate_all exceeded its output limit")
   }
   try ignore(@flate.inflate_all(compressed, max_output=-1)) catch {
-    InflateError(kind, _) => assert_true(kind == OutputLimitExceeded)
+    InflateError(kind, _) => assert_true(kind == InvalidArgument)
   } noraise {
     _ => @test.fail("bounded inflate_all accepted a negative limit")
   }
@@ -86,7 +86,7 @@ test "inflate_exact enforces max_output on both paths" {
     }
   }
   try ignore(@flate.inflate_exact(compressed, max_output=-1)) catch {
-    InflateError(kind, _) => assert_true(kind == OutputLimitExceeded)
+    InflateError(kind, _) => assert_true(kind == InvalidArgument)
   } noraise {
     _ => @test.fail("inflate_exact accepted a negative limit")
   }

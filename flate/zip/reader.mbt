@@ -587,7 +587,7 @@ pub fn read(
     limits.max_entries >= 0 &&
     limits.max_entry_uncompressed_bytes >= 0 &&
     limits.max_total_uncompressed_bytes >= 0 else {
-    raise ZipError(UnsupportedFeature, "zip: read limits must be non-negative")
+    raise ZipError(InvalidArgument, "zip: read limits must be non-negative")
   }
   read_impl(bytes, limits, cancelled)
 }

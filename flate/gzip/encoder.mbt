@@ -35,7 +35,8 @@ pub struct Encoder {
 }
 
 ///|
-/// Create a fresh gzip compressor.
+/// Create a fresh gzip compressor. `level` 0-9 (clamped) trades speed for
+/// ratio; 0 = stored only, 6 = default.
 /// Opt-in `fast_store` samples each block; it may increase output size.
 /// The default is false.
 pub fn Encoder::Encoder(

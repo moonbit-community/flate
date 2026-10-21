@@ -813,7 +813,7 @@ fn write_impl(
 /// `level` is clamped to 0-9. `fast_store` opts into a speed/ratio heuristic.
 /// If `max_output_bytes` is supplied, the output is sized before allocation
 /// and an oversized archive raises `LimitExceeded(OutputBytes, ...)`.
-/// Negative limits are rejected.
+/// A negative limit raises `InvalidArgument`.
 pub fn write(
   archive : Archive,
   preserve~ : Bool = false,
@@ -823,10 +823,7 @@ pub fn write(
 ) -> Bytes raise ZipError {
   if max_output_bytes is Some(limit) {
     guard limit >= 0 else {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: output limit must be non-negative",
-      )
+      raise ZipError(InvalidArgument, "zip: output limit must be non-negative")
     }
   }
   write_impl(archive, preserve, level, max_output_bytes, fast_store)

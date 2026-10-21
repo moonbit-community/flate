@@ -162,8 +162,8 @@ test "README streaming Deflater" {
   next protocol frame. For an exact one-member gzip boundary, construct the
   decoder with `multistream=false`.
 - Raw failures expose a stable `InflateErrorKind` (`Truncated`, `Corrupt`,
-  `TrailingData`, `OutputLimitExceeded`, or `Cancelled`) alongside diagnostic
-  text; gzip/zlib similarly expose `GzipErrorKind`/`ZlibErrorKind`.
+  `TrailingData`, `OutputLimitExceeded`, `Cancelled`, or `InvalidArgument`)
+  alongside diagnostic text; gzip/zlib similarly expose `GzipErrorKind`/`ZlibErrorKind`.
 - One-shot decoding (`inflate_all`, `inflate_exact`)
   accepts an optional `cancelled` callback, polled at entry and then every
   ~4-8 KiB of decoded output; returning `true` raises
@@ -196,8 +196,8 @@ test "README exact and limited inflate" {
 
 `inflate_exact` combines exact framing with optional bounds: `max_output` caps
 the decoded size (raising `OutputLimitExceeded` before any oversized result is
-returned; negative limits are rejected), and `preallocated=true` replays the
-deterministic decode a second time into one exactly sized allocation. The
+returned; a negative limit raises `InvalidArgument`), and `preallocated=true`
+replays the deterministic decode a second time into one exactly sized allocation. The
 preallocated mode trades roughly double the decode work for a peak memory of
 about one decoded output (instead of a growing buffer plus a final copy), which
 matters for very large single streams. The default stays single-pass for
@@ -373,7 +373,12 @@ test "README incremental ZIP writer" {
 
 Call `finish` to write the central directory. The sink must consume each chunk
 before returning. If it raises an error, the writer becomes unusable and the
-partial output must be discarded.
+partial output must be discarded; the sink's error reaches the caller unchanged.
+The writer's own failures are `ZipError`s: `InvalidState` for a call out of
+order (no open entry, an entry already open, a reentrant sink call, or use after
+`finish` or a sink failure) and `SizeMismatch` when an entry's input exceeds or
+falls short of its declared `size`. A size error leaves the entry open, so the
+caller can supply the missing bytes and call `end_entry` again.
 
 Large individual entries use `begin_entry` / repeated `write` / `end_entry`;
 their declared size and cumulative positions are `UInt64`. The writer selects

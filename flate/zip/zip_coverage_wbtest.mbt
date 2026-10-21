@@ -647,10 +647,18 @@ test "zip entry names and output limits are checked" {
   expect_zip_error(() => ignore(write(archive)))
   let small = Archive()
   small.add("a.txt", b"x")
-  expect_zip_error(() => ignore(write(small, max_output_bytes=-1)))
-  expect_zip_error(() => {
-    ignore(write(small, max_output_bytes=-1, preserve=true))
-  })
+  expect_zip_kind(
+    () => ignore(write(small, max_output_bytes=-1)),
+    InvalidArgument,
+  )
+  expect_zip_kind(
+    () => ignore(write(small, max_output_bytes=-1, preserve=true)),
+    InvalidArgument,
+  )
+  expect_zip_kind(
+    () => ignore(read(write(small), limits=ReadLimits(max_entries=-1))),
+    InvalidArgument,
+  )
   @test.assert_eq(
     write(small, max_output_bytes=1000, preserve=true),
     write(small),

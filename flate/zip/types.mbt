@@ -28,8 +28,9 @@ pub struct ReadLimits {
 
 ///|
 /// Construct resource bounds. Omitted ceilings default to the largest `Int`.
-/// Each supplied ceiling must be non-negative; `read` rejects an exceeded
-/// ceiling before accepting the corresponding resource.
+/// Each supplied ceiling must be non-negative; `read` raises `InvalidArgument`
+/// for a negative one and rejects an exceeded ceiling before accepting the
+/// corresponding resource.
 pub fn ReadLimits::ReadLimits(
   max_package_bytes~ : Int32 = 0x7fff_ffff,
   max_entries~ : Int32 = 0x7fff_ffff,

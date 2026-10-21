@@ -41,6 +41,9 @@ pub struct Writer {
 ///|
 /// Create a ZIP writer. The sink supplies file/socket I/O or collects chunks;
 /// this package itself performs no I/O. Calling `finish` writes the directory.
+/// `level` 0-9 (clamped) applies to Deflate entries; 6 is the default.
+/// Writer methods raise `ZipError` for their own failures and propagate sink
+/// errors unchanged.
 /// Optional `fast_store` applies to Deflate entries: whole-file detection for
 /// `add`, per-block detection for chunked writes. It is off by default and may
 /// increase output size. ZIP entry methods are unchanged.
@@ -85,19 +88,15 @@ pub fn Writer::is_failed(self : Writer) -> Bool {
 fn Writer::require_ready(self : Writer) -> Unit raise ZipError {
   match self.mode {
     Ready => ()
-    Emitting => raise ZipError(UnsupportedFeature, "zip: reentrant sink write")
-    _ =>
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: writer is not ready for an entry",
-      )
+    Emitting => raise ZipError(InvalidState, "zip: reentrant sink write")
+    _ => raise ZipError(InvalidState, "zip: writer is not ready for an entry")
   }
 }
 
 ///|
 fn Writer::pending(self : Writer) -> PendingEntry raise ZipError {
   guard self.mode is Writing(entry) else {
-    raise ZipError(UnsupportedFeature, "zip: no open entry")
+    raise ZipError(InvalidState, "zip: no open entry")
   }
   entry
 }
@@ -350,7 +349,7 @@ pub fn Writer::write(self : Writer, bytes : BytesView) -> Unit raise {
   }
   if entry.expected_size is Some(size) {
     guard length <= size - entry.size else {
-      raise ZipError(UnsupportedFeature, "zip: input exceeds declared size")
+      raise ZipError(SizeMismatch, "zip: input exceeds declared size")
     }
   }
   let start = self.offset
@@ -370,10 +369,7 @@ pub fn Writer::end_entry(self : Writer) -> Unit raise {
   let entry = self.pending()
   if entry.expected_size is Some(size) {
     guard entry.size == size else {
-      raise ZipError(
-        UnsupportedFeature,
-        "zip: input is shorter than declared size",
-      )
+      raise ZipError(SizeMismatch, "zip: input is shorter than declared size")
     }
   }
   let start = self.offset

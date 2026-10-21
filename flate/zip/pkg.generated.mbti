@@ -151,6 +151,8 @@ pub(all) enum ZipErrorKind {
   ChecksumMismatch
   LimitExceeded(LimitKind, UInt64, UInt64)
   Cancelled
+  InvalidArgument
+  InvalidState
 } derive(Eq, @debug.Debug)
 pub fn ZipErrorKind::equal(Self, Self) -> Bool
 

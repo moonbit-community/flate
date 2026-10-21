@@ -1019,7 +1019,8 @@ fn MemDecoder::consumed(self : MemDecoder) -> Int32 {
 /// Decompress a raw DEFLATE stream held entirely in memory. Bytes after the
 /// final block are ignored; use `inflate_exact` when an exact framing boundary
 /// is required. Omit `max_output` for unbounded output, or supply a non-negative
-/// ceiling to raise `OutputLimitExceeded` before returning an oversized result.
+/// ceiling to raise `OutputLimitExceeded` before returning an oversized result;
+/// a negative ceiling raises `InvalidArgument`.
 /// If supplied, `cancelled` is polled at entry and every 4096 produced bytes
 /// (8192 with `max_output`); returning `true` raises `InflateError(Cancelled, _)`.
 pub fn inflate_all(
@@ -1029,7 +1030,7 @@ pub fn inflate_all(
 ) -> Bytes raise InflateError {
   if max_output is Some(limit) {
     guard limit >= 0 else {
-      raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
+      raise InflateError(InvalidArgument, "max_output must be non-negative")
     }
     return inflate_streaming_all(
       input,
@@ -1205,8 +1206,8 @@ fn inflate_streaming_all(
 ///
 /// Optional controls:
 ///  - `max_output`: decoded output beyond this size raises
-///    `InflateError(OutputLimitExceeded, _)`. A negative value is rejected the
-///    same way.
+///    `InflateError(OutputLimitExceeded, _)`. A negative value raises
+///    `InflateError(InvalidArgument, _)`.
 ///  - `cancelled`: polled at entry and then once per internal step (every 8192
 ///    produced bytes); returning `true` raises `InflateError(Cancelled, _)`.
 ///  - `preallocated`: when `true`, decode runs twice — a counting pass that
@@ -1230,7 +1231,7 @@ pub fn inflate_exact(
 ) -> Bytes raise InflateError {
   if max_output is Some(limit) {
     guard limit >= 0 else {
-      raise InflateError(OutputLimitExceeded, "max_output must be non-negative")
+      raise InflateError(InvalidArgument, "max_output must be non-negative")
     }
   }
   guard max_output is Some(_) || cancelled is Some(_) || preallocated else {

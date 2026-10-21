@@ -1,10 +1,13 @@
 ///|
-fn expect_writer_error(f : () -> Unit raise) -> Unit raise {
+fn expect_writer_error(
+  f : () -> Unit raise,
+  expect : ZipErrorKind,
+) -> Unit raise {
   let error = @test.expect_error(f)
   guard error is ZipError(kind, _) else {
     @test.fail("unexpected writer error")
   }
-  @test.assert_eq(kind, UnsupportedFeature)
+  @test.assert_eq(kind, expect)
 }
 
 ///|
@@ -55,9 +58,9 @@ test "incremental ZIP mixes whole files and known or unknown sized entries" {
     @test.assert_eq(archive.entries()[index].data().to_owned(), b"abcabc")
   }
   @test.assert_eq(archive.get("empty").unwrap().length(), 0)
-  expect_writer_error(() => writer.finish())
-  expect_writer_error(() => writer.add("late", b""))
-  expect_writer_error(() => writer.write(b""))
+  expect_writer_error(() => writer.finish(), InvalidState)
+  expect_writer_error(() => writer.add("late", b""), InvalidState)
+  expect_writer_error(() => writer.write(b""), InvalidState)
 }
 
 ///|
@@ -88,21 +91,24 @@ test "incremental ZIP pumps multiple output buffers and reuses the deflater" {
 test "incremental ZIP validates states and allows recovery from size errors" {
   let out = @buffer.Buffer()
   let writer = Writer(bytes => out.write_bytes(bytes))
-  expect_writer_error(() => writer.write(b"x"))
-  expect_writer_error(() => writer.end_entry())
+  expect_writer_error(() => writer.write(b"x"), InvalidState)
+  expect_writer_error(() => writer.end_entry(), InvalidState)
   let long_name = String::make(65536, 'x')
-  expect_writer_error(() => writer.add(long_name, b""))
-  expect_writer_error(() => writer.begin_entry(long_name))
+  expect_writer_error(() => writer.add(long_name, b""), UnsupportedFeature)
+  expect_writer_error(() => writer.begin_entry(long_name), UnsupportedFeature)
   writer.begin_entry("a", compression=Store, size=3UL)
-  expect_writer_error(() => writer.begin_entry("b"))
-  expect_writer_error(() => writer.add("b", b""))
-  expect_writer_error(() => writer.finish())
-  expect_writer_error(() => writer.write(b"abcd"))
+  expect_writer_error(() => writer.begin_entry("b"), InvalidState)
+  expect_writer_error(() => writer.add("b", b""), InvalidState)
+  expect_writer_error(() => writer.finish(), InvalidState)
+  expect_writer_error(() => writer.write(b"abcd"), SizeMismatch)
   writer.write(b"a")
-  expect_writer_error(() => writer.end_entry())
+  expect_writer_error(() => writer.end_entry(), SizeMismatch)
   writer.write(b"bc")
   writer.end_entry()
-  expect_writer_error(() => writer.finish(comment=Bytes::make(65536, b'x')))
+  expect_writer_error(
+    () => writer.finish(comment=Bytes::make(65536, b'x')),
+    UnsupportedFeature,
+  )
   writer.finish()
   @test.assert_eq(read(out.to_bytes()).get("a").unwrap().to_owned(), b"abc")
 }
@@ -133,9 +139,9 @@ test "incremental ZIP propagates sink errors and poisons the writer" {
     }
     assert_true(writer.is_failed())
     assert_false(writer.is_finished())
-    expect_writer_error(() => writer.add("b", b""))
-    expect_writer_error(() => writer.finish())
-    expect_writer_error(() => writer.write(b""))
+    expect_writer_error(() => writer.add("b", b""), InvalidState)
+    expect_writer_error(() => writer.finish(), InvalidState)
+    expect_writer_error(() => writer.write(b""), InvalidState)
     @test.assert_eq(calls, fail_at)
   }
 }
@@ -145,7 +151,7 @@ test "incremental ZIP rejects reentrant sink calls" {
   let cell : Array[Writer] = []
   let writer = Writer(_ => cell[0].add("recursive", b""))
   cell.push(writer)
-  expect_writer_error(() => writer.add("outer", b"x"))
+  expect_writer_error(() => writer.add("outer", b"x"), InvalidState)
   assert_true(writer.is_failed())
   @test.assert_eq(writer.position(), 0UL)
 }
@@ -154,13 +160,13 @@ test "incremental ZIP rejects reentrant sink calls" {
 test "incremental ZIP guards UInt64 offsets and sizes without huge buffers" {
   let writer = Writer(_ => ())
   writer.offset = 0xffff_ffff_ffff_ffffUL
-  expect_writer_error(() => writer.add("a", b""))
+  expect_writer_error(() => writer.add("a", b""), UnsupportedFeature)
   assert_true(writer.is_failed())
   @test.assert_eq(writer.position(), 0xffff_ffff_ffff_ffffUL)
   let entry_writer = Writer(_ => ())
   entry_writer.begin_entry("a", compression=Store)
   entry_writer.pending().size = 0xffff_ffff_ffff_ffffUL
-  expect_writer_error(() => entry_writer.write(b"x"))
+  expect_writer_error(() => entry_writer.write(b"x"), UnsupportedFeature)
   assert_false(entry_writer.is_failed())
 }
 
