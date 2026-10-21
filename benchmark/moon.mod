@@ -13,6 +13,6 @@ keywords = [ "benchmark", "compression", "deflate" ]
 description = "Benchmarks for flate."
 
 import {
-  "moonbitlang/x@0.5.5",
+  "moonbitlang/x@0.5.6",
   "moonbit-community/flate@0.10.0",
 }
