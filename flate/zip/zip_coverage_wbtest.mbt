@@ -371,7 +371,98 @@ test "zip inflate_entry maps output-limit and corrupt-stream failures" {
   let comp = @flate.deflate_all(b"0123456789")
   expect_zip_kind(
     () => ignore(inflate_entry(comp, 5, EntryUncompressedBytes, 5, () => false)),
-    LimitExceeded(EntryUncompressedBytes, 5, 5),
+    LimitExceeded(EntryUncompressedBytes, 5, 10),
+  )
+  expect_zip_kind(
+    () => ignore(inflate_entry(comp, 3, TotalUncompressedBytes, 8, () => false)),
+    LimitExceeded(TotalUncompressedBytes, 8, 15),
+  )
+  @test.assert_eq(
+    inflate_entry(comp, 10, EntryUncompressedBytes, 10, () => false),
+    b"0123456789",
+  )
+  expect_zip_kind(
+    () => {
+      ignore(
+        inflate_entry(comp + b"tail", 10, EntryUncompressedBytes, 10, () => {
+          false
+        }),
+      )
+    },
+    InvalidDeflate,
+  )
+  expect_zip_kind(
+    () => {
+      ignore(inflate_entry(b"", 10, EntryUncompressedBytes, 10, () => false))
+    },
+    Truncated,
+  )
+}
+
+///|
+test "ZIP inflate limits stop at the observed chunk and retain cancellation" {
+  let data = Bytes::make(20000, b'x')
+  let compressed = @flate.deflate_all(data)
+  expect_zip_kind(
+    () => {
+      ignore(
+        inflate_entry(compressed, 5, EntryUncompressedBytes, 5, () => false),
+      )
+    },
+    LimitExceeded(EntryUncompressedBytes, 5, 8192),
+  )
+  // Entry, counting pass, and replay pass cancellation all remain ZIP errors.
+  for cancel_at in [1, 2, 5] {
+    let mut polls = 0
+    expect_zip_kind(
+      () => {
+        ignore(
+          inflate_entry(compressed, 20000, EntryUncompressedBytes, 20000, () => {
+            polls += 1
+            polls == cancel_at
+          }),
+        )
+      },
+      Cancelled,
+    )
+    @test.assert_eq(polls, cancel_at)
+  }
+}
+
+///|
+fn zip_with_underreported_size(
+  compression : Compression,
+) -> Bytes raise ZipError {
+  let archive = Archive()
+  archive.add("prefix", b"12345", compression=Store)
+  archive.add("x", b"0123456789", compression~)
+  let bytes = write(archive)
+  let end = find_end_of_central(bytes).unwrap()
+  let first = read_u32_le_at_raw(bytes, end + 16).reinterpret_as_int()
+  let second = first +
+    46 +
+    read_u16_le_at(bytes, first + 28) +
+    read_u16_le_at(bytes, first + 30) +
+    read_u16_le_at(bytes, first + 32)
+  let local_offset = read_u32_le_at_raw(bytes, second + 42).reinterpret_as_int()
+  let changed = bytes.to_array()
+  changed[local_offset + 22] = b'\x04'
+  changed[second + 24] = b'\x04'
+  Bytes::from_array(changed)
+}
+
+///|
+test "ZIP read reports actual per-entry and cumulative decoded output" {
+  let bytes = zip_with_underreported_size(Deflate)
+  expect_zip_kind(
+    () => ignore(read(bytes, limits=ReadLimits(max_entry_uncompressed_bytes=5))),
+    LimitExceeded(EntryUncompressedBytes, 5, 10),
+  )
+  expect_zip_kind(
+    () => {
+      ignore(read(bytes, limits=ReadLimits(max_total_uncompressed_bytes=10)))
+    },
+    LimitExceeded(TotalUncompressedBytes, 10, 15),
   )
 }
 

@@ -139,6 +139,8 @@ fn check_sizes(
 }
 
 ///|
+/// Count and validate before allocating the result. ZIP owns the limit error
+/// so its payload can retain the observed count, including previous entries.
 fn inflate_entry(
   compressed : BytesView,
   max_output : Int32,
@@ -146,18 +148,42 @@ fn inflate_entry(
   reported_limit : Int32,
   cancelled : () -> Bool,
 ) -> Bytes raise ZipError {
-  @flate.inflate_exact(compressed, max_output~, cancelled~, preallocated=true) catch {
-    InflateError(OutputLimitExceeded, _) =>
+  check_cancelled(cancelled)
+  let inflater = @flate.Inflater()
+  let scratch = FixedArray::make(8192, b'\x00')
+  // For a total-output limit, max_output is the remaining allowance.
+  let previous = (reported_limit - max_output).to_uint64()
+  let size = for position = 0, total = 0UL {
+    let status = inflater.step_into(compressed[position:], scratch, end=true) catch {
+      err => raise wrap_inflate_error(err)
+    }
+    let position = position + inflater.last_consumed()
+    let total = total + inflater.last_produced().to_uint64()
+    check_cancelled(cancelled)
+    guard total <= max_output.to_uint64() else {
       raise ZipError(
-        LimitExceeded(
-          limit_kind,
-          reported_limit.to_uint64(),
-          max_output.to_uint64(),
-        ),
+        LimitExceeded(limit_kind, reported_limit.to_uint64(), previous + total),
         "zip: decompressed size limit exceeded",
       )
+    }
+    guard status is Done else { continue position, total }
+    guard position == compressed.length() else {
+      raise ZipError(
+        InvalidDeflate,
+        "zip: trailing bytes in compressed payload",
+      )
+    }
+    // The checked Int32 allowance also bounds the result allocation.
+    break total.to_int()
+  }
+  let output = FixedArray::make(size, b'\x00')
+  let written = @flate.inflate_into(compressed, output, cancelled~) catch {
     err => raise wrap_inflate_error(err)
   }
+  guard written == size else {
+    raise ZipError(InvalidDeflate, "zip: preallocation size mismatch")
+  }
+  owned_zip_buffer_to_bytes(output)
 }
 
 ///|

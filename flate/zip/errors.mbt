@@ -42,6 +42,8 @@ pub(all) enum ZipErrorKind {
   /// The entry payload does not match its stored CRC-32.
   ChecksumMismatch
   /// A caller-supplied resource limit was exceeded.
+  /// The actual value is observed usage when processing stopped, not necessarily
+  /// the complete decoded size of an entry that exceeded its output limit.
   LimitExceeded(LimitKind, UInt64, UInt64)
   /// The caller's cancellation callback returned `true` during a bounded read.
   Cancelled
