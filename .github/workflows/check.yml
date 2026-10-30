@@ -54,6 +54,18 @@ jobs:
           moon check --target all --deny-warn
           moon build --release --target native
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Standalone CLI smoke test
+        env:
+          MOON_WORK: "off"
+        run: |
+          moon -C cli update
+          moon -C cli check --target native --deny-warn
+          moon -C cli build --target native --release
+          python scripts/test_cli.py
+
       - name: benchmark script
         run: |
           moon fmt --check benchmark/run.mbtx
