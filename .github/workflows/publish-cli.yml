@@ -1,0 +1,40 @@
+name: Publish ZIP CLI
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-flate-cli
+  cancel-in-progress: false
+env:
+  MOON_WORK: "off"
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+      - run: moon version --all
+      - name: Validate standalone CLI
+        run: |
+          moon -C cli update
+          moon -C cli check --target native --deny-warn
+          moon -C cli fmt --check
+          moon -C cli build --target native --release
+          python3 scripts/test_cli.py
+      - name: Publish verified CLI
+        working-directory: cli
+        env:
+          MOONCAKES_CREDENTIALS: ${{ secrets.MOONCAKES_MOONBIT_COMMUNITY_TOKEN }}
+        run: |
+          test -n "$MOONCAKES_CREDENTIALS" || { echo "Missing organization publishing credentials"; exit 1; }
+          trap 'rm -f "$HOME/.moon/credentials.json"' EXIT
+          (umask 077; printf '%s' "$MOONCAKES_CREDENTIALS" > "$HOME/.moon/credentials.json")
+          moon publish --dry-run
+          moon publish

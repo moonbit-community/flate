@@ -37,6 +37,36 @@ fn validate_archive_name(name : String) -> Unit raise ArchiveError {
 }
 
 ///|
+#cfg(platform="windows")
+fn filesystem_separator() -> String {
+  "\\"
+}
+
+///|
+#cfg(not(platform="windows"))
+fn filesystem_separator() -> String {
+  "/"
+}
+
+///|
+#cfg(platform="windows")
+fn trim_input_separators(path : String) -> String {
+  let trimmed = path.trim_end(chars="/\\").to_owned()
+  // A stripped drive root must not turn into a drive-relative current directory.
+  if trimmed.has_suffix(":") {
+    ""
+  } else {
+    trimmed
+  }
+}
+
+///|
+#cfg(not(platform="windows"))
+fn trim_input_separators(path : String) -> String {
+  path.trim_end(chars="/").to_owned()
+}
+
+///|
 priv struct ArchiveInput {
   path : String
   name : String
@@ -52,12 +82,15 @@ async fn zip_entries(
   for path in paths {
     // Strip trailing separators before lstat so a directory symlink is still
     // rejected. Resolve parents only after checking the selected entry itself.
-    let path = path.trim_end(chars="/").to_owned()
+    let path = trim_input_separators(path)
     guard path != "" else { raise InvalidName(path) }
     let kind = @fs.kind(path, follow_symlink=false)
     guard kind is (Regular | Directory) else { raise UnsupportedEntry(path) }
     let path = @fs.realpath(path)
-    let name = path.rev_after("/").unwrap_or(path[:]).to_owned()
+    let name = path
+      .rev_after(filesystem_separator())
+      .unwrap_or(path[:])
+      .to_owned()
     validate_archive_name(name)
     guard name != ".DS_Store" && name != "__MACOSX" else { continue }
     guard !inputs.any(input => input.name == name) else {
@@ -74,7 +107,8 @@ async fn zip_entries(
   }
   let output_path = @fs.realpath(output)
   for input in inputs {
-    guard output_path != input.path && !output_path.has_prefix(input.path + "/") else {
+    guard output_path != input.path &&
+      !output_path.has_prefix(input.path + filesystem_separator()) else {
       raise OutputIsInput(output)
     }
   }
@@ -110,7 +144,7 @@ async fn add_archive_entry(
         add_archive_entry(
           writer,
           sink,
-          path + "/" + entry.name,
+          path + filesystem_separator() + entry.name,
           name + "/" + entry.name,
         )
       }
