@@ -36,4 +36,4 @@ ZIP Store at every level. Non-integer and out-of-range levels are rejected.
   inside an input directory is rejected. Failed writes remove partial output.
 
 This frontend archives file contents and directory structure; it does not
-preserve filesystem timestamps or permissions. Paths currently use Unix syntax.
+preserve filesystem timestamps or permissions. Filesystem paths use the native platform syntax; ZIP entry names always use `/`.

@@ -23,6 +23,13 @@ with tempfile.TemporaryDirectory(prefix="flate-cli-smoke-") as directory:
             assert archive.read(name) == contents
         assert archive.getinfo("tree/image.PNG").compress_type == zipfile.ZIP_STORED
         assert archive.getinfo("tree/hello😀.txt").compress_type == zipfile.ZIP_DEFLATED
+    # Canonical filesystem paths must stay separate from portable ZIP names.
+    nested = subprocess.run([str(exe), "tree", "tree/inside.zip"], cwd=root)
+    assert nested.returncode != 0
+    assert not (root / "tree/inside.zip").exists()
+    subprocess.run([str(exe), str(root / "tree"), "absolute.zip"], cwd=root, check=True)
+    with zipfile.ZipFile(root / "absolute.zip") as archive:
+        assert set(archive.namelist()) == set(files) | {"tree/", "tree/empty/"}
     original = (root / "result.zip").read_bytes()
     existing = subprocess.run([str(exe), "tree", "result.zip"], cwd=root)
     assert existing.returncode != 0
