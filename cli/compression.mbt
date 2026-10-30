@@ -16,7 +16,7 @@ let stored_archive_extensions : ReadOnlyArray[String] = [
 /// change the default compression method of `Archive` or `Writer`.
 fn compression_for_filename(name : String) -> @zip.Compression {
   guard name.rev_find(".") is Some(dot) else { return Deflate }
-  let extension = name.view(start_offset=dot + 1).to_owned().to_lower()
+  let extension = name[dot + 1:].to_owned().to_lower()
   guard !stored_archive_extensions.contains(extension) else { Store }
   Deflate
 }
