@@ -1,4 +1,5 @@
 """Smoke-test the built CLI with an independent ZIP reader."""
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -30,6 +31,10 @@ with tempfile.TemporaryDirectory(prefix="flate-cli-smoke-") as directory:
     subprocess.run([str(exe), str(root / "tree"), "absolute.zip"], cwd=root, check=True)
     with zipfile.ZipFile(root / "absolute.zip") as archive:
         assert set(archive.namelist()) == set(files) | {"tree/", "tree/empty/"}
+    if os.name == "nt":
+        drive_root = subprocess.run([str(exe), root.anchor, "drive-root.zip"], cwd=root)
+        assert drive_root.returncode != 0
+        assert not (root / "drive-root.zip").exists()
     original = (root / "result.zip").read_bytes()
     existing = subprocess.run([str(exe), "tree", "result.zip"], cwd=root)
     assert existing.returncode != 0

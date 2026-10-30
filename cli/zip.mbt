@@ -51,7 +51,13 @@ fn filesystem_separator() -> String {
 ///|
 #cfg(platform="windows")
 fn trim_input_separators(path : String) -> String {
-  path.trim_end(chars="/\\").to_owned()
+  let trimmed = path.trim_end(chars="/\\").to_owned()
+  // A stripped drive root must not turn into a drive-relative current directory.
+  if trimmed.has_suffix(":") {
+    ""
+  } else {
+    trimmed
+  }
 }
 
 ///|
