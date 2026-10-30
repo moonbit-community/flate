@@ -1,6 +1,4 @@
-///|
-/// Paired native benchmark driver. Run this script explicitly:
-/// moon run --target native benchmark/run.mbtx -- --profile smoke --validate-only
+----
 import {
   "moonbitlang/async@0.22.1",
   "moonbitlang/async@0.22.1/fs",
@@ -15,6 +13,11 @@ import {
   "moonbitlang/x@0.5.5/crypto",
   "moonbitlang/x@0.5.5/path",
 }
+----
+
+///|
+/// Paired native benchmark driver. Run this script explicitly:
+/// moon run --target native benchmark/run.mbtx -- --profile smoke --validate-only
 
 ///|
 suberror BenchmarkError {
